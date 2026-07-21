@@ -10,7 +10,7 @@ import anthropic
 import httpx
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage, env_get
 from .driver_api import (
     Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -255,13 +255,17 @@ class AnthropicProvider(Provider):
 @agent_driver("Claude")
 class APIDriver_Claude(APIDriver):
     DEFAULT_MODEL = "claude-opus-4-6"
+    ENV_VARS = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
             model = argument or self.DEFAULT_MODEL
             provider = AnthropicProvider(
                 model=model,
+                # None -> the provider's own os.environ fallback, as before.
+                api_key=env_get(env, "CLAUDE_API_KEY") or env_get(env, "ANTHROPIC_API_KEY"),
                 thinking_effort="high",
             )
         super().__init__(*args, provider=provider, **kwargs)

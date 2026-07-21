@@ -195,6 +195,11 @@ class APIDriver(LMDriver):
 
     def __init__(self, *args, provider: Provider,
                  parent: 'APIDriver | None' = None, **kwargs):
+        # The env overlay rides in **kwargs down to Session.__init__, which
+        # stores it as self._env (forks inherit the parent's). It matters
+        # beyond construction: _fork_provider builds a SECOND provider mid-run
+        # (cheaper forks), and a bare os.environ read there would silently
+        # bypass the overlay.
         super().__init__(*args, parent=parent, **kwargs)
         self._provider = provider
         # Route the provider's internal-retry logging (Layer 2) to this

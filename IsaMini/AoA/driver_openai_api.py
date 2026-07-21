@@ -24,7 +24,8 @@ import openai
 
 from .model import *
 from .language_model_driver import (_TransientError, _QuotaError, _T, PRICING,
-                                    pricing_for, _parse_effort_suffix, Usage)
+                                    pricing_for, _parse_effort_suffix, Usage,
+                                    env_get)
 
 from .mcp_http_server import _cc_edit_schema_flat, _cc_edit_schema_raw
 from .driver_api import (Provider, APIDriver, ToolCall, ProviderResponse,
@@ -990,13 +991,16 @@ class K2ThinkProvider(OpenAIProvider):
 class APIDriver_OpenAI(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-5.5"
+    ENV_VARS = ("OPENAI_API_KEY",)
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
             model, effort = _parse_effort_suffix(argument, self.DEFAULT_MODEL)
             provider = OpenAIResponsesProvider(
                 model=model,
+                api_key=env_get(env, "OPENAI_API_KEY"),
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
                 reasoning_effort=effort,
             )
@@ -1042,6 +1046,7 @@ class APIDriver_OpenAI(APIDriver):
                       if isinstance(parent_prov, OpenAIBase) else None)
             cheaper = OpenAIResponsesProvider(
                 model=self.FORK_CHEAPER_MODEL,
+                api_key=env_get(self._env, "OPENAI_API_KEY"),
                 cache_key=None,
                 reasoning_effort=effort,
             )
@@ -1067,18 +1072,21 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
     # — no second provider is ever built against the real api.openai.com.
     FORK_CHEAPER_MODEL = None
 
+    ENV_VARS = ("AOA_CODEX_API_BASE_URL", "AOA_CODEX_API_KEY")
+
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
             model, effort = _parse_effort_suffix(argument, self.DEFAULT_MODEL)
-            base_url = os.environ.get(
+            base_url = env_get(env,
                 "AOA_CODEX_API_BASE_URL", "http://127.0.0.1:10531/v1")
             provider = CodexResponsesProvider(
                 model=model,
                 # openai-oauth needs no key (the dummy satisfies the SDK's
                 # non-empty-string requirement); key-validating proxies such as
                 # auth2api need the configured key via AOA_CODEX_API_KEY.
-                api_key=os.environ.get("AOA_CODEX_API_KEY", "openai-oauth-local"),
+                api_key=env_get(env, "AOA_CODEX_API_KEY", "openai-oauth-local"),
                 base_url=base_url,
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
                 reasoning_effort=effort,
@@ -1097,15 +1105,17 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
 @agent_driver("K2-Think")
 class APIDriver_K2Think(APIDriver):
     DEFAULT_MODEL = "k2moe375B_mid4_v2_checkpoint_0004000"
+    ENV_VARS = ("K2_BASE_URL", "K2_THINK_API_KEY")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
             model = argument or self.DEFAULT_MODEL
             provider = K2ThinkProvider(
-                base_url=os.environ.get("K2_BASE_URL", "http://16.78.75.185:8000/v1"),
+                base_url=env_get(env, "K2_BASE_URL", "http://16.78.75.185:8000/v1"),
                 model=model,
-                api_key=os.environ.get("K2_THINK_API_KEY"),
+                api_key=env_get(env, "K2_THINK_API_KEY"),
             )
         super().__init__(*args, provider=provider, **kwargs)
 
@@ -1186,30 +1196,37 @@ class APIDriver_Chat(APIDriver):
     (``toplevel`` splits only on the first dot, so slashes survive).
     """
 
+    ENV_VARS = ("CHAT_MODEL", "CHAT_BASE_URL", "CHAT_API_KEY",
+                "CHAT_CONTEXT_WINDOW", "CHAT_COT_RETENTION")
+
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
-            raw = argument or os.environ.get("CHAT_MODEL")
+            raw = argument or env_get(env, "CHAT_MODEL")
             if not raw:
                 raise InternalError(
                     "Chat driver needs a model id: use 'Chat.<model>' "
                     "(e.g. Chat.deepseek-v4-flash) or set CHAT_MODEL.")
             model, effort = _parse_effort_suffix(raw, raw, default_effort="high")
-            base_url = os.environ.get("CHAT_BASE_URL")
+            base_url = env_get(env, "CHAT_BASE_URL")
             if not base_url:
                 raise InternalError(
                     "Chat driver needs CHAT_BASE_URL set "
                     "(e.g. https://api.deepseek.com).")
             ctx = _CHAT_CONTEXT_WINDOWS.get(model, _CHAT_DEFAULT_CONTEXT)
-            cap = os.environ.get("CHAT_CONTEXT_WINDOW")
+            cap = env_get(env, "CHAT_CONTEXT_WINDOW")
             if cap:
                 ctx = min(ctx, int(cap))
             provider = _ChatProvider(
                 model=model,
                 base_url=base_url,
-                api_key=os.environ.get("CHAT_API_KEY"),
+                api_key=env_get(env, "CHAT_API_KEY"),
                 default_context_window=ctx,
                 reasoning_effort=effort,
+                # None -> the provider's own env fallback ("full" when unset
+                # everywhere); a value here beats the provider's frozen-env read.
+                cot_retention=env_get(env, "CHAT_COT_RETENTION"),
             )
         super().__init__(*args, provider=provider, **kwargs)
 
@@ -1257,25 +1274,28 @@ class APIDriver_DeepSeek(APIDriver):
     # The global-lemma delegation gate is ON for DeepSeek (declare global lemmas,
     # then dispatch a sub-agent to prove them — see model.py Session gate).
     gate_global_lemma_proofs = True
+    ENV_VARS = ("DEEPSEEK_API_KEY", "CHAT_API_KEY", "DEEPSEEK_BASE_URL",
+                "CHAT_CONTEXT_WINDOW")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
+        env = kwargs.get("env") or {}
         if provider is None:
             arg = (argument or "V4-pro").strip().lower()
             model = f"deepseek-{arg}" if arg in ("v4-pro", "v4-flash") else arg
-            api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("CHAT_API_KEY")
+            api_key = env_get(env, "DEEPSEEK_API_KEY") or env_get(env, "CHAT_API_KEY")
             if not api_key:
                 raise InternalError(
                     "DeepSeek driver needs DEEPSEEK_API_KEY (or CHAT_API_KEY) set.")
             # DeepSeek V4 flash & pro both support up to 1M; 384K is a practical
             # default. CHAT_CONTEXT_WINDOW may cap it lower to compact earlier.
             ctx = 384_000
-            cap = os.environ.get("CHAT_CONTEXT_WINDOW")
+            cap = env_get(env, "CHAT_CONTEXT_WINDOW")
             if cap:
                 ctx = min(ctx, int(cap))
             provider = DeepSeekProvider(
                 model=model,
-                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/beta"),
+                base_url=env_get(env, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/beta"),
                 api_key=api_key,
                 default_context_window=ctx,
                 strict_tools=True,

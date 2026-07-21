@@ -3,13 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from time import time
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, ClassVar, TypeVar, overload
 
 from .model import AoA_Error, Session
 
 _T = TypeVar("_T")
+
+
+@overload
+def env_get(env: 'dict[str, str] | None', name: str, default: str) -> str: ...
+@overload
+def env_get(env: 'dict[str, str] | None', name: str, default: None = None) -> 'str | None': ...
+def env_get(env: 'dict[str, str] | None', name: str, default: 'str | None' = None) -> 'str | None':
+    """One driver-config variable: the resolved overlay, else this process's env.
+
+    ``env`` is the per-invocation overlay toplevel builds by resolving the
+    driver's ``ENV_VARS`` through the connected Isabelle (Connection.getenv):
+    the RPC host is a long-lived daemon whose own os.environ is frozen at
+    server start, while the Isabelle process re-sources etc/settings at every
+    restart -- so settings edits only reach drivers through this overlay.
+    The os.environ fallback keeps connection-less paths (tests, scripts)
+    behaving exactly as before.
+    """
+    v = (env or {}).get(name)
+    if v:
+        return v
+    return os.environ.get(name, default)
 
 
 class _TransientError(AoA_Error):
@@ -124,6 +146,15 @@ class LMDriver(Session):
     Subclasses implement ``_run_agent_loop()`` (the agent loop) and optionally
     ``_run_fork()`` (for fork interactions).
     """
+
+    # Environment variables this driver's configuration comes from (keys,
+    # endpoints, model overrides). toplevel resolves each through the connected
+    # Isabelle (Connection.getenv) before construction and passes the result as
+    # the ``env`` overlay, so a user's etc/settings edit takes effect on the
+    # next `by aoa` after an Isabelle restart -- no RPC-host restart needed.
+    # Constructors read these ONLY via ``env_get(env, ...)``, never a bare
+    # os.environ lookup.
+    ENV_VARS: ClassVar[tuple[str, ...]] = ()
 
     def _on_start_run(self):
         """Called at the start of ``run()``.  Override to customise logging."""

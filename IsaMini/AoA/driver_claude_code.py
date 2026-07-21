@@ -122,9 +122,20 @@ class ClaudeCode(LMDriver):
     _fork_name: str
     _fork_index: int | None
 
+    # Resolved through the connected Isabelle and layered onto the spawned
+    # CLI's environment (options.env): the `claude` subprocess otherwise
+    # inherits this long-lived host's os.environ, frozen at server start —
+    # a rotated ANTHROPIC_API_KEY or changed proxy in etc/settings would
+    # never reach it. Default ~/.claude OAuth credentials are re-read per
+    # spawn and unaffected.
+    ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
                  interactive_web_terminal: bool = False,
                  argument: str | None = None, **kwargs):
+        # The env overlay rides in **kwargs down to Session.__init__
+        # (self._env; forks inherit the parent's).
         super().__init__(*args, parent=parent, **kwargs)
         if parent is not None:
             self._model = parent._model
@@ -233,7 +244,10 @@ class ClaudeCode(LMDriver):
                 permission_mode="default",
                 allowed_tools=self._role_allowed_tools(),
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+                # self._env: connection-resolved ANTHROPIC_*/proxy overrides
+                # (see ENV_VARS); the SDK merges this dict onto the inherited
+                # (frozen) process environment.
+                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0", **self._env},
                 settings=json.dumps({"autoCompactWindow":
                     _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
                 extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -972,7 +986,8 @@ class ClaudeCode(LMDriver):
             permission_mode="default",
             allowed_tools=self._role_allowed_tools(),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
-            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            # Same connection-resolved overrides as the main options (ENV_VARS).
+            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0", **self._env},
             settings=json.dumps({"autoCompactWindow":
                 _auto_compact_window(model, self.FORK_COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},

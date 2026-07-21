@@ -89,8 +89,15 @@ class Codex_Driver(LMDriver):
     _fork_counter: int
     _fork_name: str
 
+    # Proxy settings for the spawned `codex` CLI, resolved through the
+    # connected Isabelle (auth itself lives in CODEX_HOME's auth.json, copied
+    # per proof, so no key variables here).
+    ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+
     def __init__(self, *args, parent: 'Codex_Driver | None' = None,
                  model: str | None = None, argument: str | None = None, **kwargs):
+        # The env overlay rides in **kwargs down to Session.__init__
+        # (self._env; forks inherit the parent's).
         super().__init__(*args, parent=parent, **kwargs)
         if parent is not None and model is None:
             # Forks inherit the parent's already-parsed model + effort.
@@ -470,7 +477,9 @@ class Codex_Driver(LMDriver):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.working_dir,
-                env={**os.environ, "CODEX_HOME": self._codex_home_dir},
+                # self._env: connection-resolved proxy overrides (ENV_VARS)
+                # layered over this host's frozen environment.
+                env={**os.environ, **self._env, "CODEX_HOME": self._codex_home_dir},
                 # codex 0.141.0 reads stdin (appends it as a <stdin> block) even
                 # when the prompt is passed as an argv argument, and blocks until
                 # EOF. Hand it an immediate EOF so an inherited, non-EOF stdin in

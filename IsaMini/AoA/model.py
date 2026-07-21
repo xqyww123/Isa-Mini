@@ -11386,7 +11386,8 @@ class Session:
                  max_tool_calls: int = 10000,
                  max_retries: int = 5,
                  runtime: Runtime | None = None,
-                 role: Role | None = None):
+                 role: Role | None = None,
+                 env: 'dict[str, str] | None' = None):
         """
         Args:
             logger: Python logger for runtime debug messages to the server log stream.
@@ -11399,8 +11400,13 @@ class Session:
             max_tool_calls: Maximum number of tool invocations.
             max_retries: Maximum number of conversation retry turns.
             runtime: Shared Runtime instance. If None, inherits from parent or creates new.
+            env: Config overlay resolved through the connected Isabelle (see
+                LMDriver.ENV_VARS): driver constructors read keys/endpoints via
+                env_get(env, ...) because this host's own os.environ is frozen at
+                server start. Forks inherit the parent's overlay.
         """
         self.parent = parent
+        self._env: dict[str, str] = parent._env if parent is not None else dict(env or {})
         if runtime is not None:
             self.runtime = runtime
         elif parent is not None:
@@ -13498,7 +13504,8 @@ class SessionConstructor(Protocol):
                  interactive_retrieval: InteractiveRetrievalMode = ...,
                  timeout_seconds: float = ...,
                  max_tool_calls: int = ...,
-                 max_retries: int = ...) -> Session: ...
+                 max_retries: int = ...,
+                 env: 'dict[str, str] | None' = ...) -> Session: ...
 
 def agent_driver(name : str):
     """Register a Session constructor (class or factory function) under ``name``."""
