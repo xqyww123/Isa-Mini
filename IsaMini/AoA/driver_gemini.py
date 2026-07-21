@@ -199,6 +199,7 @@ class APIDriver_GeminiPro(APIDriver):
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
             return GeminiProvider(
                 model=self.FORK_CHEAPER_MODEL,
+                api_key=env_get(self._env, "GEMINI_API_KEY"),
                 thinking_budget=0,
             )
         return self._provider

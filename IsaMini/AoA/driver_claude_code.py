@@ -129,6 +129,9 @@ class ClaudeCode(LMDriver):
     # never reach it. Default ~/.claude OAuth credentials are re-read per
     # spawn and unaffected.
     ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                # Consumed by the CLI for background/fast-path calls; nothing
+                # pins it the way options.model pins the main model.
+                "ANTHROPIC_SMALL_FAST_MODEL",
                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
 
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
@@ -1125,3 +1128,12 @@ class ClaudeCode(LMDriver):
 def _claude_code_interactive(logger, log_dir, *, argument=None, **kwargs):
     return ClaudeCode(logger, log_dir, interactive_web_terminal=True,
                       argument=argument, **kwargs)
+# toplevel resolves ENV_VARS off the REGISTERED object; without this line the
+# factory registration would silently yield an empty overlay for the variant
+# (the factory already forwards env= to ClaudeCode through **kwargs).
+# KNOWN LIMITATION: the overlay reaches only the SDK-spawned forks; the
+# interactive MAIN agent is a `claude` CLI inside tmux, launched with the
+# host's inherited (frozen) environment -- injecting secrets there would mean
+# writing them into the launcher script on disk, which is worse than the
+# staleness. Debug/demo variant; per-spawn ~/.claude OAuth is unaffected.
+_claude_code_interactive.ENV_VARS = ClaudeCode.ENV_VARS  # type: ignore[attr-defined]

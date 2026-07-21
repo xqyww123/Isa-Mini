@@ -934,12 +934,14 @@ class K2ThinkProvider(OpenAIProvider):
     _THINK_RE = re.compile(r'^(.*?)</think>\s*', re.DOTALL)
 
     def __init__(self, base_url: str, model: str, api_key: str | None = None,
-                 context_window: int = 131_072):
+                 context_window: int = 131_072,
+                 cot_retention: str | None = None):
         super().__init__(
             model=model,
             api_key=api_key or os.environ.get("K2_THINK_API_KEY", "dummy"),
             base_url=base_url,
             cache_key=None,
+            cot_retention=cot_retention,
             default_context_window=context_window,
             temperature=0.2,
             extra_params={"think_budget_tokens": 32_768},
@@ -991,7 +993,7 @@ class K2ThinkProvider(OpenAIProvider):
 class APIDriver_OpenAI(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-5.5"
-    ENV_VARS = ("OPENAI_API_KEY",)
+    ENV_VARS = ("OPENAI_API_KEY", "OPENAI_BASE_URL")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
@@ -1001,6 +1003,8 @@ class APIDriver_OpenAI(APIDriver):
             provider = OpenAIResponsesProvider(
                 model=model,
                 api_key=env_get(env, "OPENAI_API_KEY"),
+                # None -> the SDK's own (frozen) OPENAI_BASE_URL fallback.
+                base_url=env_get(env, "OPENAI_BASE_URL"),
                 cache_key=f"proof-{uuid.uuid4().hex[:8]}",
                 reasoning_effort=effort,
             )
@@ -1047,6 +1051,7 @@ class APIDriver_OpenAI(APIDriver):
             cheaper = OpenAIResponsesProvider(
                 model=self.FORK_CHEAPER_MODEL,
                 api_key=env_get(self._env, "OPENAI_API_KEY"),
+                base_url=env_get(self._env, "OPENAI_BASE_URL"),
                 cache_key=None,
                 reasoning_effort=effort,
             )
@@ -1105,7 +1110,9 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
 @agent_driver("K2-Think")
 class APIDriver_K2Think(APIDriver):
     DEFAULT_MODEL = "k2moe375B_mid4_v2_checkpoint_0004000"
-    ENV_VARS = ("K2_BASE_URL", "K2_THINK_API_KEY")
+    # CHAT_COT_RETENTION: read by OpenAIBase.__init__ when the provider gets
+    # None, and K2's message path actively consumes it (_apply_cot_retention).
+    ENV_VARS = ("K2_BASE_URL", "K2_THINK_API_KEY", "CHAT_COT_RETENTION")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
@@ -1116,6 +1123,7 @@ class APIDriver_K2Think(APIDriver):
                 base_url=env_get(env, "K2_BASE_URL", "http://16.78.75.185:8000/v1"),
                 model=model,
                 api_key=env_get(env, "K2_THINK_API_KEY"),
+                cot_retention=env_get(env, "CHAT_COT_RETENTION"),
             )
         super().__init__(*args, provider=provider, **kwargs)
 
@@ -1158,6 +1166,20 @@ _CHAT_CONTEXT_WINDOWS: dict[str, int] = {
 }
 
 
+def _apply_context_cap(ctx: int, cap: str | None) -> int:
+    """min(ctx, CHAT_CONTEXT_WINDOW), with a driver-level message for a
+    malformed value: it now arrives from etc/settings too, where a typo
+    ("384K") would otherwise surface as a bare ValueError traceback."""
+    if not cap:
+        return ctx
+    try:
+        return min(ctx, int(cap))
+    except ValueError:
+        raise InternalError(
+            f"CHAT_CONTEXT_WINDOW must be an integer number of tokens, "
+            f"got {cap!r}.") from None
+
+
 class _ChatProvider(OpenAIChatProvider):
     """OpenAIChatProvider whose context window is fully driver-controlled.
 
@@ -1197,7 +1219,9 @@ class APIDriver_Chat(APIDriver):
     """
 
     ENV_VARS = ("CHAT_MODEL", "CHAT_BASE_URL", "CHAT_API_KEY",
-                "CHAT_CONTEXT_WINDOW", "CHAT_COT_RETENTION")
+                "CHAT_CONTEXT_WINDOW", "CHAT_COT_RETENTION",
+                # The SDK-level fallback when CHAT_API_KEY is unset.
+                "OPENAI_API_KEY")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
@@ -1215,13 +1239,11 @@ class APIDriver_Chat(APIDriver):
                     "Chat driver needs CHAT_BASE_URL set "
                     "(e.g. https://api.deepseek.com).")
             ctx = _CHAT_CONTEXT_WINDOWS.get(model, _CHAT_DEFAULT_CONTEXT)
-            cap = env_get(env, "CHAT_CONTEXT_WINDOW")
-            if cap:
-                ctx = min(ctx, int(cap))
+            ctx = _apply_context_cap(ctx, env_get(env, "CHAT_CONTEXT_WINDOW"))
             provider = _ChatProvider(
                 model=model,
                 base_url=base_url,
-                api_key=env_get(env, "CHAT_API_KEY"),
+                api_key=env_get(env, "CHAT_API_KEY") or env_get(env, "OPENAI_API_KEY"),
                 default_context_window=ctx,
                 reasoning_effort=effort,
                 # None -> the provider's own env fallback ("full" when unset
@@ -1289,10 +1311,7 @@ class APIDriver_DeepSeek(APIDriver):
                     "DeepSeek driver needs DEEPSEEK_API_KEY (or CHAT_API_KEY) set.")
             # DeepSeek V4 flash & pro both support up to 1M; 384K is a practical
             # default. CHAT_CONTEXT_WINDOW may cap it lower to compact earlier.
-            ctx = 384_000
-            cap = env_get(env, "CHAT_CONTEXT_WINDOW")
-            if cap:
-                ctx = min(ctx, int(cap))
+            ctx = _apply_context_cap(384_000, env_get(env, "CHAT_CONTEXT_WINDOW"))
             provider = DeepSeekProvider(
                 model=model,
                 base_url=env_get(env, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/beta"),
