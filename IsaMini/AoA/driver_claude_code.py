@@ -122,23 +122,9 @@ class ClaudeCode(LMDriver):
     _fork_name: str
     _fork_index: int | None
 
-    # Resolved through the connected Isabelle and layered onto the spawned
-    # CLI's environment (options.env): the `claude` subprocess otherwise
-    # inherits this long-lived host's os.environ, frozen at server start —
-    # a rotated ANTHROPIC_API_KEY or changed proxy in etc/settings would
-    # never reach it. Default ~/.claude OAuth credentials are re-read per
-    # spawn and unaffected.
-    ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-                # Consumed by the CLI for background/fast-path calls; nothing
-                # pins it the way options.model pins the main model.
-                "ANTHROPIC_SMALL_FAST_MODEL",
-                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
-
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
                  interactive_web_terminal: bool = False,
                  argument: str | None = None, **kwargs):
-        # The env overlay rides in **kwargs down to Session.__init__
-        # (self._env; forks inherit the parent's).
         super().__init__(*args, parent=parent, **kwargs)
         if parent is not None:
             self._model = parent._model
@@ -247,10 +233,7 @@ class ClaudeCode(LMDriver):
                 permission_mode="default",
                 allowed_tools=self._role_allowed_tools(),
                 mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-                # self._env: connection-resolved ANTHROPIC_*/proxy overrides
-                # (see ENV_VARS); the SDK merges this dict onto the inherited
-                # (frozen) process environment.
-                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0", **self._env},
+                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
                 settings=json.dumps({"autoCompactWindow":
                     _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
                 extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -989,8 +972,7 @@ class ClaudeCode(LMDriver):
             permission_mode="default",
             allowed_tools=self._role_allowed_tools(),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
-            # Same connection-resolved overrides as the main options (ENV_VARS).
-            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0", **self._env},
+            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
             settings=json.dumps({"autoCompactWindow":
                 _auto_compact_window(model, self.FORK_COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -1128,12 +1110,3 @@ class ClaudeCode(LMDriver):
 def _claude_code_interactive(logger, log_dir, *, argument=None, **kwargs):
     return ClaudeCode(logger, log_dir, interactive_web_terminal=True,
                       argument=argument, **kwargs)
-# toplevel resolves ENV_VARS off the REGISTERED object; without this line the
-# factory registration would silently yield an empty overlay for the variant
-# (the factory already forwards env= to ClaudeCode through **kwargs).
-# KNOWN LIMITATION: the overlay reaches only the SDK-spawned forks; the
-# interactive MAIN agent is a `claude` CLI inside tmux, launched with the
-# host's inherited (frozen) environment -- injecting secrets there would mean
-# writing them into the launcher script on disk, which is worse than the
-# staleness. Debug/demo variant; per-spawn ~/.claude OAuth is unaffected.
-_claude_code_interactive.ENV_VARS = ClaudeCode.ENV_VARS  # type: ignore[attr-defined]

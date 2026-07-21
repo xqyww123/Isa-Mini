@@ -10,7 +10,7 @@ import anthropic
 import httpx
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage, env_get
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from .driver_api import (
     Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -27,19 +27,11 @@ class AnthropicProvider(Provider):
     }
 
     def __init__(self, model: str, api_key: str | None = None,
-                 base_url: str | None = None,
-                 auth_token: str | None = None,
                  thinking_effort: str = "high",
                  default_context_window: int = 1_048_576):
         self._model = model
-        # base_url/auth_token: None lets the SDK fall back to its own
-        # ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN os.environ reads -- which in
-        # this long-lived host are frozen at server start. The driver passes
-        # connection-resolved values so etc/settings edits actually land.
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key or os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"),
-            auth_token=auth_token,
-            base_url=base_url,
         )
         self._thinking_effort = thinking_effort
         self._default_context_window = default_context_window
@@ -263,20 +255,13 @@ class AnthropicProvider(Provider):
 @agent_driver("Claude")
 class APIDriver_Claude(APIDriver):
     DEFAULT_MODEL = "claude-opus-4-6"
-    ENV_VARS = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY",
-                "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
-        env = kwargs.get("env") or {}
         if provider is None:
             model = argument or self.DEFAULT_MODEL
             provider = AnthropicProvider(
                 model=model,
-                # None -> the provider's/SDK's own os.environ fallbacks, as before.
-                api_key=env_get(env, "CLAUDE_API_KEY") or env_get(env, "ANTHROPIC_API_KEY"),
-                base_url=env_get(env, "ANTHROPIC_BASE_URL"),
-                auth_token=env_get(env, "ANTHROPIC_AUTH_TOKEN"),
                 thinking_effort="high",
             )
         super().__init__(*args, provider=provider, **kwargs)

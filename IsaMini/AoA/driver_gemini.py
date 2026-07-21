@@ -12,7 +12,7 @@ from google.genai import types as genai_types
 from google.genai import errors as genai_errors
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage, env_get
+from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from .driver_api import (
     Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -181,16 +181,13 @@ class GeminiProvider(Provider):
 class APIDriver_GeminiPro(APIDriver):
     DEFAULT_MODEL = "gemini-3.1-pro-preview"
     FORK_CHEAPER_MODEL = "gemini-3-flash-preview"
-    ENV_VARS = ("GEMINI_API_KEY",)
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
-        env = kwargs.get("env") or {}
         if provider is None:
             model = argument or self.DEFAULT_MODEL
             provider = GeminiProvider(
                 model=model,
-                api_key=env_get(env, "GEMINI_API_KEY"),
                 thinking_budget=8192,
             )
         super().__init__(*args, provider=provider, **kwargs)
@@ -199,7 +196,6 @@ class APIDriver_GeminiPro(APIDriver):
         if mode == ForkingMode.FORKING_CHEAPER_NO_CTXT and self.FORK_CHEAPER_MODEL:
             return GeminiProvider(
                 model=self.FORK_CHEAPER_MODEL,
-                api_key=env_get(self._env, "GEMINI_API_KEY"),
                 thinking_budget=0,
             )
         return self._provider

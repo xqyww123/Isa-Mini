@@ -47,34 +47,6 @@ import subprocess
 import asyncio
 import time
 
-async def _resolve_isa_env(connection, name: str) -> 'str | None':
-    """One env variable: the connected Isabelle's env -> this process's env -> None.
-
-    Thin wrapper over Semantic_Embedding's _resolve_env. This host is a
-    long-lived daemon whose os.environ is frozen at server start, while the
-    Isabelle process re-sources etc/settings at every restart -- so user
-    configuration (driver API keys above all) must be read through the
-    connection to be fresh. The import is deferred per this module's style,
-    not guarded: AoA hard-depends on Isabelle_Semantic_Embedding (model.py
-    imports it at module top), so an absent-package fallback would protect a
-    deployment that cannot exist.
-    """
-    from Isabelle_Semantic_Embedding.semantic_embedding import _resolve_env
-    return await _resolve_env(connection, name)
-
-
-async def _resolve_driver_env(connection, drv) -> 'dict[str, str]':
-    """Resolve the driver's declared ENV_VARS (see LMDriver.ENV_VARS) into the
-    overlay its constructor reads via env_get. Empty/unset vars are omitted so
-    constructor defaults stay in charge."""
-    env: dict[str, str] = {}
-    for var in getattr(drv, "ENV_VARS", ()):
-        val = await _resolve_isa_env(connection, var)
-        if val:
-            env[var] = val
-    return env
-
-
 class UnknownDriver(AoA_Error):
     def __init__(self, driver: str):
         # Name the reason when we have one.  A driver absent because its optional
@@ -218,10 +190,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # tool is dropped from every advertised tool set and memorize is a no-op.
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
-    # Environment variable AoA_LOG_DIR overrides user-provided log_dir.
-    # Resolved through the connected Isabelle first: this host's os.environ is
-    # frozen at server start, so an etc/settings edit only arrives this way.
-    env_log_dir = await _resolve_isa_env(connection, 'AoA_LOG_DIR')
+    # Environment variable AoA_LOG_DIR overrides user-provided log_dir
+    env_log_dir = os.environ.get('AoA_LOG_DIR')
     if env_log_dir:
         log_dir = env_log_dir
 
@@ -359,11 +329,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                        interactive_retrieval=interactive_retrieval,
                        timeout_seconds=timeout_seconds,
                        max_tool_calls=max_tool_calls,
-                       max_retries=max_retries,
-                       # Driver config (API keys, endpoints) resolved through
-                       # the connected Isabelle: fresh after every Isabelle
-                       # restart, no RPC-host restart needed.
-                       env=await _resolve_driver_env(connection, drv)) as session:
+                       max_retries=max_retries) as session:
             # Set the Task on the runtime (via the session shim) before init/run so
             # the system prompt and initial message pick it up. Forks inherit it
             # through the shared runtime singleton.
