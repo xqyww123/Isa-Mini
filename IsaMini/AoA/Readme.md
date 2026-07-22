@@ -49,8 +49,8 @@ which runs the proof with GPT-5.5 at high reasoning effort. The configuration op
 
 The default driver. It needs no API key — being logged into the Claude Code CLI (see above) is all it takes. Its option is a Claude model name:
 ```isabelle
-declare [[AoA_driver = "ClaudeCode"]]                        # default: claude-opus-4-8[1m]
-declare [[AoA_driver = "ClaudeCode.claude-opus-4-8[1m]"]]    # [1m] denotes the 1 million context version
+declare [[AoA_driver = "ClaudeCode"]]                        (* default: claude-opus-4-8[1m] *)
+declare [[AoA_driver = "ClaudeCode.claude-opus-4-8[1m]"]]    (* [1m] denotes the 1 million context version *)
 declare [[AoA_driver = "ClaudeCode.claude-sonnet-4-6"]]
 ```
 
@@ -58,7 +58,7 @@ declare [[AoA_driver = "ClaudeCode.claude-sonnet-4-6"]]
 
 This driver provides the GPT family of models:
 ```isabelle
-declare [[AoA_driver = "OpenAI"]]                  # default: gpt-5.5, medium effort
+declare [[AoA_driver = "OpenAI"]]                  (* default: gpt-5.5, high effort *)
 declare [[AoA_driver = "OpenAI.gpt-5.5-high"]]
 declare [[AoA_driver = "OpenAI.gpt-5.6-xhigh"]]
 ```
@@ -74,7 +74,7 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, then restart Isabell
 The `Codex-API` driver gives you the same GPT family as OpenAI, but billed through a ChatGPT subscription instead of API credits. It needs no OpenAI API key; instead, it talks to a local proxy that holds the OAuth session of your subscription. Two proxies are supported: `openai-oauth` and `auth2api`.
 
 ```isabelle
-declare [[AoA_driver = "Codex-API"]]                # default: gpt-5.5, medium effort
+declare [[AoA_driver = "Codex-API"]]                (* default: gpt-5.5, medium effort *)
 declare [[AoA_driver = "Codex-API.gpt-5.5-high"]]
 ```
 
@@ -84,7 +84,7 @@ For `openai-oauth`, install it following the instructions in [https://github.com
 ```bash
 npx openai-oauth  # start the proxy; keep it running
 ```
-With the proxy running, by aoa works in Isabelle as usual — no further configuration is needed.
+With the proxy running, `by aoa` works in Isabelle as usual — no further configuration is needed.
 
 For `auth2api`, install it following the instructions in [https://github.com/AmazingAng/auth2api](https://github.com/AmazingAng/auth2api)
 ```bash
@@ -103,8 +103,8 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, then restart Isabell
 
 The option is V4-pro or V4-flash (default V4-flash), or a full model id:
 ```isabelle
-declare [[AoA_driver = "DeepSeek"]]                    # default: deepseek-v4-flash
-declare [[AoA_driver = "DeepSeek.V4-pro"]]             # deepseek-v4-pro
+declare [[AoA_driver = "DeepSeek"]]                    (* default: deepseek-v4-flash *)
+declare [[AoA_driver = "DeepSeek.V4-pro"]]             (* deepseek-v4-pro *)
 declare [[AoA_driver = "DeepSeek.V4-flash"]]
 ```
 
@@ -126,7 +126,7 @@ calls, and each proof operation — under `$(isabelle getenv -b ISABELLE_HOME_US
 Change the directory, or set it to `""` to turn logging off:
 ```isabelle
 declare [[AoA_log_dir = "/path/to/logs"]]
-declare [[AoA_log_dir = ""]]                 # disabling logging
+declare [[AoA_log_dir = ""]]                 (* disabling logging *)
 ```
 
 ### 4.2 Proof cache
