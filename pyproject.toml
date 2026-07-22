@@ -45,7 +45,7 @@ classifiers = [
 # in this list -- see optional-dependencies below.
 dependencies = [
     "msgpack>=1.1.2",
-    "isabelle-rpc>=0.3.0",
+    "isabelle-rpc>=0.4.0",
     "Isabelle_Semantic_Embedding>=0.1.0",
     "rich",  # main.py, module level
     "PyYAML>=6.0.3",
