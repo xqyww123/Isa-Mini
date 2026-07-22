@@ -3,7 +3,7 @@ Isabelle/Minilang
 
 A minimalist proof language for Isabelle/HOL, designed for machine learning and LLM agents.
 
-## News
+## News 🎉🎉🎉
 
 We release the **AoA agent**, now the primary interface for proving with
 Minilang. AoA is a proof agent built on Minilang, exposed as an ordinary
