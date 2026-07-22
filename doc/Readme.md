@@ -1,7 +1,33 @@
 Isabelle/Minilang
 ====
 
-**A minimalist proof language for Isabelle/HOL, designed for machine learning and LLM agents.**
+**A minimalist proof language for Isabelle/HOL, designed for machine learning and LLM agents**
+
+## News
+
+We release the **AoA agent**, now the primary interface for proving with
+Minilang. AoA is a proof agent built on Minilang, exposed as an ordinary
+Isabelle proof method: on any goal in any existing Isabelle context, simply
+write
+
+```isabelle
+theory Scratch
+  imports Complex_Main Minilang_AoA.Minilang_AoA
+begin
+  theorem sqrt2_not_rational: "sqrt 2 ∉ ℚ" by aoa
+end
+```
+
+and the agent takes over.
+
+AoA integrates seamlessly into existing proof developments — no fine-tuned model, no local LLM infrastructure to set up, no changes to your theory files. The agent never edits/touches your Isabelle script: all of its work happens in the background, and its effects are confined to the target proof context (here, the one opened by `sqrt2_not_rational`); outside that context, anything is untouched.
+
+The proof found by `aoa` is saved to a separate file (`scratch.proof-cache` in the example above). Replaying `by aoa` reuses the
+stored proof directly — the agent is not re-run and no API cost is incurred — unless the cached proof no longer holds, in which case the agent is automatically invoked again.
+
+Read [AoA User Manual](IsaMini/AoA/Readme.md) for how to install and other details.
+
+## Key Features
 
 Minilang eliminates the human-oriented complexities of Isabelle/Isar, letting language models focus on high-level proof planning while delegating fine-grained reasoning to classical automation (Sledgehammer & friends). What started as a minimal proof shell has grown into a full stack:
 
@@ -11,11 +37,9 @@ Minilang eliminates the human-oriented complexities of Isabelle/Isar, letting la
 
 Visit our [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing) to see more.
 
-## Key Features
-
 ### AoA: Agent over AST
 
-The AoA agent answers a practical question: *how do we cut the prohibitive API cost of LLM proof agents, and how do we let general-purpose LLMs write proofs in a language too new to appear in their training corpora?*
+The AoA agent answers a practical question: *how do we cut the prohibitive API cost of LLM proof agents, and how do we let general-purpose LLMs write proofs in a language for which they lack corpus-scale exposure?*
 
 - **AST-native interaction**: instead of emitting source text and re-locating states by line numbers after every edit, the model supplies proofs as JSON representations of Minilang's AST — a format native to tool-calling LLMs — and drives the prover through a tree-edit model.
 - **Proof tree = operations + states**: proof operations and proof states are fused into one tree, so each operation carries its own subgoal's state, readable directly off the tree without separate queries.
