@@ -46,7 +46,7 @@ The AoA agent answers a practical question: *how do we cut the prohibitive API c
 - **No fine-tuning required**: works with general-purpose LLMs out of the box, with drivers for Claude Code, Codex, and OpenAI-compatible / Anthropic APIs.
 - **One-line usage inside Isabelle**: invoke the agent on any goal simply with the proof method `by aoa`.
 
-See the paper: [*Theorem-Proving Agent over Abstract Syntax Tree of Redesigned Language*](/doc/AoA.pdf).
+See the paper: [*Theorem-Proving Agent over Abstract Syntax Tree of Redesigned Language*](https://arxiv.org/abs/2607.16372).
 
 ### Proven effectiveness of Minilang for Neural Theorem Proving
 
@@ -60,7 +60,7 @@ See the paper: [*A Minimalist Proof Language for Neural Theorem Proving over Isa
 ### The corpus & translator
 
 - Rule-based translation from Isar to Minilang via three strategies: *elaboration* (make implicit information explicit), *normalization* (consolidate diverse idioms into uniform representations), and *elimination of tactics* (replace tactics with Sledgehammer\*, except those matching informal reasoning).
-- **~290K proofs** (85.25% of ~340K Isar proofs from Isabelle/AFP) successfully translated, forming one of the largest structured proof corpora for machine learning.
+- **~290K proofs** (85.25% of ~340K Isar proofs from Isabelle/AFP) successfully translated, forming one of the largest structured proof corpora for machine learning. Available on [Hugging Face](https://huggingface.co/datasets/ANTPG/Minilang-AFP-v1).
 
 
 ## Citation
@@ -68,13 +68,30 @@ See the paper: [*A Minimalist Proof Language for Neural Theorem Proving over Isa
 If you use Minilang or this repository, please cite:
 
 ```bibtex
-@misc{xu2025minilang,
-  title={A Minimalist Proof Language for Neural Theorem Proving over Isabelle/HOL},
-  author={Qiyuan Xu and Renxi Wang and Peixin Wang and Haonan Li and Conrad Watt},
-  year={2025},
-  eprint={2507.18885},
-  archivePrefix={arXiv},
-  primaryClass={cs.PL},
-  url={https://arxiv.org/abs/2507.18885},
+@misc{xu2026aoatheoremprovingagent,
+    title={AoA: Theorem Proving Agent over Abstract Syntax Tree of Redesigned Language}, 
+    author={Qiyuan Xu and Joshua Ong Jun Leang and Renxi Wang and Wenda Li and Haonan Li and Luke Ong and Conrad Watt},
+    year={2026},
+    eprint={2607.16372},
+    archivePrefix={arXiv},
+    primaryClass={cs.SE},
+    url={https://arxiv.org/abs/2607.16372}, 
+}
+
+@article{10.1145/3798275,
+    author = {Xu, Qiyuan and Wang, Renxi and Wang, Peixin and Li, Haonan and Watt, Conrad},
+    title = {A Minimalist Proof Language for Neural Theorem Proving over Isabelle/HOL},
+    year = {2026},
+    issue_date = {April 2026},
+    publisher = {Association for Computing Machinery},
+    address = {New York, NY, USA},
+    volume = {10},
+    number = {OOPSLA1},
+    url = {https://doi.org/10.1145/3798275},
+    doi = {10.1145/3798275},
+    month = apr,
+    articleno = {167},
+    numpages = {26},
+    keywords = {Interactive Theorem Proving, Isabelle/HOL, Large Language Models, Neural Theorem Proving, Proof Language Design}
 }
 ```
