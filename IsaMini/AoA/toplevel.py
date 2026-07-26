@@ -97,83 +97,61 @@ async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
     finally:
         await connection.callback("IsaMini.set_replay_mode", False)
 
-_DB_PULL_HEARTBEAT_SECS = 10   # cadence of the "still preparing..." progress line
+# The L19 empty-DB warning fires at most once per RPC-host process: the check
+# itself runs (cheaply) at every `by aoa`, but a user who has seen the install
+# hint does not need it again on every proof of the session.
+_warned_empty_semantic_db = False
 
 
-async def _ensure_semantic_db(logger) -> bool:
-    """When the local semantic database is missing or a previous pull was
-    interrupted, block AoA and (re-)pull it once, reporting progress; return
-    whether the caller should still run `check_update`.
+async def _ensure_semantic_db(connection) -> None:
+    """Warn -- once per process -- when the layered semantic database is empty.
 
-    AoA retrieves from this database, so with none present there is nothing to run
-    against -- we download it before starting rather than proceed blind.  The
-    filelock inside `pull_snapshot` serialises this across coroutines AND processes:
-    the winner downloads and reports; everyone else fails fast (R2Busy) and runs
-    this one proof bare.  `require_idle=False` keeps a sibling RPC host's open (and,
-    while empty, useless) handle from refusing the pull; `backup=False` because an
-    empty cache has nothing worth saving; `force=True` because the DB is empty or
-    incomplete regardless of what a stale marker's ETag claims, so the ETag
-    short-circuit must not skip the download.
+    A pure check (SEMANTIC_DB_LAYERED_PLAN L19): no download, no heartbeat, no
+    blocking.  There is no automatic installation anywhere -- conda users get
+    the `isabelle-semantic-data` payload as a package dependency, everyone else
+    installs it explicitly with `isabelle-semantics pull` -- so an empty layered
+    DB means the user has not installed it, and AoA runs bare after saying so.
+    The warning branches on whether this environment is conda-managed
+    (`sys.prefix/conda-meta` -- filesystem truth, activation-independent).
 
-    This never raises: an unreadable/corrupt DB, a lock held elsewhere, or any
-    download/extract/merge error all degrade to a loud warning and a bare run -- a
-    missing DB must never take down the proof RPC.
-
-    Returns True only when the DB was already present and whole -- then
-    `check_update` still runs its weekly staleness warning.  Returns False otherwise
-    (we just pulled, or ran bare): no point checking staleness.
+    Never raises, and the warning is best-effort (`Connection.warning` writes to
+    the host logger before the RPC send): a missing or unreadable DB must never
+    take down the proof RPC.
     """
-    from Isabelle_Semantic_Embedding.r2_sync import (
-        semantic_db_is_empty, semantic_db_record_count, pull_was_interrupted,
-        pull_snapshot, R2Busy)
-    try:
-        needs_pull = semantic_db_is_empty() or pull_was_interrupted()
-    except Exception as e:
-        logger.warning(
-            f"Could not read the local semantic database ({e}) — it may be corrupt. "
-            "Running this proof without it; check with 'semantics_manage.py fsck' or "
-            "delete it and re-pull.")
-        return False
-    if not needs_pull:
-        return True
+    global _warned_empty_semantic_db
+    if _warned_empty_semantic_db:
+        return
+    logger = connection.server.logger
 
-    logger.warning(
-        "AoA cannot start without the semantic embedding database, which is not "
-        "present on this machine. Downloading it now (~0.7 GB, one-time setup) — "
-        "this may take a few minutes. AoA will begin automatically when it is ready.")
-    phase = {"now": "starting"}
-    started = time.monotonic()
-    task = asyncio.create_task(asyncio.to_thread(
-        pull_snapshot, require_idle=False, backup=False, force=True,
-        on_phase=lambda p: phase.__setitem__("now", p)))
-    # asyncio.to_thread cannot cancel its worker: if this by-aoa is cancelled during
-    # the wait, the pull thread runs on (holding the filelock) until it finishes --
-    # harmless, and the download is not wasted, it just benefits the next run.
-    while True:
-        done, _ = await asyncio.wait({task}, timeout=_DB_PULL_HEARTBEAT_SECS)
-        if task in done:
-            break
-        logger.warning(
-            f"Preparing the semantic database — {phase['now']}… "
-            f"({int(time.monotonic() - started)}s elapsed). AoA is waiting.")
-    try:
-        task.result()
-    except R2Busy:
-        logger.warning(
-            "Another process is already downloading the semantic database; "
-            "running this proof without it for now.")
-    except Exception as e:
-        logger.warning(
-            f"Failed to prepare the semantic database ({e}); running this proof "
-            "without it for now.")
-    else:
+    async def _warn(msg: str) -> None:
         try:
-            ready = (f"Semantic database ready ({semantic_db_record_count()} "
-                     "records). Starting AoA.")
-        except Exception:
-            ready = "Semantic database ready. Starting AoA."
-        logger.warning(ready)
-    return False
+            await connection.warning(msg)
+        except Exception as e:
+            logger.debug(f"warning did not reach Isabelle: {e}")
+
+    try:
+        from Isabelle_Semantic_Embedding.snapshot_sync import semantic_db_is_empty
+        empty = semantic_db_is_empty()
+    except Exception as e:
+        _warned_empty_semantic_db = True
+        await _warn(
+            f"Could not read the local semantic database ({e}) — it may be "
+            "corrupt. Running this proof without it; check with "
+            "'isabelle-semantics fsck'.")
+        return
+    if not empty:
+        return
+    _warned_empty_semantic_db = True
+    if os.path.isdir(os.path.join(sys.prefix, "conda-meta")):
+        await _warn(
+            "No pre-built semantic database is installed on this machine — AoA "
+            "will run without it. Install it into this environment with:\n"
+            "    conda install -c https://conda.qiyuan.me isabelle-semantic-data")
+    else:
+        await _warn(
+            "No pre-built semantic database is installed on this machine — AoA "
+            "will run without it. Install it with:\n"
+            "    isabelle-semantics pull")
 
 
 @isabelle_remote_procedure("IsaMini.AoA")
@@ -222,26 +200,11 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # SQLite store below and the ML-side L2 Phi_Cache_DB store).
     is_test_driver = driver.split(".", 1)[0] == "test"
 
-    # Tell the user when a newer Semantic-Embedding DB is published: an out-of-date
-    # one makes AoA re-interpret and re-embed theories another machine already did,
-    # at API cost.  Warns only; `pull` merges, and only when you run it.
-    #
-    # Called inline, not on a thread.  Inside the weekly throttle it costs ~1ms;
-    # the one call a week that really probes is a single anonymous HTTPS HEAD and
-    # blocks this event loop for ~0.7s.  If the origin is unreachable it blocks for
-    # the 15s timeout: nothing breaks (MCP's read timeout is 300s and the REPL
-    # client has none), and asyncio.to_thread would only move that wait to
-    # interpreter exit, where asyncio.run joins the default executor anyway.
-    #
-    # Skipped under the test driver: snapshot tests must not touch the network.
+    # An empty layered semantic DB warns once per process and AoA runs bare
+    # (L19: no automatic installation anywhere).  A cheap O(1) check, no
+    # network.  Skipped under the test driver: snapshot tests must stay silent.
     if not is_test_driver:
-        # Empty DB -> block and pull it (with progress warnings) before starting;
-        # present DB -> just warn if a newer snapshot is published.  _ensure_...
-        # returns False after handling an empty DB, so check_update is skipped then
-        # (a fresh pull already has the latest; a bare run has nothing to compare).
-        if await _ensure_semantic_db(logger):
-            from Isabelle_Semantic_Embedding.r2_sync import check_update
-            check_update(logger.warning)   # never raises; logs at most one line
+        await _ensure_semantic_db(connection)
 
     if not use_cache or is_test_driver:
         why = ("test driver: run by hand, never replay cache" if is_test_driver

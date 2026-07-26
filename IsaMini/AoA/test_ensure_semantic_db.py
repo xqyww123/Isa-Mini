@@ -1,29 +1,42 @@
-"""Unit tests for `_ensure_semantic_db` -- the empty/incomplete-DB auto-pull control
-flow: the forced pull, the progress heartbeat, and every degrade-to-bare-run path.
-r2_sync is mocked, so no network and no LMDB are touched.
+"""Unit tests for `_ensure_semantic_db` -- the L19 empty-DB check.
 
-`_ensure_semantic_db` does `from ...r2_sync import <names>` at call time, so patching
-attributes on the r2_sync module is what the function actually sees.
+The hook is a pure check now (SEMANTIC_DB_LAYERED_PLAN L19): when the layered
+semantic database is empty it emits ONE warning per process -- whose wording
+branches on whether the environment is conda-managed -- and AoA runs bare;
+when the DB is present it does nothing at all.  No download, no heartbeat.
+
+snapshot_sync is mocked, so no LMDB is touched.  `_ensure_semantic_db` does
+`from ...snapshot_sync import semantic_db_is_empty` at call time, so patching
+the attribute on the snapshot_sync module is what the function actually sees.
 """
 import asyncio
+import logging
 import os
 import sys
-import time as _time
+import types
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from IsaMini.AoA import toplevel               # noqa: E402
-import Isabelle_Semantic_Embedding.r2_sync as r2   # noqa: E402
+import Isabelle_Semantic_Embedding.snapshot_sync as snap   # noqa: E402
 
 
-class _Log:
+class _Conn:
+    """A Connection stub with just what _ensure_semantic_db touches: the host
+    logger and the warning channel.  `msgs` records (channel, text) so tests can
+    pin not only what was said but where it surfaced."""
+
     def __init__(self):
         self.msgs = []
+        self.server = types.SimpleNamespace(logger=logging.getLogger("_ensure_test"))
 
-    def warning(self, m):
-        self.msgs.append(m)
+    async def warning(self, m):
+        self.msgs.append(("warning", m))
+
+    async def writeln(self, m):
+        self.msgs.append(("writeln", m))
 
 
 def _run(coro):
@@ -35,101 +48,80 @@ def _run(coro):
 
 
 @pytest.fixture(autouse=True)
-def _defaults(monkeypatch):
-    """A present, whole DB by default; each test overrides what it exercises."""
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: False)
-    monkeypatch.setattr(r2, "pull_was_interrupted", lambda: False)
-    monkeypatch.setattr(r2, "semantic_db_record_count", lambda: 123)
+def _defaults(monkeypatch, tmp_path):
+    """A present DB and a non-conda prefix by default; the once-per-process
+    flag is reset so every test starts from a fresh process's point of view."""
+    monkeypatch.setattr(snap, "semantic_db_is_empty", lambda: False)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "prefix"))
+    monkeypatch.setattr(toplevel, "_warned_empty_semantic_db", False)
 
 
-def test_present_db_returns_true_and_is_silent():
-    lg = _Log()
-    assert _run(toplevel._ensure_semantic_db(lg)) is True
-    assert lg.msgs == []
+def test_present_db_is_silent():
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))
+    assert conn.msgs == []
 
 
-def test_empty_db_pulls_forced_and_announces_ready(monkeypatch):
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: True)
-    captured = {}
-
-    def fake_pull(**kw):
-        captured.update(kw)
-        return True
-    monkeypatch.setattr(r2, "pull_snapshot", fake_pull)
-
-    lg = _Log()
-    assert _run(toplevel._ensure_semantic_db(lg)) is False
-    assert captured.get("force") is True, "an empty DB must force past the ETag short-circuit"
-    assert captured.get("require_idle") is False and captured.get("backup") is False
-    assert any("Downloading it now" in m for m in lg.msgs)
-    assert any("Semantic database ready (123 records)" in m for m in lg.msgs)
+def test_empty_db_warns_with_the_pull_hint(monkeypatch):
+    monkeypatch.setattr(snap, "semantic_db_is_empty", lambda: True)
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))
+    [(channel, msg)] = conn.msgs
+    assert channel == "warning"
+    assert "AoA will run without it" in msg
+    assert "isabelle-semantics pull" in msg
+    assert "conda install" not in msg
 
 
-def test_a_leftover_sentinel_triggers_a_repull_even_when_not_empty(monkeypatch):
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: False)
-    monkeypatch.setattr(r2, "pull_was_interrupted", lambda: True)
-    calls = {"n": 0}
-
-    def fake_pull(**kw):
-        calls["n"] += 1
-        return True
-    monkeypatch.setattr(r2, "pull_snapshot", fake_pull)
-
-    assert _run(toplevel._ensure_semantic_db(_Log())) is False
-    assert calls["n"] == 1, "a surviving .pull_incomplete must force a re-pull"
+def test_empty_db_in_a_conda_env_suggests_conda_install(monkeypatch, tmp_path):
+    monkeypatch.setattr(snap, "semantic_db_is_empty", lambda: True)
+    os.makedirs(tmp_path / "prefix" / "conda-meta")
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))
+    [(channel, msg)] = conn.msgs
+    assert channel == "warning"
+    assert "conda install -c https://conda.qiyuan.me isabelle-semantic-data" in msg
+    assert "isabelle-semantics pull" not in msg
 
 
-def test_lock_held_elsewhere_runs_bare(monkeypatch):
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: True)
-
-    def busy(**kw):
-        raise r2.R2Busy("held")
-    monkeypatch.setattr(r2, "pull_snapshot", busy)
-
-    lg = _Log()
-    assert _run(toplevel._ensure_semantic_db(lg)) is False
-    assert any("Another process is already downloading" in m for m in lg.msgs)
-
-
-def test_any_pull_failure_degrades_and_never_raises(monkeypatch):
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: True)
-
-    def boom(**kw):
-        raise OSError("disk full")          # NOT an R2Error subclass
-    monkeypatch.setattr(r2, "pull_snapshot", boom)
-
-    lg = _Log()
-    assert _run(toplevel._ensure_semantic_db(lg)) is False   # degraded, did not crash by-aoa
-    assert any("Failed to prepare the semantic database" in m for m in lg.msgs)
+def test_warns_only_once_per_process(monkeypatch):
+    monkeypatch.setattr(snap, "semantic_db_is_empty", lambda: True)
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))
+    _run(toplevel._ensure_semantic_db(conn))
+    other = _Conn()
+    _run(toplevel._ensure_semantic_db(other))
+    assert len(conn.msgs) == 1
+    assert other.msgs == []
 
 
-def test_a_corrupt_local_db_probe_runs_bare(monkeypatch):
-    def corrupt():
-        raise Exception("MDB_CORRUPTED")
-    monkeypatch.setattr(r2, "semantic_db_is_empty", corrupt)
+def test_check_runs_again_while_db_stays_present(monkeypatch):
+    """The cheap check itself is per-call; only the WARNING is once-per-process."""
+    calls = []
+    monkeypatch.setattr(snap, "semantic_db_is_empty",
+                        lambda: calls.append(1) or False)
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))
+    _run(toplevel._ensure_semantic_db(conn))
+    assert len(calls) == 2 and conn.msgs == []
 
-    lg = _Log()
-    assert _run(toplevel._ensure_semantic_db(lg)) is False
-    assert any("may be corrupt" in m for m in lg.msgs)
+
+def test_unreadable_db_degrades_to_a_warning_and_never_raises(monkeypatch):
+    def boom():
+        raise RuntimeError("MDB_CORRUPTED")
+    monkeypatch.setattr(snap, "semantic_db_is_empty", boom)
+    conn = _Conn()
+    _run(toplevel._ensure_semantic_db(conn))       # must not raise
+    [(channel, msg)] = conn.msgs
+    assert channel == "warning"
+    assert "MDB_CORRUPTED" in msg and "isabelle-semantics fsck" in msg
 
 
-def test_progress_heartbeat_fires_and_names_the_phase(monkeypatch):
-    monkeypatch.setattr(r2, "semantic_db_is_empty", lambda: True)
-    monkeypatch.setattr(toplevel, "_DB_PULL_HEARTBEAT_SECS", 0.05)
+def test_a_dead_warning_callback_never_breaks_the_flow(monkeypatch):
+    monkeypatch.setattr(snap, "semantic_db_is_empty", lambda: True)
+    conn = _Conn()
 
-    def slow(**kw):
-        on = kw.get("on_phase")
-        if on:
-            on("downloading")
-        _time.sleep(0.12)
-        if on:
-            on("merging")
-        _time.sleep(0.12)
-        return True
-    monkeypatch.setattr(r2, "pull_snapshot", slow)
-
-    lg = _Log()
-    _run(toplevel._ensure_semantic_db(lg))
-    hb = [m for m in lg.msgs if "Preparing the semantic database" in m]
-    assert hb, "no heartbeat fired during a slow pull"
-    assert any("downloading" in m for m in hb) and any("merging" in m for m in hb)
+    async def dead(_m):
+        raise ConnectionError("panel gone")
+    conn.warning = dead
+    _run(toplevel._ensure_semantic_db(conn))       # must not raise
