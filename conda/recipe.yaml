@@ -282,7 +282,10 @@ requirements:
     # and declaring transitive session deps is how a version bound ends up in two places.
     - auto-sledgehammer >=0.1.0,<0.2.0        # ROOT:1  Minilang = Auto_Sledgehammer
     - isabelle-rpc >=0.4.0                    # ROOT:7  Minilang_AoA sessions
-    - isabelle-semantic-embedding >=0.1.1     # ROOT:8  ditto; also a pyproject dependency
+    # ROOT:8  ditto; also a pyproject dependency.  Floor raised 2026-07-26:
+    # 0.6.0's AoA imports snapshot_sync (the layered semantic DB), which first
+    # ships in embedding 0.3.0 -- older embedding is a hard `by aoa` ImportError.
+    - isabelle-semantic-embedding >=0.3.0
     #
     # The pyproject dependencies under their CONDA names.  TWO differ from PyPI, and in
     # both cases the WRONG name resolves, installs green, and dies at `import`:
