@@ -47,7 +47,7 @@ from .model import (
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus, WorkerHandle, WorkerYield, Have, EditVerdict, _is_strict_ancestor,
     _is_direct_global_decl, _enclosing_global_decl,
-    Parse_Op_List, Interaction_BadAnswer,
+    Parse_Op_List, Interaction_BadAnswer, SessionQuit,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
     AnswerMissingLemmas, AnswerConstraintRequest,
@@ -1161,6 +1161,10 @@ async def _run_struggle_checkpoint(session: Session) -> str | None:
 
     try:
         is_stuck, summary = await session.launch_interaction(interaction)
+    except SessionQuit:
+        # Not a fork failure — the session stopped. This runs inside a tool call,
+        # so let it reach that boundary (ToolExecutor.execute) to be translated.
+        raise
     except Exception as e:
         session.warn_AoA_opr(
             f"Struggle checkpoint fork failed: {type(e).__name__}: {e}")
@@ -2736,6 +2740,18 @@ class ToolExecutor:
             # directly (see driver_api._api_loop).
             session.quit_info = ResourceUnavailable(detail=str(e))
             session.log_tool_response(session.tool_name(name), f"LM UNREACHABLE: {e}")
+            return (str(e), True)
+        except SessionQuit as e:
+            # An interaction fork launched from inside this tool call stopped
+            # without answering. A tool call is a work boundary: translate the
+            # reason back to state on THIS session (the fork's caller — it has to
+            # know it should stop too) and end the call. Same shape as the
+            # LMUnreachable arm above, and it must stay ABOVE `except Exception`,
+            # whose first act is `sys.exit(1)` under AoA_Debug.
+            if session.quit_info is None or not session.quit_info.is_terminal:
+                session.quit_info = e.quit_info
+            session.log_tool_response(session.tool_name(name),
+                                      f"{e.quit_info.reason}: {e}")
             return (str(e), True)
         except (ConnectionError, EOFError):
             raise asyncio.CancelledError("connection lost")

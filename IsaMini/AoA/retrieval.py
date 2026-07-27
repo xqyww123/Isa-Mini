@@ -29,7 +29,7 @@ from Isabelle_Semantic_Embedding.semantics import (
 
 from .model import (
     Session, Minilang_State, MyIO, short_name,
-    Interaction, IsabelleError, ArgumentError, TechnicalFailure,
+    Interaction, IsabelleError, ArgumentError, TechnicalFailure, SessionQuit,
     EntityKind, print_indent, print_paragraph, print_expression_list,
     Interaction_Retrieve, RetrievedEntity, IsabelleEntity,
     _THEOREM_KINDS, AGENT_EXPR_LIMIT,
@@ -1170,6 +1170,18 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         error_msg = '; '.join(pretty_unicode(err) for err in e.errors)
         session.log_tool_response(session.tool_name(TOOL_SEARCH), f"ERROR: {error_msg}")
         return (error_msg, True)
+    except SessionQuit as e:
+        # An interactive-retrieval fork launched from inside this tool call
+        # stopped without answering. This is a work boundary (the `search` tool):
+        # translate the reason back to state on THIS session -- which may itself
+        # be a fork, in which case the setter settles its own slot in turn -- and
+        # end the call. Must stay ABOVE `except Exception`, whose first act is
+        # `sys.exit(1)` under AoA_Debug.
+        if session.quit_info is None or not session.quit_info.is_terminal:
+            session.quit_info = e.quit_info
+        session.log_tool_response(session.tool_name(TOOL_SEARCH),
+                                  f"{e.quit_info.reason}: {e}")
+        return (str(e), True)
     except (ConnectionError, EOFError):
         raise asyncio.CancelledError("connection lost")
     except Exception as e:

@@ -765,7 +765,14 @@ class APIDriver(LMDriver):
             self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
 
-        assert fork.fork_pending is not None and fork.fork_pending.answer.done()
+        # Guaranteed by construction: a fork leaves this loop either having
+        # answered, or with a terminal quit_info — and setting a terminal
+        # quit_info settles the slot with a SessionQuit (Session.quit_info's
+        # setter), which `.result()` below re-raises. A failure here is a real
+        # contract violation, so say what the state actually was.
+        assert fork.fork_pending is not None and fork.fork_pending.answer.done(), (
+            f"fork {tag} left the loop with no answer and no terminal quit_info: "
+            f"quit_info={fork.quit_info!r} _interrupted={fork._interrupted}")
         return fork.fork_pending.answer.result()
 
     # ------------------------------------------------------------------

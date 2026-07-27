@@ -2748,6 +2748,15 @@ class Interaction_BadAnswer(Exception):
     """Raised when an answer to an interaction is invalid. The interaction remains active."""
     pass
 
+class SessionQuit(Exception):
+    """A session stopped (terminal ``quit_info``) while an interaction was still
+    waiting for its answer. Carries the reason; the first work boundary converts
+    it back to state. Not an ``AoA_Error``: the whole-body ``except AoA_Error``
+    handlers on the edit/delete tools would swallow it as a retriable error."""
+    def __init__(self, quit_info: 'QuitInfo'):
+        super().__init__(quit_info.detail or quit_info.reason)
+        self.quit_info = quit_info
+
 
 class Interaction_ReviewRefutation(Interaction):
     """Review a Worker's claim that a goal is unprovable."""
@@ -3351,6 +3360,13 @@ class Fork_Pending(NamedTuple):
     tool completes it with the value returned by ``interaction.answer(...)``,
     and the fork's run loop reads it back. ``answer.done()`` doubles as the
     "already answered" predicate used to reject duplicate ``answer`` calls.
+
+    The slot can also be settled WITHOUT an answer: ``Session.quit_info``'s
+    setter completes it with a ``SessionQuit`` exception once the fork acquires
+    a terminal quit_info, because such a fork can never answer (answering is a
+    tool call, and every tool call is refused from then on). So ``done()``
+    means "answered OR settled by SessionQuit", and reading the value with
+    ``.result()`` raises in the latter case.
 
     (An ``asyncio.Future`` is used for the slot because it is the stdlib
     one-shot set-once container; the future is never awaited — only polled.)
@@ -11442,7 +11458,9 @@ class Session:
         # last proof-tool call and how many times it has repeated back-to-back.
         self._repeat_sig: str | None = None
         self._repeat_count: int = 0
-        self.quit_info: 'QuitInfo | None' = None
+        # Written directly, not through the `quit_info` property: during
+        # __init__ there is no fork to settle and `self.role` may not be usable.
+        self._quit_info: 'QuitInfo | None' = None
         self._session_edit_count: int = 0
         self._session_delete_count: int = 0
         _is_sub_subagent = (isinstance(self.role, Role_Worker)
@@ -11663,6 +11681,31 @@ class Session:
     @worker_max_tool_calls.setter
     def worker_max_tool_calls(self, v: int):
         self.runtime.worker_max_tool_calls = v
+
+    @property
+    def quit_info(self) -> 'QuitInfo | None':
+        """Why this session's agent loop stopped, or None while it runs. Unlike
+        the properties above this one is genuinely per-session (never shared via
+        Runtime); the property exists only for the setter's side effect."""
+        return self._quit_info
+    @quit_info.setter
+    def quit_info(self, q: 'QuitInfo | None') -> None:
+        self._quit_info = q
+        # A session that acquires a terminal quit_info can never answer: answering
+        # is a tool call, and ToolExecutor.execute's opening check_budget() refuses
+        # every tool call once quit_info.is_terminal. So if this session is an
+        # interaction fork still holding an unanswered slot, settle that slot with
+        # the reason instead of leaving the caller polling `answer.done()` forever
+        # (each driver's fork loop already exits the moment it becomes true).
+        if q is not None and q.is_terminal:
+            p = self.fork_pending      # None unless this session is Role_Interaction
+            if p is not None and not p.answer.done():
+                p.answer.set_exception(SessionQuit(q))
+                # The fork now leaves via the `answer.done()` exit, which logs
+                # "completed" plus a cost line — indistinguishable in
+                # interaction.yaml from a fork that really answered. Say so here.
+                self.log_interaction("fork", f"settled without an answer: {q.reason}")
+
     def next_pit_name(self) -> str:
         return self.runtime.next_pit_name()
 
@@ -12475,18 +12518,32 @@ class Session:
         self._log(self.interaction_log_file, "BUDGET_EXHAUSTED",
                   lambda: [f"[BUDGET] {reason}"], reason=reason)
 
-    def check_budget(self) -> bool:
-        """Check budget limits. If exceeded, set quit_info and return True."""
-        if self.quit_info is not None:
-            return self.quit_info.is_terminal
-
-        reason = None
+    def _shared_budget_exhausted_reason(self) -> str | None:
+        """The run-wide budget dimension that has run out, or None. Pure — no side
+        effects. Both dimensions live on the Runtime (``_budget_start_time``,
+        ``total_tool_calls``) and the thresholds are copied to every fork, so a
+        *fresh* fork would compute exactly the same answer — which is what makes
+        this a sound "don't even ask" test for the wind-down hooks. The
+        per-session ``_retry_count`` is deliberately NOT included: a fork starts
+        it at 0, so a parent that hit its retry limit can still get a perfectly
+        good answer."""
         if self._budget_start_time is not None:
             elapsed = time() - self._budget_start_time
             if elapsed > self.timeout_seconds:
-                reason = f"timeout ({elapsed:.0f}s > {self.timeout_seconds}s)"
-        if reason is None and self.total_tool_calls >= self.max_tool_calls:
-            reason = f"tool call limit ({self.total_tool_calls} >= {self.max_tool_calls})"
+                return f"timeout ({elapsed:.0f}s > {self.timeout_seconds}s)"
+        if self.total_tool_calls >= self.max_tool_calls:
+            return f"tool call limit ({self.total_tool_calls} >= {self.max_tool_calls})"
+        return None
+
+    def check_budget(self) -> bool:
+        """Check budget limits. If exceeded, set quit_info and return True.
+        The two run-wide dimensions are delegated to
+        ``_shared_budget_exhausted_reason``; the per-session retry count is
+        checked here (it is the one dimension a fresh fork does not inherit)."""
+        if self.quit_info is not None:
+            return self.quit_info.is_terminal
+
+        reason = self._shared_budget_exhausted_reason()
         if reason is None and self._retry_count >= self.max_retries:
             reason = f"retry limit ({self._retry_count} >= {self.max_retries})"
 
@@ -12534,11 +12591,20 @@ class Session:
         survey must never break the proof loop."""
         if self._missing_lemma_survey_interval <= 0 or self.is_interaction:
             return
+        # A fork started with the run-wide budget already gone cannot answer:
+        # its very first tool call hits the same shared budget. Don't burn an
+        # LLM round-trip asking. (The per-session retry count is excluded on
+        # purpose — see _shared_budget_exhausted_reason.)
+        if self._shared_budget_exhausted_reason() is not None:
+            return
         self._query_calls_since_survey = 0
         _t0 = time()
         try:
             lemmas = await self.launch_interaction(
                 Interaction_MissingLemmaSurvey(trigger))
+        except SessionQuit as e:
+            self.warn_AoA_opr(f"Missing-lemma survey skipped: {e}")
+            return
         except Exception as e:
             self.warn_AoA_opr(
                 f"Missing-lemma survey fork failed: {type(e).__name__}: {e}")
@@ -12565,7 +12631,9 @@ class Session:
         conversion throw) must surface loudly rather than hide behind a warning
         while the proof still reports success — so a memorize failure CAN now abort
         the enclosing ``proof_done``/``worker_end`` path or the ``pre_compact`` hook
-        (intended, so subsystem bugs are caught early). No budget credit-back
+        (intended, so subsystem bugs are caught early). ``SessionQuit`` is the one
+        exception: it is not a failure but this session stopping, and the wind-down
+        hook is a work boundary, so it is logged and dropped. No budget credit-back
         (decision C16)."""
         from .task import LearningTask
         if not self.enable_write_memory:
@@ -12574,7 +12642,13 @@ class Session:
             return
         if self.is_interaction:
             return
-        await self.launch_interaction(Interaction_Memorize(trigger))
+        # Same "don't even ask" test as run_missing_lemma_survey.
+        if self._shared_budget_exhausted_reason() is not None:
+            return
+        try:
+            await self.launch_interaction(Interaction_Memorize(trigger))
+        except SessionQuit as e:
+            self.log_AoA_opr(f"Memorize skipped: {e}")
 
     # Proof tree logging methods
     def log_proof_operation(self, step: str, operation: str, details: dict[str, Any]):
@@ -13732,6 +13806,10 @@ class WorkerHandle:
             await sub.maybe_run_memorize_interaction("worker_end")
         except asyncio.CancelledError:
             session.warn_AoA_opr(f"{tag} cancelled")
+            raise
+        except SessionQuit:
+            # Not a crash — an interaction fork was settled by a terminal
+            # quit_info. This is not a work boundary; let it reach one.
             raise
         except Exception as e:
             session.warn_AoA_opr(f"{tag} failed: {type(e).__name__}: {e}")

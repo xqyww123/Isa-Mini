@@ -656,7 +656,12 @@ class Codex_Driver(LMDriver):
             self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
 
-        assert fork.fork_pending is not None and fork.fork_pending.answer.done()
+        # See driver_api's counterpart: a fork either answered, or got a terminal
+        # quit_info whose setter settled the slot with a SessionQuit that
+        # `.result()` re-raises. Failing here is a real contract violation.
+        assert fork.fork_pending is not None and fork.fork_pending.answer.done(), (
+            f"fork {tag} left the loop with no answer and no terminal quit_info: "
+            f"quit_info={fork.quit_info!r}")
         return fork.fork_pending.answer.result()
 
     async def _run_fork_with_backup(

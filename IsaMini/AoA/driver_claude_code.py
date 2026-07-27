@@ -576,9 +576,9 @@ class ClaudeCode(LMDriver):
         # (driver_api._api_loop:381), the same one driver_openai_api._fail_fast uses for a
         # 401. Retrying cannot authenticate us.
         raise LMUnreachable(
-            "Claude-Code: the CLI is not authenticated. Run `claude` and use /login, "
-            "then retry."
-            + (f" The CLI reported: {detail!r}" if detail else ""))
+            "You have not logged Claude-Code. Run `claude '/login'` using your shell, then retry.\n"
+            + (f" The CLI reported: {detail!r}" if detail else "")
+            + "\nRead https://github.com/xqyww123/Isa-Mini/blob/main/IsaMini/AoA/Readme.md for more information")
 
     @staticmethod
     def _model_error_detail(message: Any) -> str:
@@ -1058,7 +1058,12 @@ class ClaudeCode(LMDriver):
             self.total_model_time += fork.total_model_time
             self.total_quota_wait_time += fork.total_quota_wait_time
             await fork.close()
-        assert fork.fork_pending is not None and fork.fork_pending.answer.done()
+        # See driver_api's counterpart: a fork either answered, or got a terminal
+        # quit_info whose setter settled the slot with a SessionQuit that
+        # `.result()` re-raises. Failing here is a real contract violation.
+        assert fork.fork_pending is not None and fork.fork_pending.answer.done(), (
+            f"fork {tag} left the loop with no answer and no terminal quit_info: "
+            f"quit_info={fork.quit_info!r}")
         return fork.fork_pending.answer.result()
 
     def refresh_YAML(self):
