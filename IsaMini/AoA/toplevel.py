@@ -205,6 +205,19 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # network.  Skipped under the test driver: snapshot tests must stay silent.
     if not is_test_driver:
         await _ensure_semantic_db(connection)
+        # The interpretation policy shell (CHECK_OUTDATE_PLAN §8): ONE startup
+        # check per `by aoa` -- gate, dry run over this proof's context (an
+        # as-is root, so locale-local facts are seen) and its ancestor cone,
+        # then the threshold policy: small updates run silently, big ones ask
+        # (the run itself never asks again -- the query-time store has
+        # enable_interpret_in_auto_embed switched off below in model.py).
+        # Best-effort like the check above: a broken semantic DB must never
+        # take down the proof RPC.
+        try:
+            from Isabelle_Semantic_Embedding.semantics import update_interpretations
+            await update_interpretations(connection, ask_user=True)
+        except Exception as e:
+            logger.warning(f"[AoA] semantic interpretation startup check failed: {e}")
 
     if not use_cache or is_test_driver:
         why = ("test driver: run by hand, never replay cache" if is_test_driver

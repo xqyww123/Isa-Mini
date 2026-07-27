@@ -2165,6 +2165,12 @@ class Minilang_State:
             else:
                 domain = Semantic_Vector_Store.ContextAll
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
+            # AoA never interprets at query time: the by-aoa startup sweep
+            # (update_interpretations in toplevel.py) already ran the check, so
+            # switch off _auto_embed's point-fix gate -- queries then pay
+            # nothing for it, not even a config read (CHECK_OUTDATE_PLAN §8).
+            # Embedding of already-interpreted entities is unaffected.
+            store.enable_interpret_in_auto_embed = False
             if query is not None:
                 raw_results, warnings_raw, total = await store.lookup(query, k, kinds, domain,
                                        term_patterns=term_patterns,
