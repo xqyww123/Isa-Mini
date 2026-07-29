@@ -210,8 +210,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         # check per `by aoa` -- gate, dry run over this proof's context (an
         # as-is root, so locale-local facts are seen) and its ancestor cone,
         # then the threshold policy: small updates run silently, big ones ask
-        # (the run itself never asks again -- the query-time store has
-        # enable_interpret_in_auto_embed switched off below in model.py).
+        # (the run itself never asks again -- AoA's query-time lookups pass
+        # interpret_in_auto_embed=False in model.py; a per-call parameter, so
+        # nothing sticks to the connection-cached store, review R7).
         # Best-effort like the check above: a broken semantic DB must never
         # take down the proof RPC.
         try:

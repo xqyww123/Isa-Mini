@@ -2167,10 +2167,14 @@ class Minilang_State:
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
             # AoA never interprets at query time: the by-aoa startup sweep
             # (update_interpretations in toplevel.py) already ran the check, so
-            # switch off _auto_embed's point-fix gate -- queries then pay
-            # nothing for it, not even a config read (CHECK_OUTDATE_PLAN §8).
-            # Embedding of already-interpreted entities is unaffected.
-            store.enable_interpret_in_auto_embed = False
+            # its lookups pass interpret_in_auto_embed=False -- queries then
+            # pay nothing for the point fix, not even a config read
+            # (CHECK_OUTDATE_PLAN §8).  A per-call PARAMETER, never a write to
+            # the connection-cached store: the ML connection pool reuses this
+            # Python connection for later non-AoA queries, and a field write
+            # here would silently switch the point fix (and its warning) off
+            # for all of them (review R7).  Embedding of already-interpreted
+            # entities is unaffected.
             if query is not None:
                 raw_results, warnings_raw, total = await store.lookup(query, k, kinds, domain,
                                        term_patterns=term_patterns,
@@ -2178,6 +2182,7 @@ class Minilang_State:
                                        theories_include=theories_include,
                                        name_contains=name_contains,
                                        target_type=target_type,
+                                       interpret_in_auto_embed=False,
                                        ctxt=self.name)
                 warnings = [_clean_warning(w) for w in warnings_raw]
                 scored_recs = [(score, rec, None) for score, rec in raw_results]
