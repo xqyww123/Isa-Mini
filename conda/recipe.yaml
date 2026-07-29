@@ -378,6 +378,9 @@ about:
     The Minilang REPL client (`IsaMini.REPL` and its CLI) is NOT usable from this
     package: it needs IsaREPL, which is published on PyPI but on no conda channel.
     `pip install IsaREPL` into the same environment to enable it.  AoA does not use it.
+
+    AoA reports an anonymous usage count. Nothing that identifies you or your work is
+    stored. Set `AOA_DISABLE_USAGE_COUNT=1` to switch it off.
   license: LGPL-2.1-or-later
   license_file:
     # Paths relative to $SRC_DIR, NOT to this recipe directory -- `../COPYING` resolves

@@ -1,6 +1,7 @@
 from re import I
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
+from . import usage_count
 from typing import Any
 import json
 import logging as _logging
@@ -254,6 +255,12 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                         cache_source, "OK" if ok else "FAILED", len(cached_ops))
             if ok:
                 proof_json = json.dumps(cached_ops)
+                # Served entirely by the cache: the agent never ran.  Reported
+                # only AFTER a successful replay -- a replay that fails falls
+                # through to the agent below and must count once, as `agent`.
+                # (Unreachable under the test driver: this whole branch sits in
+                # the `else` of the lookup-bypass test above.)
+                usage_count.report(usage_count.EVENT_CACHE)
                 return (cached_ops, final_state, zero_cost, None, None, proof_json)
             # replay failed — fall through to agent
 
@@ -299,6 +306,11 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         from .task import UsualTask, LearningTask
         task_obj = (LearningTask(task_payload) if task_kind == "learning"
                     else UsualTask())
+        # Past the cache, about to enter the agent.  Sits inside this `else`, so
+        # the test driver -- handled by the branch above -- reports nothing.
+        # Note this says "entered the agent", NOT "spent model tokens": a user
+        # who has not logged in to their model provider still gets here.
+        usage_count.report(usage_count.EVENT_AGENT)
         async with drv(connection.server.logger, actual_log_path,
                        argument=argument,
                        retrieval_forking_mode=retrieval_forking,

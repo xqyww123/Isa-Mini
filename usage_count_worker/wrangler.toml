@@ -1,0 +1,42 @@
+# AoA usage count endpoint -- Cloudflare Worker + D1.
+# Deploy with:  CLOUDFLARE_API_TOKEN=... npx wrangler deploy
+# See ../../../AOA_USAGE_COUNT_PLAN.md.
+
+name = "aoa-usage-count"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# One address only.  Without this the Worker is also reachable at
+# aoa-usage-count.<account>.workers.dev, which would be a second, undocumented
+# endpoint for the same counter.
+workers_dev = false
+
+# A PATH route, not a Custom Domain.  A Custom Domain would give this Worker the
+# whole hostname; a route leaves aoa.qiyuan.me free for anything else, including
+# a real site later, and lets further applets be mounted beside this one under
+# their own paths.  When several patterns match, the most specific one wins.
+#
+# The hostname is a FIRST-LEVEL subdomain deliberately.  Cloudflare's Universal
+# SSL covers the apex and first-level names only ("deeper subdomains ... will not
+# serve a valid certificate"), and whether a deeper name self-provisions an
+# advanced certificate without a paid ACM subscription could not be settled from
+# the documentation.  The failure mode being avoided is silent: the client
+# swallows TLS errors, so the metric would read zero forever with no signal.
+#
+# A route requires the hostname to carry a DNS record that is PROXIED by
+# Cloudflare.  Nothing real serves aoa.qiyuan.me, so it holds a placeholder AAAA
+# record pointing at the IPv6 discard prefix (100::), created by hand.  Pointing
+# that record at a real origin later does not disturb this route: only the
+# /usage_counter path is intercepted.
+#
+# The trailing `*` is defensive -- it also matches a trailing slash or a query
+# string.  A request matching no route reaches the (nonexistent) origin and
+# fails, and the client swallows that silently.
+routes = [
+  { pattern = "aoa.qiyuan.me/usage_counter*", zone_name = "qiyuan.me" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aoa-usage-count"
+database_id = "8180c70b-136f-4e84-aba9-9a4c3b8d8e15"

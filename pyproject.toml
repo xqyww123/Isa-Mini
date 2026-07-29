@@ -55,6 +55,14 @@ dependencies = [
     "zstandard>=0.23.0",
     # mcp_http_server._write_memory_tool_logic hashes the record into its universal key.
     "xxhash",
+    # AoA/usage_count.py, on the import path of IsaMini.AoA (__init__ -> toplevel).
+    # The one deliberate exception to the "module-level import" rule above: that module
+    # imports httpx from INSIDE a function on purpose, so that a missing httpx can only
+    # silence the usage count and can never break a proof. It is declared here anyway,
+    # because the failure it would otherwise cause is invisible -- the counter would
+    # simply never report, with nothing anywhere saying why. Note the two extras below
+    # ALSO need httpx; it is listed once, here, rather than in each of them.
+    "httpx>=0.28.1",
     # mcp_http_server imports both at module level, and it sits on the import path of
     # IsaMini.AoA itself: __init__ -> toplevel -> driver_claude_code:14 -> here, all
     # hard imports. Declaring them as an `mcp` extra shipped a package that
@@ -78,10 +86,10 @@ repl = ["IsaREPL"]
 # driver_openai_api.py: the openai SDK, plus tiktoken for APIDriver_OpenAI.estimate_tokens.
 # Every driver registered there (OpenAI, Codex-API, K2-Think, Chat, DeepSeek)
 # is an openai-SDK client, even the ones whose names do not say so.
-openai-api = ["openai>=2.33.0", "httpx>=0.28.1", "tiktoken"]
+openai-api = ["openai>=2.33.0", "tiktoken"]   # httpx is a hard dependency, see above
 # driver_anthropic.py. It imports driver_api for Provider/APIDriver/the Msg types, and
 # since the openai half moved to driver_openai_api that no longer drags in openai.
-anthropic = ["anthropic>=0.52.0", "httpx>=0.28.1"]
+anthropic = ["anthropic>=0.52.0"]             # httpx is a hard dependency, see above
 api = ["IsaMini[openai-api,anthropic]"]
 # There is no `gemini` extra, and toplevel.py does not register driver_gemini: the
 # driver is unexercised. The module is still shipped -- install google-genai and
@@ -108,4 +116,6 @@ include = ["IsaMini", "IsaMini.*"]
 # ones at import time, so `tools/*.json` alone made the installed module unimportable.
 # assets/ is read by driver_claude_code._copy_skills. AoA/abstract_demon.yml is left
 # out: nothing in the tree references it.
-"IsaMini.AoA" = ["tools/*.json", "tools/*.jsonc", "assets/*.md"]
+# Readme.md ships because it carries the usage-count disclosure: a user who installs
+# from PyPI or conda and never visits GitHub must still have that text on their machine.
+"IsaMini.AoA" = ["tools/*.json", "tools/*.jsonc", "assets/*.md", "Readme.md"]

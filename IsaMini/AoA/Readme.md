@@ -158,3 +158,20 @@ declare [[AoA_enable_write_memory = false]]
 AoA finds relevant lemmas by semantic search over the library. That subsystem is
 documented separately:
 <https://github.com/xqyww123/Isabelle_Semantic_Embedding/blob/master/README.md>
+
+### 4.5 Usage count
+
+Each time `by aoa` runs, AoA sends one small anonymous report, so that we can see
+how much AoA is being used. It contains three things: whether the proof was
+replayed from the cache or actually run by the agent, the AoA version, and the
+operating system. Nothing that identifies you or your work is stored — no account,
+no machine identifier, no file names, no goals, no proof text. The reports are only
+ever aggregated into a daily tally.
+
+To switch it off, add
+
+```
+AOA_DISABLE_USAGE_COUNT=1
+```
+
+to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, and restart Isabelle.
