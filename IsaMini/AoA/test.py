@@ -17565,6 +17565,56 @@ async def _test_define_partial_obligation(root: Root, file: MyIO):
         session.role = model.Role_Major()
 
 
+@model_test("Define_BothPhasesDeferred", "Test_Define_BothPhasesDeferred.thy", 18)
+async def _test_define_both_phases_deferred(root: Root, file: MyIO):
+    """Regression for the merged deferred block: when BOTH of `fun`'s proof
+    obligations need interactive help, they must arrive as the subgoals of ONE
+    block, not two.
+
+    Phase 1 is pattern completeness/compatibility, phase 2 is termination
+    (`\\<forall>x. accp R x`). A `Define` node can model only one deferred
+    block and can emit only one `END`, so the ML side settles phase 2 already
+    at DEFINE time and merges its residuals into phase 1's block. The fixture
+    strips `rbz`'s inject/distinct rules (phase 1 cannot finish), swaps the
+    arguments on one recursive call (the default termination prover fails),
+    and supplies `size a`, which is a real but insufficient metric (phase 2
+    leaves one decrease subgoal). Expected shape: 6 pat-completeness residuals
+    + 1 decrease residual = 7 children under the single Define node.
+
+    Deliberately NO `fun_fake_*` switch: under `fun_fake_automatic_failure`
+    the same function yields 9 subgoals (the un-simplified `wf (measure ...)`
+    shape), which production never produces. The price is runtime — this case
+    spends 25-35 s, most of it in the termination sledgehammer that has to
+    fail before the merge happens.
+
+    The block is left open (the framework's sorry path closes it); the
+    assertion is the block's shape, not a finished proof. There is no
+    switch-free way to make every residual of a merged block provable — a
+    metric good enough for the residuals to close is also good enough for
+    sledgehammer to close phase 2 outright, which takes the non-merged path.
+    """
+    print_header("Initial YAML", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    await root.fill("1", [Define.gen_single({
+        "thought": "Define rsw; both obligation phases stay open",
+        "name": "rsw",
+        "type": r"rbz \<Rightarrow> rbz \<Rightarrow> nat",
+        "equations": [
+            "rsw (ZA n) y = n",
+            "rsw (ZB x) y = rsw y x",
+            "rsw (ZC x) y = rsw x y",
+        ],
+        "metric": [r"\<lambda>(a::rbz, b::rbz). size a"],
+    })])
+    print_header("After Define (merged block: phase 1 + phase 2)", file)
+    root.print(0, file)
+
+    define_node = root.locate_node("1")
+    file.write(f"Children of the Define node: {len(define_node.sub_nodes)}\n")
+
+
 @model_test("Define_CaseSplitInductionRedirect", "Test_Define_CaseSplitInductionRedirect.thy", 8)
 async def _test_define_casesplit_induction_redirect(root: Root, file: MyIO):
     """Corner case (A2 family, not just Branch): a `CaseSplit` and an `Induction`

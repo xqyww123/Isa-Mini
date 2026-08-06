@@ -8283,7 +8283,21 @@ class Define(SubgoalMaker):
         # picking the function as a witness for the existential goal).
         return self._define_var(ret)
 
+    # The ML side raises this when the default termination prover failed AND
+    # no metric was supplied (Minilang's `DefaultFailed`, library/proof.ML's
+    # run_phase_2).  Its wording targets someone hand-writing a `.thy` -- it
+    # tells them to add a BY_METRIC clause, surface syntax the agent never
+    # emits.  Replace it with the tool-level instruction.  Keep this substring
+    # in sync with the ML error text.
+    _DEFAULT_TERMINATION_FAILED = "the default termination prover failed"
+
     def _beginning_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        if any(self._DEFAULT_TERMINATION_FAILED in e for e in err.errors):
+            return FailureReason(
+                "Failed to define the function: Isabelle could not prove "
+                "termination automatically, and no metric was given. Supply a "
+                "metric — a function from the argument types (as a tuple) to "
+                "nat that strictly decreases on each recursive call.")
         return FailureReason(
             "Failed to define the function: " + "\n".join(err.errors))
 

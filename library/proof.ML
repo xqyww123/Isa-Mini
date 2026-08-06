@@ -5257,6 +5257,54 @@ fun wrap_measures _ [] = NONE
         SOME (Syntax.check_term ctxt (measures_const $ list_term))
       end
 
+(* ===== Merging several Goal.init'ed states into one ==============
+   Used by FUN'' when BOTH obligation phases need an interactive proof:
+   the agent's Define node can model only ONE deferred block, so the two
+   phases' residual subgoals must be presented as the subgoals of a
+   single minilang block.
+
+     st_i   =  A_i1 ⟹ … ⟹ A_i n_i ⟹ #C_i          (i = 1 … k)
+     merged =  A_11 ⟹ … ⟹ A_k n_k ⟹ #(C_1 &&& … &&& C_k)
+
+   Purely derived-rule: no term is re-certified, no tactic runs, and the
+   subgoals come out verbatim and in order.  PRECONDITION: every subgoal
+   must be free of schematic variables — Thm.assume rejects a cterm whose
+   maxidx is not ~1.  Do NOT re-audit that precondition with
+   Thm.maxidx_of_cterm: Thm.cprem_of copies the enclosing THEOREM's maxidx
+   into the cterm, so a var-free premise routinely reads back a maxidx of
+   0 or more; Thm.assume applies adjust_maxidx_cterm ~1 first and judges
+   the RECOMPUTED value.  Both phases' residuals are var-free in every case
+   measured (level-2/3 residuals are the props of already-assumed cterms;
+   level-1 residuals come from auto, which restores the goal rather than
+   leaving a metavariable; phase-2 residuals follow relation_infer_tac,
+   which fully instantiates ?R or errors).  Note this means the merge does
+   NOT preserve cross-subgoal schematic linkage — it cannot, since every
+   subgoal is re-introduced by Thm.assume.  What it buys is a single
+   `Goals` message and a single END, nothing else.
+   The inverse, applied to a FINISHED merged state, is
+     Goal.conclude st |> Conjunction.elim_balanced k                  *)
+fun merge_goal_states sts =
+  let
+    fun open_prems st =
+      let
+        val th = Goal.conclude st                    (* A.. ⟹ C_i *)
+        (* count on the PROTECTED state: Thm.nprems_of th would also count
+           implications belonging to C_i itself *)
+        val prems = map (Thm.cprem_of th) (1 upto Thm.nprems_of st)
+        fun assume ct =
+          Thm.assume ct
+          handle THM _ =>
+            error ("FUN: cannot present this function's residual obligations " ^
+                   "as one proof block (a residual subgoal contains a " ^
+                   "schematic variable)")
+      in (prems, Drule.implies_elim_list th (map assume prems)) end
+    val (premss, bodies) = split_list (map open_prems sts)
+  in
+    Conjunction.intr_balanced bodies
+    |> Goal.protect 0
+    |> fold_rev Thm.implies_intr (flat premss)
+  end
+
 datatype term_outcome =
     Proved of thm        (* totality theorem, ready for term_afterqed *)
   | DefaultFailed        (* default prover failed AND no metric supplied —
@@ -5292,7 +5340,7 @@ datatype term_outcome =
                                            decrease subgoals exposed)
    - Metric's prep tactic itself fails
      (resolve/relation_infer broken)     → error raised immediately *)
-fun dispatch_term ctxt term_goal metric_strs =
+fun dispatch_term ctxt term_rule term_goal metric_strs =
   let
     val T = Config.get ctxt term_escalate_timeout
     fun try_prove tac =
@@ -5304,11 +5352,10 @@ fun dispatch_term ctxt term_goal metric_strs =
     (* Pre-generalize the function's termination rule so `?R` appears
        as a top-level schematic Var — this is what both the default
        prover and Function_Relation.relation_infer_tac need to have
-       something to instantiate. *)
-    val termination' =
-      (case Function_Common.import_last_function ctxt of
-         SOME {termination, ...} => Thm.forall_elim_vars 0 termination
-       | NONE => error "FUN: no function data when dispatching termination")
+       something to instantiate.  [term_rule] is the raw nested-termination
+       rule; the caller decides where it came from (the post-phase-1
+       function data, or the eager exposure out of prepare_pat_goal). *)
+    val termination' = Thm.forall_elim_vars 0 term_rule
 
     val default_tac =
       resolve_tac ctxt [termination'] 1 THEN
@@ -5425,15 +5472,26 @@ fun dispatch_term ctxt term_goal metric_strs =
      internal sledge couldn't close the prepped wf/decrease
      obligations. If open_on_fail, push the prepped state for
      interactive discharge; else error. *)
+fun last_term_rule ctxt =
+  (case Function_Common.import_last_function ctxt of
+     SOME {termination, ...} => termination
+   | NONE => error "FUN: no function data when dispatching termination")
+
 fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
                 metric_strs open_on_fail post SK =
-  (case dispatch_term lthy2 term_goal metric_strs of
+  (case dispatch_term lthy2 (last_term_rule lthy2) term_goal metric_strs of
      Proved totality =>
        let
          val lthy3 = term_afterqed [[totality]] lthy2
          val lthy3' = Variable.restore_body outer_ctxt lthy3 |> post
        in (lthy3', SK) end
    | DefaultFailed =>
+       (* This wording addresses someone hand-writing a .thy file. The AoA
+          agent never writes Minilang surface syntax, so Define replaces this
+          message with a tool-level one, recognising it by the substring
+          "the default termination prover failed"
+          (IsaMini/AoA/model.py, Define._DEFAULT_TERMINATION_FAILED).
+          Keep the two in sync. *)
        error ("FUN: the default termination prover failed to prove " ^
               "termination for this function. Please provide a " ^
               "BY_METRIC clause with a suitable measure (or " ^
@@ -5761,7 +5819,8 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
                 fixes lthy
        | _ => lthy)
     fun post lthy = add_numeral_bridges (bind_def_alias (remove_looping_simps lthy))
-    val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
+    val {pat_goal_state, pat_afterqed, lthy_after_prepare,
+         fun_termination, term_goal_early, ...} =
       Proof_Local_Function.prepare_pat_goal fixes specs config false ctxt_fn
     val pat_state = escalate_pat lthy_after_prepare pat_goal_state
   in
@@ -5783,31 +5842,102 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
       let
         val lthy_for_user =
           Variable.restore_body outer_ctxt lthy_after_prepare
-        (* Convert the raw Goal.init'd pat-completeness state (which
-           has shape `G1 ⟹ G2 ⟹ ... ⟹ Pure.prop C` with multiple
-           Pure.imp premises) into minilang's Minilang.GOAL-wrapped shape
-           via init_goal (= iso_atomize + protect_goals). The
-           matching un-wrap happens in pat_cb via
-           Goal.conclude |> finalize_goal |> Conjunction.elim_conjunctions,
-           mirroring HAVE's pattern and term_cb's pattern in run_phase_2. *)
-        val pat_state_for_stack = init_goal lthy_for_user pat_state
-        fun pat_cb ctxt_user (pstate, _, SK', _) =
+
+        (* ===== Phase 1 needs an interactive proof. =====================
+           Decide phase 2's fate NOW, at DEFINE time, so that the whole
+           definition is presented as ONE deferred block whose subgoal
+           count is fixed and reported in a single `Goals` message.  This
+           needs the recursion relation R and the nested-termination rule
+           before pat_afterqed has run; both are independent of the
+           phase-1 theorem, and prepare_pat_goal exposes them. *)
+
+        (* Shared tail of every "phase 1 was interactive" callback: take
+           the proved phase-1 theorem plus a way of producing the
+           totality theorem, and finish the definition. *)
+        fun finish_definition lthy1 pat_thm mk_totality SK' =
           let
-            val lthy1 = Variable.set_body false ctxt_user
-            val lems =
-              Goal.conclude pstate
-              |> finalize_goal lthy1
-              |> Conjunction.elim_conjunctions
-            val pat_thm =
-              case lems of
-                [th] => th
-              | _ => error ("FUN: unexpected number of theorems from " ^
-                            "interactive pat-completeness proof")
             val lthy2 = pat_afterqed [[pat_thm]] lthy1
-            val phase2 = Proof_Local_Function.prepare_term_goal lthy2
-          in
-            run_phase_2 outer_ctxt lthy2 phase2 metric_strs open_on_fail post SK'
-          end
+            val {term_goal, term_afterqed} =
+              Proof_Local_Function.prepare_term_goal lthy2
+            val totality = mk_totality term_goal
+            val lthy3 = term_afterqed [[totality]] lthy2
+            val lthy3' = Variable.restore_body outer_ctxt lthy3 |> post
+          in (lthy3', SK') end
+
+        (* Guard: the eagerly built termination goal must be the very goal
+           prepare_term_goal produces once the partial function exists.  It
+           is — both are `∀x. accp R x` for the same R — but
+           prepare_termination_proof_local's afterqed never checks that the
+           totality it is handed actually proves that goal, so a drift would
+           SILENTLY register .simps still carrying the `accp R x ⟹` domain
+           condition.  Check rather than assume. *)
+        fun check_eager_goal term_goal =
+          if term_goal aconv term_goal_early then ()
+          else raise BROKEN_INVARIANT
+
+        (* Settle phase 2 here, not in the callback.  Everything it needs
+           (R, the nested-termination rule, the metric strings) is already
+           available, and running it now is what makes a single block with a
+           fixed subgoal count possible. *)
+        val phase2 =
+          dispatch_term lthy_after_prepare fun_termination term_goal_early metric_strs
+
+        (* [merged] = phase 2 also needs interactive help, so its residual
+           subgoals join phase 1's in ONE block. *)
+        val (raw_state_for_stack, block_cb, merged) =
+          (case phase2 of
+             Proved totality =>
+               (pat_state,
+                (fn lthy1 => fn pstate => fn SK' =>
+                   let val pat_thm = Goal.conclude pstate |> finalize_goal lthy1
+                   in finish_definition lthy1 pat_thm
+                        (fn tg => (check_eager_goal tg; totality)) SK'
+                   end),
+                false)
+           | DefaultFailed =>
+               (* Same text, same AoA-side replacement, as in run_phase_2 —
+                  see the note there. *)
+               error ("FUN: the default termination prover failed to prove " ^
+                      "termination for this function. Please provide a " ^
+                      "BY_METRIC clause with a suitable measure (or " ^
+                      "measures) function, e.g.\n" ^
+                      "  FUN foo :: \"...\"\n" ^
+                      "    where \"...\"\n" ^
+                      "    BY_METRIC \"\<lambda>n. n\"")
+           | MetricPartial prepped =>
+               (merge_goal_states [pat_state, prepped],
+                (fn lthy1 => fn pstate => fn SK' =>
+                   let
+                     val proved = Goal.conclude pstate |> finalize_goal lthy1
+                     val (pat_thm, totality) =
+                       (case Conjunction.elim_balanced 2 proved of
+                          [a, b] => (a, b)
+                        | _ => raise BROKEN_INVARIANT)
+                   in finish_definition lthy1 pat_thm
+                        (fn tg => (check_eager_goal tg; totality)) SK'
+                   end),
+                true))
+
+        (* pat_state is NOT a Goal.init.  prove_stuff (proof_local_function.ML)
+           hands over `complete ⟹ compat1 ⟹ … ⟹ #(graph_is_function &&&
+           complete)` — Conjunction.intr then Goal.protect 0, BEFORE any
+           tactic runs — so the protected conclusion is a two-way meta
+           conjunction for every FUN shape, whatever escalate_pat left behind.
+           init_goal rewrites only the subgoal spine into Minilang.GOAL
+           wrappers: the trailing `Pure.prop C` is untouched, and
+           iso_atomize/iso_rulify are all_conv on a `&&&` head.  So the
+           callback inverts init_goal with Goal.conclude |> finalize_goal;
+           when phase 2's residuals were merged in, one further
+           Conjunction.elim_balanced 2 separates the phase-1 theorem from the
+           totality theorem.  pat_afterqed consumes the phase-1 conjunction
+           UNSPLIT — its continuation mk_partial_rules runs its own
+           Conjunction.elim — exactly as the automatic branch hands over
+           Goal.finish's result.  Do NOT bolt HAVE's elim_conjunctions on
+           here: HAVE splits the N `shows` it conjoined itself; these two
+           conjuncts are the function package's internal pair. *)
+        val pat_state_for_stack = init_goal lthy_for_user raw_state_for_stack
+        fun pat_cb ctxt_user (pstate, _, SK', _) =
+          block_cb (Variable.set_body false ctxt_user) pstate SK'
         (* Capture the outer HHF at push-time so PRINT can show both
            the deferred pat-completeness block and the outer proof
            goal, mirroring HAVE's PRT pattern. The stack invariant
@@ -5820,6 +5950,13 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
           BUNDL (outer_items,
                  [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
         val _ = get_reporter () (Internal PAT_COMPLETENESS_PROOF_OPENED)
+        (* When the block carries BOTH phases' obligations, also fire the
+           termination signal, so a consumer that wants to distinguish the
+           merged case can, while `Define._should_open_proof_block`'s
+           existing `any(...)` test keeps working unchanged. *)
+        val _ = if merged
+                then get_reporter () (Internal TERMINATION_PROOF_OPENED)
+                else ()
         (* Same rationale as the termination-partial branch: emit the
            actual residual pat-completeness goal terms via `goals_of'`
            on the protected `pat_state_for_stack`. *)

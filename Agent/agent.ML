@@ -1717,12 +1717,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
 
              The defined head's type is reported back (via DEFINE_RESULT)
              so the Python side can update Define._fixed_vars_at_me /
-             _after_me even when the user omitted the type field. The two
-             paths obtain it differently and MUST NOT share a fallback:
-             import_last_function returns the *last function in the
-             ambient context*, which on the define path is some unrelated
-             leftover — so the define path reads the freshly-fixed head
-             directly instead. *)
+             _after_me even when the user omitted the type field. BOTH
+             paths read the freshly-fixed head out of the resulting
+             context. Do NOT use Function_Common.import_last_function for
+             this: it returns the *last function in the ambient context*,
+             which — on the define path always, and on the FUN path
+             whenever the pat-completeness proof was deferred — is some
+             unrelated leftover. *)
           (* NB: DEFINE equations reference the not-yet-declared head, so they
              cannot be parsed as standalone props in ctxt0 — the agent hint
              const-check (which re-parses) is therefore NOT applied here. *)
@@ -1744,11 +1745,17 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                 val s' = Minilang.FUN'' decls specs
                            {metric = metric, open_on_fail = true} s
                 val ctxt' = Minilang.context_of s'
+                (* NOT import_last_function: on the deferred branch FUN''
+                   returns a context in which add_function_data has not run
+                   yet, so it yields an UNRELATED leftover function.  The
+                   defined head is a fixed Free in that context on BOTH
+                   branches, so look it up directly. *)
                 val ty_str =
-                  case Function_Common.import_last_function ctxt' of
-                    SOME {fs = f :: _, ...} =>
-                      string_of_type ctxt' (fastype_of f)
-                  | _ => the_default "?" ty_opt
+                  case Variable.lookup_fixed ctxt' name of
+                    SOME x => (case Variable.default_type ctxt' x of
+                                 SOME T => string_of_type ctxt' T
+                               | NONE => the_default "?" ty_opt)
+                  | NONE => the_default "?" ty_opt
               in (s', ty_str) end)
           val _ = Minilang.get_reporter ()
                     (Minilang.Internal (DEFINE_RESULT (name, ty_str)))

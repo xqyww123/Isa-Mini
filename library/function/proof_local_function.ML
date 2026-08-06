@@ -62,7 +62,16 @@ sig
     bool -> Proof.context ->
     {pat_goal_state: thm,
      pat_afterqed: thm list list -> Proof.context -> Proof.context,
-     lthy_after_prepare: Proof.context}
+     lthy_after_prepare: Proof.context,
+     (* Phase-2 data, available already at DEFINE time (no proof needed):
+        [fun_termination] is the (already post-processed) nested
+        termination rule and [term_goal_early] the phase-2 proposition.
+        Both are derived from the recursion relation, which is NOT
+        exposed: for a mutual definition it belongs to the internal
+        sum-typed function, so a caller reading it as "my function's
+        relation" would be wrong. *)
+     fun_termination: thm,
+     term_goal_early: term}
 
   (* Phase 2 setup: given the context after the partial function has
      been defined (i.e. after pat_afterqed has run), return the
@@ -934,6 +943,13 @@ fun prepare_function config defname [((fname, fT), mixfix)] abstract_qglrs lthy 
       (@{map 7} (mk_clause_info globals G f) (1 upto n) clauses abstract_qglrs trees
         RCss GIntro_thms) RIntro_thmss
 
+    (* HOISTED: the nested termination rule depends only on
+       globals / R / R_elim / xclauses — never on the phase-1 theorem.
+       Computing it here makes it available before the phase-1 goal
+       state even exists. *)
+    val total_intro_hoisted = PROFILE "Proving nested termination rule (hoisted)"
+      (mk_nest_term_rule lthy globals R R_elim) xclauses
+
     val complete =
       mk_completeness globals clauses abstract_qglrs |> Thm.cterm_of lthy |> Thm.assume
 
@@ -962,8 +978,8 @@ fun prepare_function config defname [((fname, fT), mixfix)] abstract_qglrs lthy 
         val simple_pinduct = PROFILE "Proving partial induction rule"
           (mk_partial_induct_rule newctxt globals R complete_thm) xclauses
 
-        val total_intro = PROFILE "Proving nested termination rule"
-          (mk_nest_term_rule newctxt globals R R_elim) xclauses
+        (* Computed at prepare time; see total_intro_hoisted above. *)
+        val total_intro = total_intro_hoisted
 
         val dom_intros =
           if domintros then SOME (PROFILE "Proving domain introduction rules"
@@ -976,7 +992,7 @@ fun prepare_function config defname [((fname, fT), mixfix)] abstract_qglrs lthy 
           termination=total_intro, domintros=dom_intros}
       end
   in
-    ((f, goalstate, mk_partial_rules), lthy)
+    ((f, goalstate, mk_partial_rules, R, total_intro_hoisted), lthy)
   end
   | prepare_function _ _ _ _ _ = error "prepare_function: expected single function"
 
@@ -1229,17 +1245,25 @@ fun mutual_cases_rule ctxt cases_rule n ST (MutualPart {i, cargTs = Ts, ...}) =
   end
 
 
+(* The projected function definitions and the rewrite simpset built from
+   them.  Depends only on the Mutual info produced by define_projections,
+   hence available at prepare time — shared by mk_partial_rules_mutual
+   (normal path) and prepare_function_mutual (hoisted path). *)
+fun mutual_f_defs lthy (Mutual {parts, ...}) =
+  map (fn MutualPart {f_defthm = SOME f_def, f = SOME f, cargTs, ...} =>
+    (mk_applied_form lthy cargTs (Thm.symmetric f_def), f)) parts
+  |> split_list
+
+fun mutual_rew_simpset lthy m =
+  put_simpset HOL_basic_ss lthy addsimps (fst (mutual_f_defs lthy m))
+
 fun mk_partial_rules_mutual lthy inner_cont (m as Mutual {parts, fqgars, n, ST, ...}) proof =
   let
     val result = inner_cont proof
     val FunctionResult {G, R, cases=[cases_rule], psimps, simple_pinducts=[simple_pinduct],
       termination, domintros, dom, pelims, ...} = result
 
-    val (all_f_defs, fs) =
-      map (fn MutualPart {f_defthm = SOME f_def, f = SOME f, cargTs, ...} =>
-        (mk_applied_form lthy cargTs (Thm.symmetric f_def), f))
-      parts
-      |> split_list
+    val (all_f_defs, fs) = mutual_f_defs lthy m
 
     val all_orig_fdefs =
       map (fn MutualPart {f_defthm = SOME f_def, ...} => f_def) parts
@@ -1268,14 +1292,18 @@ fun prepare_function_mutual config defname fixes eqss lthy =
     val mutual as Mutual {fsum_name, fsum_type, qglrs, ...} =
       analyze_eqs lthy defname (map fst fixes) (map Envir.beta_eta_contract eqss)
 
-    val ((fsum, goalstate, cont), lthy') =
+    val ((fsum, goalstate, cont, R, term_rule), lthy') =
       prepare_function config defname [((fsum_name, fsum_type), NoSyn)] qglrs lthy
 
     val (mutual', lthy'') = define_projections fixes mutual fsum lthy'
 
+    (* HOISTED: mirror mk_partial_rules_mutual's `mtermination`
+       post-processing, using exactly the same prepare-time simpset. *)
+    val mterm_rule = full_simplify (mutual_rew_simpset lthy'' mutual') term_rule
+
     fun cont' ctxt = mk_partial_rules_mutual lthy'' (cont ctxt) mutual'
   in
-    ((goalstate, cont'), lthy'')
+    ((goalstate, cont', R, mterm_rule), lthy'')
   end
 
 
@@ -1366,7 +1394,7 @@ fun prepare_function_top do_print prep fixspec eqns config lthy =
       then legacy_feature "\"function (default)\" -- use 'partial_function' instead"
       else ()
 
-    val ((goal_state, cont), lthy') =
+    val ((goal_state, cont, fun_R, fun_termination), lthy') =
       prepare_function_mutual config defname fixes0 eqs lthy
 
     fun afterqed [[proof]] lthy1 =
@@ -1418,12 +1446,12 @@ fun prepare_function_top do_print prep fixspec eqns config lthy =
            (add_function_data (transform_function_data Morphism.identity info)))
       end
   in
-    ((goal_state, afterqed), lthy')
+    ((goal_state, afterqed, fun_R, fun_termination), lthy')
   end
 
 fun gen_add_function do_print prep fixspec eqns config tac lthy =
   let
-    val ((goal_state, afterqed), lthy') =
+    val ((goal_state, afterqed, _, _), lthy') =
       prepare_function_top do_print prep fixspec eqns config lthy
     val pattern_thm =
       case SINGLE (tac lthy') goal_state of
@@ -1439,6 +1467,11 @@ fun add_function_cmd_local a b c d int = gen_add_function int Specification.read
 
 
 (* ===== Adapted from function.ML: termination ===== *)
+
+(* The phase-2 proposition depends on nothing but R. *)
+fun mk_termination_goal R =
+  let val domT = domain_type (fastype_of R)
+  in HOLogic.mk_Trueprop (HOLogic.mk_all ("x", domT, mk_acc domT R $ Free ("x", domT))) end
 
 fun prepare_termination_proof_local prep_binding prep_term raw_term_opt lthy =
   let
@@ -1456,8 +1489,7 @@ fun prepare_termination_proof_local prep_binding prep_term raw_term_opt lthy =
 
     val { termination, fs, R, add_simps=info_add_simps, case_names, psimps,
       pinducts, defname, fnames, cases, dom, pelims, input_eqns, ...} = info
-    val domT = domain_type (fastype_of R)
-    val goal = HOLogic.mk_Trueprop (HOLogic.mk_all ("x", domT, mk_acc domT R $ Free ("x", domT)))
+    val goal = mk_termination_goal R
     fun afterqed [[raw_totality]] lthy1 =
       let
         val totality = Thm.close_derivation \<^here> raw_totality
@@ -1513,13 +1545,15 @@ fun prove_termination_local raw_term_opt tac lthy =
    returns the Proof.context only (dropping the info record). *)
 fun prepare_pat_goal fixes specs config int ctxt =
   let
-    val ((goal_state, raw_afterqed), lthy') =
+    val ((goal_state, raw_afterqed, fun_R, fun_termination), lthy') =
       prepare_function_top int Specification.read_multi_specs fixes specs config ctxt
     fun pat_afterqed pats ctxt0 = snd (raw_afterqed pats ctxt0)
   in
     {pat_goal_state = goal_state,
      pat_afterqed = pat_afterqed,
-     lthy_after_prepare = lthy'}
+     lthy_after_prepare = lthy',
+     fun_termination = fun_termination,
+     term_goal_early = mk_termination_goal fun_R}
   end
 
 (* Phase 2 primitive. Calls prepare_termination_proof_local to build the
@@ -1543,7 +1577,7 @@ fun prepare_term_goal lthy =
 fun add_fun_cmd fixes specs config int outer_ctxt =
   let
     val ctxt = Variable.set_body false outer_ctxt
-    val {pat_goal_state, pat_afterqed, lthy_after_prepare} =
+    val {pat_goal_state, pat_afterqed, lthy_after_prepare, ...} =
       prepare_pat_goal fixes specs config int ctxt
     val pat_thm =
       (case SINGLE (Pat_Completeness.pat_completeness_tac lthy_after_prepare 1
