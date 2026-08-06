@@ -1,0 +1,122 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (2 :: nat) = (2 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After Define (merged block: phase 1 + phase 2)
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (2 :: nat) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: Define rsw; both obligation phases stay open
+    operation: Define
+    name: rsw
+    type: rbz ⇒ rbz ⇒ nat
+    equations:
+      - rsw (ZA n) y = n
+      - rsw (ZB x) y = rsw y x
+      - rsw (ZC x) y = rsw x y
+    metric: \<lambda>(a::rbz, b::rbz). size a
+    proof of termination:
+      - goal id: 1.1
+        goal: ∀n (n1 :: nat). ZA n = ZA n1 ⟶ n = n1
+        proof:
+          - step id: 1.1.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+              - n1: nat
+            assuming premises:
+              - premise0: ZA n = ZA n1
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          n = n1
+      - goal id: 1.2
+        goal: ∀n y (x :: rbz). ZA n = ZB x ⟶ n = rsw_sumC (y, x)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+              - y: rbz
+              - x: rbz
+            assuming premises:
+              - premise1: ZA n = ZB x
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          n = rsw_sumC (y, x)
+      - goal id: 1.3
+        goal: ∀n y (x :: rbz). ZA n = ZC x ⟶ n = rsw_sumC (x, y)
+        proof:
+          - step id: 1.3.1
+            operation: Intro
+            fixing variables:
+              - n: nat
+              - y: rbz
+              - x: rbz
+            assuming premises:
+              - premise2: ZA n = ZC x
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.3.2` to provide the proof for the following goal.
+        pending proof goal:
+          n = rsw_sumC (x, y)
+      - goal id: 1.4
+        goal: ∀x y (x1 :: rbz). ZB x = ZB x1 ⟶ rsw_sumC (y, x) = rsw_sumC (y, x1)
+        proof:
+          - step id: 1.4.1
+            operation: Intro
+            fixing variables:
+              - x: rbz
+              - y: rbz
+              - x1: rbz
+            assuming premises:
+              - premise3: ZB x = ZB x1
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.4.2` to provide the proof for the following goal.
+        pending proof goal:
+          rsw_sumC (y, x) = rsw_sumC (y, x1)
+      - goal id: 1.5
+        goal: ∀x y (x1 :: rbz). ZB x = ZC x1 ⟶ rsw_sumC (y, x) = rsw_sumC (x1, y)
+        proof:
+          - step id: 1.5.1
+            operation: Intro
+            fixing variables:
+              - x: rbz
+              - y: rbz
+              - x1: rbz
+            assuming premises:
+              - premise4: ZB x = ZC x1
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.5.2` to provide the proof for the following goal.
+        pending proof goal:
+          rsw_sumC (y, x) = rsw_sumC (x1, y)
+      - goal id: 1.6
+        goal: ∀x y (x1 :: rbz). ZC x = ZC x1 ⟶ rsw_sumC (x, y) = rsw_sumC (x1, y)
+        proof:
+          - step id: 1.6.1
+            operation: Intro
+            fixing variables:
+              - x: rbz
+              - y: rbz
+              - x1: rbz
+            assuming premises:
+              - premise5: ZC x = ZC x1
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.6.2` to provide the proof for the following goal.
+        pending proof goal:
+          rsw_sumC (x, y) = rsw_sumC (x1, y)
+      - goal id: 1.7
+        goal: ∀x (y :: rbz). size y < Suc (size x)
+        proof:
+          - step id: 1.7.1
+            operation: Intro
+            fixing variables:
+              - x: rbz
+              - y: rbz
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.7.2` to provide the proof for the following goal.
+        pending proof goal:
+          size y < Suc (size x)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (2 :: nat) = (2 :: nat)
+Children of the Define node: 7
