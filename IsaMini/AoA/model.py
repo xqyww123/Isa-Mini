@@ -653,10 +653,28 @@ class Surrender:
 
 @dataclass
 class TechnicalFailure:
-    # A worker stopped for a TECHNICAL reason, not because its proof approach was
-    # wrong: its target lost a usable proof state (cancelled by an earlier failure,
-    # or its own op failed in a re-refreshed context). Set by
-    # ``Session._terminate_if_region_dead``.
+    # The agent stopped for a TECHNICAL reason, not because its proof approach was
+    # wrong and not because the goal was too hard. THREE producers, and they do NOT
+    # mean the same thing:
+    #
+    #   * ``Session._terminate_if_region_dead`` -- a worker's target lost a usable
+    #     proof state (cancelled by an earlier failure, or its own op failed in a
+    #     re-refreshed context). ``detail`` names the step, and the culprit
+    #     step when there is one.
+    #   * ``_query_tool_logic`` (retrieval.py) -- an unexpected exception inside the
+    #     ``query`` tool. Raising is NOT an option there: it runs behind the MCP HTTP
+    #     boundary, so an exception becomes an HTTP/MCP error to the SDK client and
+    #     never reaches the ``IsaMini.AoA`` RPC caller. The quit_info rail is what
+    #     crosses.
+    #   * ``ToolExecutor.execute`` -- the same treatment for an unexpected exception
+    #     in any other tool dispatch, instead of taking the whole single-process host
+    #     down along with every concurrent proof running on it.
+    #
+    # The latter two put ``UNEXPECTED ERROR: <type>: <msg>`` in ``detail``: they are
+    # latent bugs surfaced cleanly, NOT a lost proof state. (Under
+    # ``declare [[AoA_Debug]]`` both take ``sys.exit(1)`` instead, to surface the bug
+    # loudly.) So anything that renders this reason must not claim the goal was hard,
+    # and must not claim a proof state was lost -- only that the stop was technical.
     #
     # ``is_terminal = True`` IS LOAD-BEARING, not boilerplate. After the worker
     # self-terminates it still finishes its current tool call and its LLM may emit
@@ -1798,8 +1816,6 @@ class Minilang_State:
         self.messages : list[Message] = []
         # The leading (first) proof goal with its context (vars/hyps
         # from the top HHF's items), or None if the proof is solved.
-        # Replaces the full MLPT proof tree — Python only ever accessed
-        # top_goal() / top_goal_or_none() from the tree.
         self.leading_goal: Goal | None = None
         # Total number of goals in the current state's top HHF.
         # Used for display paths (has_pending_goal, should_I_show_pending_goal,
@@ -1899,7 +1915,6 @@ class Minilang_State:
                         f"got {len(goals_msgs)} for {opr.command}")
         else:
             raise NotImplementedError("Here we should implement the execution of a list of Minilang operations")
-            #msgs = opr(self, assign_to)
         return assign_to
     async def sorry_next(self, varnames: list[varname_spec] | None, assign_to: 'Minilang_State | None') -> 'Minilang_State':
         """Cheat one subgoal in the current frame. See
@@ -2168,12 +2183,12 @@ class Minilang_State:
             # AoA never interprets at query time: the by-aoa startup sweep
             # (update_interpretations in toplevel.py) already ran the check, so
             # its lookups pass interpret_in_auto_embed=False -- queries then
-            # pay nothing for the point fix, not even a config read
-            # (CHECK_OUTDATE_PLAN §8).  A per-call PARAMETER, never a write to
+            # pay nothing for the point fix, not even a config read.
+            # A per-call PARAMETER, never a write to
             # the connection-cached store: the ML connection pool reuses this
             # Python connection for later non-AoA queries, and a field write
             # here would silently switch the point fix (and its warning) off
-            # for all of them (review R7).  Embedding of already-interpreted
+            # for all of them.  Embedding of already-interpreted
             # entities is unaffected.
             if query is not None:
                 raw_results, warnings_raw, total = await store.lookup(query, k, kinds, domain,
@@ -2364,11 +2379,7 @@ class Minilang_State:
             # The ML check_term callback signals a parse/type failure as a single
             # `error "Unparsed: <msg>"` string (agent_server.ML), so `e.errors` is a
             # one-element list `["Unparsed: <msg>"]`. Match that prefix (mirrors
-            # `unfold_syntax` below). The old `len(e.errors) >= 2 and
-            # e.errors[0] == "Unparsed"` guard expected a 2-element list the ML never
-            # produces, so it never fired — InternalError_UnparsedTerm was dead and a
-            # bare IsabelleError leaked to callers (e.g. the Induction syntax-error
-            # message path).
+            # `unfold_syntax` below).
             _PREFIX = "Unparsed: "
             if e.errors and e.errors[0].startswith(_PREFIX):
                 raise InternalError_UnparsedTerm(term_str, e.errors[0][len(_PREFIX):])
@@ -2981,7 +2992,7 @@ class Interaction_MissingLemmaSurvey(Interaction):
     Spawned every ``AOA_MISSING_LEMMA_SURVEY`` `query` tool calls, once before
     a worker winds down, and once before the main agent winds down if it made
     ≥1 query since its last survey (see ``Session.run_missing_lemma_survey``
-    and the ``session_end`` trigger at ``toplevel.run_case``).
+    and the ``session_end`` trigger in ``toplevel.IsaMini_AoA``).
     The fork inherits the parent context — it must see the search history to
     judge what was looked for and not found — and may only answer; the report
     is recorded to ``missing_lemmas.yaml`` for the external import-expansion
@@ -3166,7 +3177,7 @@ class Interaction_DifficultyEvaluation(Interaction):
 
 async def _validate_constraint_term(target: 'NonLeaf_Node', name: str,
                                     term: xterm) -> 'str | None':
-    """§2a' pre-validation for a constraint the dispatcher accepted, to be added
+    """Pre-validation for a constraint the dispatcher accepted, to be added
     as a premise of `target` (an amendable Have/SetupRewriting). Returns an error
     message (dispatcher-facing, for an ``Interaction_BadAnswer`` re-prompt) or
     ``None`` when it passes all three gates:
@@ -3220,8 +3231,9 @@ class Interaction_ReviewConstraint(Interaction):
     CONSTRAINTS (conditions it needs but was not given when dispatched); the
     dispatcher — who owns the proof structure — adjudicates. Surfaces to the
     dispatcher via the channel and is resolved IN-LOOP in
-    ``WorkerHandle.run_until_yield`` (never a park yield, so §B holds for a
-    headless prover). ``answer`` returns ``(kind, feedback)``:
+    ``WorkerHandle.run_until_yield`` — never a park yield, so a headless
+    prover still yields only terminal outcomes. ``answer`` returns
+    ``(kind, feedback)``:
       - ``("reject", worker_msg)`` — the worker resumes with the rejection;
       - ``("accept_amended", worker_msg)`` — for an AMENDABLE target
         (Have/SetupRewriting): the re-stated constraint(s) are validated and
@@ -3879,11 +3891,10 @@ class Interaction_MapCase(Interaction):
     sequentially — one goal at a time — gathering the agent's picks into
     a global mapping.
 
-    Reuses the `indexes` field: at most one index picked from
-    `supplied_options`; empty = drop the body (equivalent to saying
-    "none of my supplied bodies belong to this actual case").
-    Returns the selected supplied name (a string from
-    `supplied_options`), or None when the answer is empty."""
+    Answered with a single nullable `index` into `supplied_options`; `null`
+    drops the body (equivalent to saying "none of my supplied bodies belong
+    to this actual case").  Returns the selected supplied name (a string from
+    `supplied_options`), or None when the answer is null."""
     fork_allowed_tools = [TOOL_ANSWER_INDEX]
 
     def __init__(self,
@@ -4408,7 +4419,7 @@ class Node(ABC):
         op: 'EditOperation' = EditOperation.INSERT,
     ) -> 'EditOutcome':
         """Insert `gns` as siblings immediately before `self`, in order.
-        Catches Group-B construction errors (`GoalIsNontrivial`) into
+        Records construction failures (`GoalIsNontrivial`) into
         `EditOutcome.failure` and stops the batch.  After each commit,
         if the inserted node's status is FAILURE, invokes
         `_on_edit_failure`; the returned `EditFailureBehavior` decides
@@ -4511,8 +4522,8 @@ class Node(ABC):
             outcome.failure = CannotEdit_NodeNotFound(
                 target_step=step, operation=op, unapplied_oprs=list(gns), is_error=True)
             return outcome
-        # Root / GlobalEnv / GoalNode are STRUCTURAL containers, not editable steps
-        # (mirrors the guard in `Root.comment`). Editing one — a case/obligation or
+        # Root / GlobalEnv / GoalNode are STRUCTURAL containers, not editable steps.
+        # Editing one — a case/obligation or
         # top-level goal (GoalNode), or the global declarations block (GlobalEnv) —
         # is meaningless and corrupts the tree (a front-insert mints a garbage id;
         # an amend replaces the structural node). Reject cleanly via the no-raise
@@ -4862,9 +4873,8 @@ class Node(ABC):
         # deleting a case is supported (the parent re-opens via count-aware
         # _closes_my_parent; see DeleteCaseHole / DeleteOneOfThreeCases). Reject the
         # whole batch BEFORE any teardown (raise is delete's convention;
-        # _delete_tool_logic catches AoA_Error and rolls back its archive). Stricter
-        # than Root.comment, which mutates earlier targets before raising on a later
-        # structural one — here nothing is discarded/deleted on reject.
+        # _delete_tool_logic catches AoA_Error and rolls back its archive), so
+        # nothing is discarded or deleted on reject.
         for node in nodes:
             if (isinstance(node, (Root, GlobalEnv))
                     or (isinstance(node, GoalNode) and isinstance(node.parent, Root))):
@@ -5039,7 +5049,7 @@ class Node(ABC):
                 unapplied_oprs=list(gns), is_error=True)
             return outcome
         # Root / GlobalEnv / GoalNode are STRUCTURAL containers, not editable steps
-        # (mirrors `Root.comment` and `Node.insert_before`). Amending one would
+        # (mirrors `Node.insert_before`). Amending one would
         # silently replace the structural node with an arbitrary op-node (single op,
         # `_amend_child`) or destructively delete it then re-insert (multi op) —
         # both corrupt the tree. Reject cleanly via outcome.failure; NEVER raise
@@ -5307,9 +5317,9 @@ class NonLeaf_Node(Node):
         if not await child.resulting_state().need_intro(False):
             return
         if next_idx < len(self.sub_nodes):
-            # Same fractional-id arithmetic as _insert_before_child: route it
-            # through the shared, collision-free primitive (the old inline form
-            # had the byte-identical collision bug when next == child + [1]).
+            # Fractional id strictly between the two siblings — must go through
+            # local_step_between; an inline `child + [1]` collides when the
+            # successor has no gap above `child` (e.g. child=`0A`, successor=`0A1`).
             new_id = local_step_between(child.local_step,
                                         self.sub_nodes[next_idx].local_step)
         else:
@@ -5364,10 +5374,9 @@ class NonLeaf_Node(Node):
                 new_id = cat_segs_into_id(segs)
             else:
                 prev_step = created[k - 1].local_step if k > 0 else self.sub_nodes[insert_idx - 1].local_step
-                # Fractional id strictly between `prev_step` and `before`. The old
-                # inline `prev + [1]` collided when `before` had no gap above its
-                # predecessor (e.g. before=`0A1`, predecessor=`0A`); local_step_between
-                # is byte-identical where it was correct and fixes the collision.
+                # Fractional id strictly between `prev_step` and `before` — an
+                # inline `prev + [1]` collides when `before` has no gap above its
+                # predecessor (e.g. before=`0A1`, predecessor=`0A`).
                 new_id = local_step_between(prev_step, before.local_step)
             config = NodeConfig(new_id, await before.ml_state.clone(None), self)
             try:
@@ -5572,7 +5581,8 @@ class StdBlock(NonLeaf_Node):
     def __init__(self, config: NodeConfig, thought: str, sub_nodes: list['Node']):
         super().__init__(config, thought, sub_nodes)
         self._proof = None
-        # Convention: the _state_before_ending_ should be used only when self.has_ending_opr()
+        # The accumulated state after all children: the source of the ending op when
+        # there is one, cloned into the resulting state otherwise.
         self._state_before_ending_ = Minilang_State.assign(config.ml_state)
         self._body_subnodes_succeeded = False
         self._allow_multi_goal = False
@@ -5621,17 +5631,8 @@ class StdBlock(NonLeaf_Node):
     @abstractmethod
     def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         ...
-    # def _state_before_ending(self) -> Minilang_State:
-    #     return self._state_before_ending_
-    #     #if self.has_ending_opr():
-    #     #else:
-    #     #    raise InternalError("The node doesn't have an ending operation, but the method `_state_before_ending` is called")
     def _resulting_state_of_all_children(self) -> Minilang_State:
         return self._state_before_ending_
-        # if self.has_ending_opr():
-        #     return self._state_before_ending()
-        # else:
-        #     return self.resulting_state()
     def _retrieval_fallback_state(self) -> Minilang_State:
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             return self._state_after_beginning()
@@ -5646,7 +5647,7 @@ class StdBlock(NonLeaf_Node):
     def _hint_notice_state(self) -> 'Minilang_State | None':
         # A block's authored term (e.g. a Have/Suffices conclusion) is parsed by
         # its beginning op, so any hint notice lands in the after-beginning state.
-        # Guard on `beginning_opr() is None` (B6): blocks with no own beginning op
+        # Guard on `beginning_opr() is None`: blocks with no own beginning op
         # (Root, GlobalEnv) author nothing, so they must not re-scan their first
         # child's input state.
         if (self.status.status != EvaluationStatus.Status.SUCCESS
@@ -5984,7 +5985,7 @@ class StdBlock(NonLeaf_Node):
         (``need_intro(False)``).
 
         If any children were inherited via ``_amend_from`` (previous
-        block's sub_nodes) and a provided list is given, Q6 redirects them
+        block's sub_nodes) and a provided list is given, they are redirected
         into the LAST provided node's body when that node is a StdBlock
         that can host children; otherwise they are emitted as a
         ``_warn_discarded_nodes`` entry and dropped.
@@ -6088,17 +6089,17 @@ class StdBlock(NonLeaf_Node):
         op: 'EditOperation' = EditOperation.FILL,
     ) -> 'EditOutcome':
         """Append `gns` as children, in order.  For each: build, attach,
-        refresh, cascade.  Catches Group-B construction failures
-        (`CannotEdit_BlockClosed`, `GoalIsNontrivial`) into
-        `EditOutcome.failure` and stops the batch.  After each commit,
+        refresh, cascade.  Records construction failures (block closed,
+        `GoalIsNontrivial`, `ProofTreeTooDeep`) into `EditOutcome.failure`
+        and stops the batch.  After each commit,
         if the node's refresh resolves to FAILURE, invokes
         `_on_edit_failure`; the returned `EditFailureBehavior` decides
         whether the batch continues, stops, or stops-and-reverts.
 
         Auto-Intro injection is delegated to the ``_auto_intro_after_me``
         mechanism inside ``_refresh_me_alone`` (via ``auto_intro=True``).
-        When the user's next item is already an Intro, ``auto_intro`` is
-        set to False to suppress auto-injection."""
+        It is suppressed when any later item in the batch is itself an
+        Intro or an Induction."""
         outcome = EditOutcome(operation=op, request=gns)
         def _block_closed(unapplied: 'list[Parsed_Opr]',
                           failed_index: int) -> CannotEdit_BlockClosed:
@@ -6144,7 +6145,7 @@ class StdBlock(NonLeaf_Node):
                 outcome.failure = e
                 return outcome
             if node is None:
-                # Factory refused (rare); skip this gn.
+                # Defensive: no registered factory returns None.
                 continue
             self.sub_nodes.append(node)
             self._is_trivial = None
@@ -6211,7 +6212,7 @@ class GoalNode(StdBlock):
     case_tvars: list[tuple[varname, typ]] | None
 
     def _nearest_goal_for_subagent(self) -> 'Node | None':
-        # A2: a GoalNode (a case GoalNode from CaseSplit/Induction/Branch, or a
+        # A GoalNode (a case GoalNode from CaseSplit/Induction/Branch, or a
         # Define's obligation GoalNode) is NOT a self-contained delegation unit —
         # it carries local context (case hyps / IH). Redirect UP to the enclosing
         # named block (Have/Obtain/Suffices/SetupRewriting) or Define, mirroring
@@ -6415,9 +6416,8 @@ class GoalNode(StdBlock):
             return child_indent
 
 class _OpenSubgoalBlock(Enum):
-    """Result of `SubgoalMaker._should_open_proof_block` — unifies the former
-    two methods `_should_open_proof_block` (open-or-not) and
-    `_block_closes_parent` (close-or-not-when-open).
+    """Result of `SubgoalMaker._should_open_proof_block`: whether a subgoal
+    block opens this refresh, and if so whether it closes the parent.
 
     - ``NO``: no subgoal block opens this refresh (e.g. Intro on a goal that
       no longer has meta-quantifiers, or Define when it didn't enter the
@@ -6937,8 +6937,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
         # I close my parent's proof line iff I successfully opened a
         # parent-closing block AND still hold every case I opened. A
         # CANCELLED/FAILED closer (status != SUCCESS) closes nothing,
-        # so the parent re-opens and its leftover goal is flagged (DEFECT 1). A
-        # deleted case makes live < _opened_count → not closing (DEFECT 2).
+        # so the parent re-opens and its leftover goal is flagged. A deleted
+        # case makes live < _opened_count → not closing.
         if self.status.status != EvaluationStatus.Status.SUCCESS:
             return False
         if not self._opened_closing_block:
@@ -7723,7 +7723,7 @@ def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof
 
 # Depth (count of enclosing Have/Obtain/Suffices blocks) at or beyond which a
 # FAILED Obvious is rendered with a hint to delegate the goal via the `subagent`
-# tool. Formerly the deep-Obvious auto-sorry threshold; now used only by the hint.
+# tool.
 _SUBAGENT_HINT_DEPTH = 5
 
 # Maximum worker-nesting depth: main -> worker (sub-agent) is layer 1, its worker
@@ -7855,9 +7855,9 @@ class Obvious(Leaf):
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
-        # Always run a real sledgehammer — deep Obvious no longer degrades to
-        # sorry. Failures surface immediately at edit time, and the main agent
-        # delegates hard sub-goals on demand via the `subagent` tool.
+        # Always run a real sledgehammer, at any depth: failures surface
+        # immediately at edit time, and the main agent delegates hard sub-goals
+        # on demand via the `subagent` tool.
         facts = self.fact_refs if self.fact_refs is not None else []
         return Minilang_Operation.HAMMER(facts, 30)
     def assemble(self, output: 'list[Minilang_Operation] | None' = None) -> 'list[Minilang_Operation]':
@@ -8179,7 +8179,7 @@ class Define(SubgoalMaker):
         self._deferred_block_opened: bool = False
 
     def _nearest_goal_for_subagent(self) -> 'Node | None':
-        # Change A: a Define IS a delegatable unit, overriding the base
+        # A Define IS a delegatable unit, overriding the base
         # SubgoalMaker redirect-up. The other SubgoalMakers
         # (CaseSplit/Induction/Branch) stay non-delegatable — their subgoals
         # carry local context. A deferred Define's obligations (pat-completeness
@@ -8672,9 +8672,6 @@ class Derive(Leaf):
             file.write("discharging facts:\n")
             for ref in self.discharging_facts:
                 _print_raw_fact(ref, indent+1, file)
-        # if self.result_name:
-        #     print_indent(indent, file)
-        #     file.write(f"result name: {self.result_name}\n")
         if self.result_facts is not None:
             print_indent(indent, file)
             file.write("resulting facts:\n")
@@ -10255,8 +10252,7 @@ class InferenceRule(SubgoalMaker):
         Swaps and refreshes ONLY the new node (no sibling cascade) — each caller
         drives its own single cascade afterwards, so converting never
         double-cascades siblings. Fresh-fill scope (RULE fails before opening
-        subgoals → empty sub_nodes) sidesteps sub-agent/teardown hazards.
-        See `_inference_rule_rewrite_fallback_plan.md`."""
+        subgoals → empty sub_nodes) sidesteps sub-agent/teardown hazards."""
         if self.sub_nodes:                  # only fresh-fill (no opened subgoals)
             return None
         if not isinstance(self.rule_ref, IsabelleFact_Presented):
@@ -10387,9 +10383,6 @@ def _validate_branch_case(data: Any, path: str) -> Branch_Case_ToolArg:
 class Branch_ToolArg(TypedDict):
     thought: NotRequired[str]
     cases: list[Branch_Case_ToolArg]
-#class Branch_ToolArg(TypedDict):
-#    thought: NotRequired[str]
-#    cases: list[NamedStatement]
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker):
@@ -10654,7 +10647,7 @@ class Induction(CaseSplit_Like):
             self.changed = True
         return fail
     async def _resolve_facts_to_generalize(self) -> None:
-        """Fetch `facts_to_generalize` entries, filter unfound/global ones
+        """Fetch the collected `IH_facts` entries, filter unfound/global ones
         (with warnings), and pass all surviving local candidates through
         to INDUCT. The ML-side dirty-var filter (proof.ML) will drop
         irrelevant facts and report them via DROPPED_INSERTION_FACTS."""
@@ -10713,7 +10706,7 @@ class Induction(CaseSplit_Like):
         """Pre-flight: offer the in-scope facts mentioning the relevant vars
         (`dvars` = induction target frees ∪ generalized) and let the agent pick
         which to carry into the induction hypothesis. Picks SUPPLEMENT the
-        agent-supplied `facts_to_generalize` (unioned into
+        agent-supplied `IH_facts` (unioned into
         `_raw_facts_to_generalize`, which `_resolve_facts_to_generalize` then
         resolves). Candidate names are the standard local-fact names (incl.
         indexed `h(i)` for a multi-thm fact); facts already supplied are not
@@ -10752,8 +10745,6 @@ class Induction(CaseSplit_Like):
         file.write("operation: Induction\n")
         print_indent(indent, file)
         file.write(f"target term: {self.target_isabelle_term}\n")
-        # print_indent(indent, file)
-        # file.write(f"rule: {self.rule}\n")
         if any(var["status"] == "generalized" for var in self.variables):
             print_indent(indent, file)
             file.write(f"generalized variables: {string_of_and_list([var["name"] for var in self.variables if var["status"] == "generalized"])}\n")
@@ -10931,10 +10922,9 @@ class Root(GoalContainer, StdBlock):
         self._tracing_tasks.add(task)
         task.add_done_callback(self._tracing_tasks.discard)
     def opening(self) -> bool:
-        # Root is a permanent container, never "open for appending". Replaces the
-        # old `self._closed_by = self` sentinel now that opening() is derived —
-        # without this, derived opening() would read True via Root's GoalNode tail
-        # and Root would self-flag in StdBlock.unfinished_nodes on every proof.
+        # Root is a permanent container, never "open for appending". Without this
+        # override, derived opening() would read True via Root's GoalNode tail and
+        # Root would self-flag in StdBlock.unfinished_nodes on every proof.
         return False
     async def _refresh_me_alone(self, auto_intro: bool):
         if self._first_time:
@@ -10953,7 +10943,6 @@ class Root(GoalContainer, StdBlock):
                 self.sub_nodes.append(goal_node)
                 if i < self.num_goals - 1:
                     ml_state = await ml_state.sorry_next(None, None)
-            #self.final_ml_state = ml_state
         await super()._refresh_me_alone(auto_intro)
     async def _refresh_all_children_after(self, after: 'Node | Literal["end"]', can_continue_i: bool) -> None:
         # GoalContainer blocks cross-child propagation because each subgoal is
@@ -11152,7 +11141,7 @@ def _parse_positional_proofs(
     raw: Any, path: str,
 ) -> 'list[proof] | None':
     """Parse the positional per-subgoal `proofs: list[raw_proof]` field of
-    InferenceRule / Intro (NON-singleton case — callers handle the len==1
+    InferenceRule / SplitConjs (NON-singleton case — callers handle the len==1
     splice themselves).  Returns `None` if `raw is None` OR `raw == []`
     — an empty `proofs` list is normalized to 'no proofs provided' so
     `proofs: []` behaves identically to `proofs: None` downstream."""
@@ -11194,11 +11183,7 @@ def bind_session_context(session: 'Session') -> None:
     each ASGI request in a fresh, empty contextvars.Context (a workaround for
     cpython#140947), so whatever was bound outside the request -- `_session_var`
     in Session.__init__, `_connection_var` in the RPC handle_client -- is simply
-    not visible here. `_session_var` has always been re-set per request and so was
-    never affected; `Connection.current()` was NOT, which is why the
-    `[Embedding] ...` progress lines silently vanished on the AoA path while
-    `Semantic_Vector_Store`'s own tracing (an explicit `self.connection`
-    reference, immune to context resets) kept printing.
+    not visible here.
 
     The connection is read off the Runtime, not the Session: one Connection serves
     one proof tree, and Runtime is exactly the per-tree singleton that planner,
@@ -11229,7 +11214,7 @@ def tn(t: tool) -> str:
 # `step 1.1.1.1A.2.1`; non-workers are unchanged.  Translation lives entirely
 # at the agent boundary (`Session._display_id` / `_resolve_display_id` /
 # `_postprocess_outbound_text` / `_absolutize_text`); the tree and proof cache stay
-# absolute.  See the design plan for the full rationale.
+# absolute.
 
 EXTERNAL_STEP = "<external>"   # marker shown for an out-of-scope id (placeholder wording)
 
@@ -12468,11 +12453,11 @@ class Session:
         if self.logger is not None:
             self.logger.warning(f"[{self.role_label}] [AOA_WARN] {message}")
         if to_isabelle:
-            # self.root, NOT self: the panel helpers live on Root, and Session is not a
-            # Root (neither subclasses the other), so `self.` here was an AttributeError
-            # raised from inside the very except handlers that set to_isabelle -- turning
-            # a 20-minute quota wait or a clean LMUnreachable give-up into a crashed
-            # `by aoa`, exactly when the user most needed the message.
+            # self.root, NOT self: the panel helpers live on Root, and Session is
+            # not a Root (neither subclasses the other). Getting this wrong raises
+            # an AttributeError from inside the very except handlers that set
+            # to_isabelle, crashing `by aoa` exactly when the user most needs the
+            # message.
             self.root.trace_to_isabelle_nowait(f"[AoA] {message}", warning=True)
 
     def log_interaction(self, tool_name: str, prompt: str):
@@ -12505,11 +12490,8 @@ class Session:
             l for l in lemmas if isinstance(l, dict))
 
     def log_initial_prompt(self, prompt: str):
-        """Log the initial prompt (planner or worker) to interaction.yaml.
-
-        The planner used to log this to ``meta`` only; workers logged it nowhere,
-        so a sub-agent's opening message was invisible in the DEBUG stream. Route
-        both through here (interaction.yaml + meta + debug) for symmetry."""
+        """Log the initial prompt of a planner or a worker, to interaction.yaml,
+        meta, and the debug stream alike."""
         self._log(self.interaction_log_file, "PROMPT",
                   lambda: [f"[PROMPT] Initial prompt:\n{prompt}"],
                   subtype="initial",
@@ -12967,12 +12949,10 @@ class Session:
         returned so calling ``subagent`` on it RESUMES it instead of pointing at an
         ancestor the dispatch gate would reject.
 
-        Post-A, a fill directly on a Define resolves ``dispatch_target`` to the
-        **Define itself** (``Define._nearest_goal_for_subagent`` returns self), so the
-        gate steers the major to ``subagent`` on it — an improvement, since a direct
-        fill on a Define is invalid anyway. (Pre-A this was None because the redirect
-        walked Define -> GlobalEnv, whose ``_nearest_goal_for_subagent`` returns None —
-        NOT via ``_id_of_openning_prf_to_fill``, which the gate never consults.) A
+        A fill directly on a Define resolves ``dispatch_target`` to the **Define
+        itself** (``Define._nearest_goal_for_subagent`` returns self), so the gate
+        steers the major to ``subagent`` on it — a direct fill on a Define is
+        invalid anyway. A
         residual ``None`` (redirect bottoming out at the Root container / GlobalEnv)
         still returns ``(True, None)``; the caller's ``target is not None`` guard then
         falls through to the normal fill-error path. Resolves the target like ``_edit_verdict``."""
@@ -13644,7 +13624,7 @@ class WorkerRequestConstraints:
     non-forking ``Interaction_ReviewConstraint`` resolved IN-LOOP in
     ``run_until_yield`` (like a refute, never a park yield to the outer
     dispatcher), so a headless prover's ``run_until_yield`` still returns only
-    terminal outcomes (§B). ``constraints`` is the worker's *loose* wish-list of
+    terminal outcomes. ``constraints`` is the worker's *loose* wish-list of
     ``{description, proposition}`` items (``RequestConstraint``); the dispatcher
     re-states each precisely. NON-terminal: the worker resumes afterwards (with
     the accepted constraint(s) added as premises of its target, or a rejection).
@@ -13811,8 +13791,8 @@ class WorkerHandle:
             # every natural exit (proved / surrendered / budget exhausted), not
             # on cancellation. No-op unless AOA_MISSING_LEMMA_SURVEY is set.
             await sub.run_missing_lemma_survey("worker_end")
-            # LearningTask reflection before the worker winds down (decision 6:
-            # worker_end fires regardless of success, like the survey above).
+            # LearningTask reflection before the worker winds down — worker_end
+            # fires regardless of success, like the survey above.
             # No-op for a UsualTask; runs on the worker's OWN session.
             await sub.maybe_run_memorize_interaction("worker_end")
         except asyncio.CancelledError:
@@ -13836,7 +13816,7 @@ class WorkerHandle:
             # live tasks no agent can see (immediate-only rendering). Done BEFORE
             # _settle_costs so a leftover's cost rolls up into this worker first.
             # Iterates target's children (never target itself — this worker's own
-            # handle lives there). (Single-layer: no nested sub-agents → a no-op.)
+            # handle lives there).
             try:
                 for child in self.target.sub_nodes:
                     await child.aclose_all_subagents()
@@ -13918,7 +13898,7 @@ class WorkerHandle:
           worker winds down and we return a ``refute_accepted`` yield.
         - ``WorkerRequestConstraints`` → adjudicated IN-LOOP via a NON-forking
           ``Interaction_ReviewConstraint`` (surfaces to the dispatcher through
-          its channel; §B preserved — never a park yield). reject / accept on an
+          its channel — never a park yield). reject / accept on an
           amendable target (the constraint is added IN-PLACE in ``answer()``) →
           the worker resumes in-loop; accept on a NON-amendable target
           (Obtain/Suffices) → PARK (``constraint_needs_restructure``) for the

@@ -1,7 +1,7 @@
 """
 Semantic retrieval and query-by-name tool logic.
 
-Extracted from mcp_http_server.py — all semantic search / entity retrieval
+All semantic search / entity retrieval
 functionality lives here.
 """
 
@@ -522,7 +522,7 @@ def _augment_kinds_with_theorem_collection(
 ) -> list[EntityKind]:
     """Append THEOREM_COLLECTION when the agent asked for lemmas AND gave a semantic
     description (the ranked discovery path). exact_name and pure-pattern (no
-    description) queries are excluded: a theorem collection IS now pattern-filterable
+    description) queries are excluded: a theorem collection IS pattern-filterable
     (the ML any-member-match gate), but without a description it cannot be semantically
     ranked (the gate only filters, it does not rank), so auto-adding it there would only
     add noise / crowd out the structural matches the agent asked for. To target a
@@ -1093,8 +1093,9 @@ def _parenthesize_query_term_strings(q: dict) -> dict:
     when the bare parse fails), which avoids breaking terms like ``CARD`` that
     have special syntax incompatible with outer parens.
 
-    Only ``exact_term`` is touched.  ``type_patterns`` / ``target_type`` are
-    *types*, and name/description/theory fields are never parsed as terms."""
+    Only ``exact_term`` is parenthesized; ``term_patterns`` are merely
+    whitespace-stripped (empties dropped).  ``type_patterns`` / ``target_type``
+    are *types*, and name/description/theory fields are never parsed as terms."""
     out = dict(q)
     tps = out.get("term_patterns")
     if isinstance(tps, list):
@@ -1129,10 +1130,10 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # Coerce array-of-string fields the LLM may have sent as scalars, so
         # they survive the ML callbacks' `unpackList unpackString` arg schema.
         queries = [_normalize_query_string_list_fields(q) for q in queries]
-        # Parenthesize the term-valued fields (term_patterns, exact_term) so bare
-        # operators like `≤` / `<` / `*` parse: Isabelle reads `(≤)` as the
-        # operator constant, and `(t)` == `t` for any already-valid term, so this
-        # is a no-op for normal patterns.
+        # Parenthesize `exact_term` so a bare operator like `≤` parses: Isabelle
+        # reads `(≤)` as the operator constant, and `(t)` == `t` for any
+        # already-valid term, so this is a no-op for normal terms. `term_patterns`
+        # get their parenthesized fallback ML-side instead.
         queries = [_parenthesize_query_term_strings(q) for q in queries]
 
         # Separate exact_term queries from regular queries
@@ -1172,7 +1173,7 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         return (error_msg, True)
     except SessionQuit as e:
         # An interactive-retrieval fork launched from inside this tool call
-        # stopped without answering. This is a work boundary (the `search` tool):
+        # stopped without answering. This is a work boundary (the `query` tool):
         # translate the reason back to state on THIS session -- which may itself
         # be a fork, in which case the setter settles its own slot in turn -- and
         # end the call. Must stay ABOVE `except Exception`, whose first act is

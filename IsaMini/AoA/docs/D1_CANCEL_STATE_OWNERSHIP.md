@@ -1,10 +1,10 @@
 # D1 — `_cancel` destroys a `Minilang_State` that a parked sub-agent still holds
 
-> ## ⚠️ SUPERSEDED (2026-07-09) — read `D1_FIX_PLAN.md` first
+> ## ⚠️ SUPERSEDED (2026-07-09) — read `archive/D1_FIX_PLAN.md` first
 >
 > This document's **analysis of the mechanism** (§0–§9) is correct and still worth
 > reading. Its **proposed fix** (§13) and **open questions** (§14) are NOT: they were
-> superseded by the design in `D1_FIX_PLAN.md`, which is what shipped.
+> superseded by the design in `archive/D1_FIX_PLAN.md`, which is what shipped.
 >
 > Two of its claims are now **empirically refuted** — do not act on them:
 >
@@ -26,10 +26,10 @@
 > consumer-side: a worker whose target is no longer usable **terminates itself**, and
 > control passes up to a living parent. **§14 Q4's "BLOCKING" enumeration is closed**:
 > the ML side funnels every state-id callback through one `get_state`, and on the Python
-> side every worker-reachable ML touch was enumerated and gated (see `D1_FIX_PLAN.md` §4).
+> side every worker-reachable ML touch was enumerated and gated (see `archive/D1_FIX_PLAN.md` §4).
 >
 > **Status:** mechanism traced; fix designed, reviewed, implemented, and tested.
-> **The production crash was never reproduced end-to-end** — see `D1_FIX_PLAN.md` §7.
+> **The production crash was never reproduced end-to-end** — see `archive/D1_FIX_PLAN.md` §7.
 > **Line numbers drift** — every claim below is anchored on a *symbol name*. Grep for it.
 
 ---

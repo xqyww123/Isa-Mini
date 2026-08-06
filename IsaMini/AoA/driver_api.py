@@ -84,7 +84,7 @@ class Provider(ABC):
     """
 
     # Logging hook for a provider's internal retry loop (Layer 2). The driver injects
-    # its ``warn_AoA_opr`` here so transient-error handling is no longer silent;
+    # its ``warn_AoA_opr`` here so transient-error handling is logged;
     # defaults to a no-op for providers used outside a driver, and for providers that
     # never retry internally. ``staticmethod`` so that reading it off an instance does
     # not bind ``self`` as the message argument.
@@ -130,7 +130,9 @@ class Provider(ABC):
         ``index`` (decodes as "Extra data"). Raising ``_TransientError`` here
         lets the caller's ``_retry_transient`` re-request the turn rather than
         crashing the run on the downstream ``json.loads`` in
-        ``_execute_tool_calls``. Concrete providers call this before returning.
+        ``_execute_tool_calls``. The OpenAI Chat and Responses providers call
+        this before returning; ``driver_anthropic`` performs the equivalent
+        check inline while accumulating ``input_json_delta``.
         """
         for tc in tool_calls:
             try:
@@ -362,8 +364,7 @@ class APIDriver(LMDriver):
                 # Cap this model turn (INCLUDING transient retries) at the
                 # remaining wall-clock budget. check_budget() only runs AFTER a
                 # turn, so without this a single slow/stalled chat could
-                # overshoot the deadline by up to max_stream_time (~1800s) — the
-                # actual cause of observed 14400s->15883s overshoots. The outer
+                # overshoot the deadline by up to max_stream_time (~1800s). The outer
                 # asyncio.timeout injects CancelledError (NOT the TimeoutError
                 # that chat() maps to a retriable stall), so it propagates out
                 # of _retry_transient and surfaces here as TimeoutError.
@@ -623,7 +624,8 @@ class APIDriver(LMDriver):
                 if (self._messages
                         and isinstance(self._messages[-1], AssistantMsg)
                         and self._messages[-1].response.tool_calls):
-                    # Pending function_calls: API requires fco before
+                    # Pending function_calls: the API requires a
+                    # function_call_output (fco) before
                     # new input.  Embed prompt directly in fco content.
                     pending = self._messages[-1].response.tool_calls
                     fork_messages = [

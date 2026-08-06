@@ -34,15 +34,14 @@ _REQUEST_TOOL_CAUTION = (
     "more efficient."
 )
 
-# When True (the current default), a worker may no longer request GENERAL lemmas
+# When True, a worker may not request GENERAL lemmas
 # via `request` (the path that auto-dispatches a headless prover sub-agent — the
 # token burn). Such a request is rejected with a nudge to prove the needed
 # special case directly; any `constraints` in the same call are still processed;
 # the `request` tool description and JSON schema drop the general-lemma part; and
 # the worker system-prompt guidance drops the "raise a request" option. The
 # requested lemmas are STILL mirrored into missing_lemmas.yaml (the external
-# import-expansion loop's signal is kept). Set back to False to restore the old
-# behavior byte-identical. Deployment-static: the MCP tool advertisement and
+# import-expansion loop's signal is kept). Deployment-static: the MCP tool advertisement and
 # schema resolve once at import, so set this before the process starts.
 DISABLE_REQUEST_GENERAL_LEMMAS = False
 

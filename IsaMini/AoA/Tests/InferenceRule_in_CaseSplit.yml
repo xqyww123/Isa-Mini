@@ -39,7 +39,7 @@ proof:
 [probe] InferenceRule: new_subgoals_count=1, display_goals_count=1
 [probe] InferenceRule sub_nodes ids: []
 --------------------------------------------------
-After InferenceRule (expect spurious 2nd sibling-leak subgoal)
+After InferenceRule (no sibling leak: 1 goal, no child block)
 --------------------------------------------------
 variables:
   - Q: bool ⇒ bool

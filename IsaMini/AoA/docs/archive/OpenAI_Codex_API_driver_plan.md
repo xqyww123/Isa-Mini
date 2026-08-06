@@ -1,6 +1,13 @@
 # Plan — `Codex-API` driver (ChatGPT-subscription gpt-5.5 via the `openai-oauth` proxy)
 
-Status: **APPROVED — implementing.** Date: 2026-06-23.
+Status: **ARCHIVED — implemented.** Date: 2026-06-23. This is a historical plan record,
+no longer maintained; the code is the authority.
+
+Where the shipped driver departs from this plan: the base class is `APIDriver_OpenAI`
+(D3's "ChatGPT is NOT renamed" was later overturned — the `ChatGPT` driver no longer exists);
+the env var is `AOA_CODEX_API_BASE_URL`, not `OPENAI_OAUTH_BASE_URL`; `DEFAULT_MODEL` is
+`gpt-5.5-high`, not `gpt-5.5`; and a second proxy (`auth2api`, via `AOA_CODEX_API_KEY`) plus an
+`AOA_ASSUME_PERFECT_CACHE` accounting knob were added afterwards.
 Folds in: the 12 surviving adversarial-review concerns + user directives
 (strict_tools=False; reasoning NEVER dropped; fail-fast via a NEW `ResourceUnavailable` quit reason).
 

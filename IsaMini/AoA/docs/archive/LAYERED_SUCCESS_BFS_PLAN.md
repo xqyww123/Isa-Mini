@@ -1,6 +1,11 @@
 # Layered Success / Forced-BFS — Implementation Plan (Consensus)
 
-Status: **FROZEN — all design decisions resolved with the user (2026-06-16).**
+Status: **ARCHIVED — ABANDONED, never implemented.** Superseded by the global-lemma
+delegation gate (`docs/archive/GLOBAL_LEMMA_GATE_PLAN.md`), which dropped this approach
+entirely. Nothing here describes shipped behaviour: `bfs_level` and `_paper_finished`
+exist nowhere in the code. Kept only as a design record.
+
+Original status: **FROZEN — all design decisions resolved with the user (2026-06-16).**
 Consensus across the three debate threads, then every open question (E1 predicate
 / E2 Suffices / E3 wording / S2 trigger tails / frontier scope / quickview
 folding) settled. Ready to implement per §8.

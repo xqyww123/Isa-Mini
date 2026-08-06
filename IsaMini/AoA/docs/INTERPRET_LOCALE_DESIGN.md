@@ -7,11 +7,11 @@
 > 为什么 instantiation 值必须 cartouche 包裹、为什么 `interpret_i` 不能走 `parse_cmds`、
 > 为什么节点必须**无条件**开块)、实测证据、以及被否掉的方案。改这块代码前先读它。
 >
-> **⚠️ 已知缺口(见 §8)**:`Interpret_Locale` **没有正式回归测试**(`test.py` / `Tests/*.yml` 里没有用例)。
-> 现有验证全部来自一次性探针脚本(未跟踪、不在测试套件里):
-> `ScratchOpenModuleProbe.thy`(assert 门)、`ScratchInterpNSubgoals.thy`(义务恒为单谓词)、
-> `ScratchStandardTac.thy`(tactic 选型)、`ScratchOpenModuleRoundtrip.thy`(P0 往返)、
-> `ScratchP05Unfold.thy`(P0.5)、`ScratchP1Unfold.thy`(**P1 内核 unfold=true 端到端**)。
+> **回归测试**:`Interpret_Locale` 现有九个 `@model_test` 用例(`Interpret_MultiLeaf` /
+> `Interpret_SingleLeaf` / `Interpret_ZeroObligation` / `Interpret_QualifierConflict` /
+> `Interpret_TypedInst` / `Interpret_ManyFacts` / `Interpret_WorkerScope` /
+> `Interpret_NoInstantiations` / `Interpret_UnknownLocale`),各自带 `.thy` fixture 与 golden YAML。
+> 设计期的一次性探针脚本(`ScratchOpenModuleProbe.thy` 等,未跟踪、不在测试套件里)只作历史证据。
 
 ---
 
@@ -276,13 +276,10 @@ in-scope 唯一【B2】。
 > `init_goal` 对单子目标幂等,**兜底自动成立、无需特判分支**。
 
 ### ⚠️ 仍未做(真实缺口)
-1. **没有正式回归测试** —— `test.py` / `Tests/*.yml` 里**没有 `Interpret_Locale` 用例**。现有验证全靠一次性探针
-   (见文首)。补测要新建 `.thy` fixture + golden YAML,**建 golden 须用户批准**。
-   完整 agent 路径(`root.fill` → RPC → ML)**从未跑过**这个 operation。
-2. **N=0**(无假设 locale)与 **no-progress 回退** 未实测。
-3. 两个交互(`instantiations` 缺参补全 / locale 表达式 parse 失败)——用户规划,尚未开始。
-4. 限制:仅保证顶层 `lemma … by aoa`(嵌套 `context begin` 未验)。
-5. P4 真实 benchmark 端到端未跑。
+1. **no-progress 回退** 未实测(N=0 已由 `Interpret_ZeroObligation` 覆盖)。
+2. 两个交互(`instantiations` 缺参补全 / locale 表达式 parse 失败)——用户规划,尚未开始。
+3. 限制:仅保证顶层 `lemma … by aoa`(嵌套 `context begin` 未验)。
+4. P4 真实 benchmark 端到端未跑。
 
 ---
 

@@ -3,7 +3,7 @@
 One anonymous HTTP report per execution of the `by aoa` proof method, sent to a
 Cloudflare Worker that keeps a per-day tally.  No identifier of any kind is sent:
 the payload is the event kind, the AoA version and `sys.platform`, and nothing
-else.  See ../../../AOA_USAGE_COUNT_PLAN.md for the design.
+else.
 
 Two rules govern everything here:
 

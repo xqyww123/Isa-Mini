@@ -56,7 +56,7 @@ def test_to_isabelle_reaches_the_panel_on_the_warning_channel():
 
 
 def test_default_stays_out_of_the_panel():
-    """Opt-in matters: 21 of the 27 warn_AoA_opr sites are 2-second retry notices
+    """Opt-in matters: 10 of the 25 warn_AoA_opr sites are routine retry notices
     and cleanup failures, and routing them all would bury the ones that matter."""
     async def go():
         sess, conn = _session()

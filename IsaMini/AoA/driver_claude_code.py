@@ -345,7 +345,7 @@ class ClaudeCode(LMDriver):
         # interaction fork. NOT best-effort: failures PROPAGATE by design, so a bug in
         # the memory subsystem surfaces loudly instead of hiding behind a warning while
         # the proof still reports success -- which means one CAN abort this PreCompact
-        # hook. See maybe_run_memorize_interaction (model.py:12507-12513).
+        # hook. See ``Session.maybe_run_memorize_interaction`` in model.py.
         await self.maybe_run_memorize_interaction("pre_compact")
         self._reset_view_state()
         self._log_meta("COMPACTION")
@@ -425,22 +425,18 @@ class ClaudeCode(LMDriver):
                 # Normalize path separator for cross-platform checking
                 target_path_normalized = target_path_abs.replace(os.sep, '/')
 
-                # Check if path is allowed:
-                # 1. Is within any .claude/plan directory (cross-platform check) - allows all operations
                 is_in_claude_plan = ("/.claude/plans/" in target_path_normalized or
                                     target_path_normalized.endswith("/.claude/plan"))
-
-                # 2. Matches proof.yaml
                 is_yaml = (target_path == self.YAML_path or target_path_abs == yaml_path_abs)
 
-                # Permission logic:
-                # - .claude/plan files: allow all tools (Read, Grep, Write, Edit)
-                # - proof.yaml: allow only Read and Grep; deny Write and Edit
+                # .claude/plan files take all four file tools; proof.yaml is
+                # read-only to them (Read/Grep allowed, Write/Edit denied — the
+                # agent changes the proof through the `edit` tool, and
+                # `Session.refresh_YAML` regenerates the file); every other path
+                # is denied.
                 if is_in_claude_plan:
-                    # Allow all operations for .claude/plan
                     pass
                 elif is_yaml:
-                    # For proof.yaml, deny Write and Edit
                     if tool in ['Write', 'Edit']:
                         return {
                             "continue_": False,
@@ -450,9 +446,7 @@ class ClaudeCode(LMDriver):
                                 "permissionDecisionReason": f"Cannot use `{tool}` on proof.yaml. Use the `{self.tool_name(TOOL_EDIT)}` tool instead.",
                             },
                         }
-                    # Allow Read and Grep for proof.yaml
                 else:
-                    # Deny access to all other paths
                     return {
                         "continue_": False,
                         "hookSpecificOutput": {
@@ -573,8 +567,8 @@ class ClaudeCode(LMDriver):
 
         detail = self._model_error_detail(message)
         # Give up cleanly through the existing LMUnreachable -> ResourceUnavailable rail
-        # (driver_api._api_loop:381), the same one driver_openai_api._fail_fast uses for a
-        # 401. Retrying cannot authenticate us.
+        # (see ``driver_api._api_loop``), the same one ``driver_openai_api._fail_fast``
+        # uses for a 401. Retrying cannot authenticate us.
         raise LMUnreachable(
             "You have not logged Claude-Code. Run `claude '/login'` using your shell, then retry.\n"
             + (f" The CLI reported: {detail!r}" if detail else "")
@@ -656,10 +650,12 @@ class ClaudeCode(LMDriver):
                 # Unauthenticated CLI: give up cleanly through quit_info rather than
                 # spinning to the retry limit, which reported the infrastructure failure
                 # as ResourceExhausted -- a proof that ran out of budget. Mirrors
-                # driver_api._api_loop:381. Terminal => the outer loop breaks.
+                # the ``except LMUnreachable`` handler in ``driver_api._api_loop``.
+                # Terminal => the outer loop breaks.
                 # Never clobber an already-terminal verdict: a tool handler may have set
-                # Surrender/Refute and called interrupt(), which is fire-and-forget
-                # (model.py:655-673), so the CLI can still emit one more turn. A
+                # Surrender/Refute and called interrupt(), which is fire-and-forget (see
+                # the ``TechnicalFailure`` comment in model.py), so the CLI can still
+                # emit one more turn. A
                 # non-terminal Restart/Refresh IS overwritten on purpose -- we must stop,
                 # not loop again.
                 if self.quit_info is None or not self.quit_info.is_terminal:

@@ -137,7 +137,7 @@ class LMDriver(Session):
             # Single continuous agent loop for every role. The main (planner)
             # agent runs real proofs throughout and delegates hard sub-goals on
             # demand via the `subagent` tool; workers run the same loop scoped to
-            # their target. There is no separate FINISHING stage anymore.
+            # their target. There is no separate FINISHING stage.
             await self._run_agent_loop()
         except asyncio.CancelledError:
             self.warn_AoA_opr("Cancelled (Isabelle interrupted)")

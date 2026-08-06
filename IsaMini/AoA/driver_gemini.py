@@ -22,7 +22,7 @@ from .mcp_http_server import _cc_edit_schema_flat
 
 
 class GeminiProvider(Provider):
-    """Provider for Google Gemini models (2.5 Pro, 2.5 Flash, etc.)."""
+    """Provider for Google Gemini models."""
 
     _CONTEXT_WINDOWS: dict[str, int] = {
         "gemini-2.5-pro": 1_048_576,

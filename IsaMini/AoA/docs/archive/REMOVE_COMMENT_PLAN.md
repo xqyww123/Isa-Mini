@@ -1,6 +1,7 @@
 # 计划：完全删除 AoA 的 comment（注释掉步骤）机制
 
-> 状态：**待批准**。本文件是实施蓝图，尚未动任何代码。
+> 状态：**已归档 —— 已执行完毕**。comment 机制已彻底移除（`COMMENTED` / `TOOL_COMMENT` /
+> `CommentOutcome` / `tools/cc_comment.jsonc` 在代码里都已不存在）。本文件是历史记录，不再维护。
 > 行号为撰写时快照，会漂移——实施时以符号名 + grep 为准，行号仅作定位提示。
 
 ---

@@ -59,13 +59,13 @@ class LearningTask(Task):
         self.original_isar = original_isar
 
     def system_prompt(self, session: 'Session') -> str | None:
-        # [T1] appended (major only) — the reference note is injected inside
+        # Appended for the major agent only — the reference note is injected inside
         # `_build_system_prompt`, which gates it to the major branch.
         return session._build_system_prompt(
             "You are also given the original Isar proof of the goal, for reference.\n")
 
     def initial_prompt_extra(self, session: 'Session') -> str:
-        # [T2] injected into the initial user message — major only.
+        # Injected into the initial user message — major only.
         if not session.is_major:
             return ""
         return (

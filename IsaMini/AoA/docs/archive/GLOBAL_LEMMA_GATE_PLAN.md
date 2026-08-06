@@ -1,4 +1,8 @@
-# Global-Lemma Delegation Gate — Implementation Plan (FOR REVIEW, rev. 3)
+# Global-Lemma Delegation Gate — Implementation Plan (ARCHIVED, rev. 3)
+
+> **Status:** ARCHIVED — implemented as designed. Historical record, no longer maintained;
+> the code is the authority (`Session.gate_global_lemma_proofs`, defaulting to `False` and
+> overridden to `True` by `APIDriver_DeepSeek`).
 
 ## Context
 
@@ -17,7 +21,7 @@ it does NOT forbid inline authoring (a full re-attached `proof` body via `amend 
 remains possible, deliberately costlier and not advertised).
 
 This **replaces** the earlier "layered-success / forced-BFS" effort (the abandoned
-`docs/LAYERED_SUCCESS_BFS_PLAN.md` and the `~/.claude/plans/make-a-detailed-plan-wiggly-pancake.md`
+`docs/archive/LAYERED_SUCCESS_BFS_PLAN.md` and the `~/.claude/plans/make-a-detailed-plan-wiggly-pancake.md`
 plan), dropped entirely.
 
 Revisions: rev. 2 folded in a first 97-agent adversarial debate (dispatch-target computation,
@@ -289,7 +293,7 @@ rather than authored autonomously.
 
 ## Open items / notes
 - Exact opt-in kwarg name (`gate_global_lemma_proofs`) and CLI surface to set it (one-liner); default off.
-- Whether to delete/retitle the abandoned `docs/LAYERED_SUCCESS_BFS_PLAN.md` (separate approval).
+- Whether to delete/retitle the abandoned `docs/archive/LAYERED_SUCCESS_BFS_PLAN.md` (separate approval).
 - D5 residual (acknowledged, no action): the gate narrows HOW the major self-proves (removes the cheap
   step-by-step path) but not WHETHER (inline `amend global.N {proof}` remains possible, costlier and
   unadvertised). Truly preventing inline self-proving would require op-body inspection — out of scope.

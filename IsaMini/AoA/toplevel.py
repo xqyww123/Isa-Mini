@@ -34,8 +34,7 @@ _try_import_driver("driver_codex")
 _try_import_driver("driver_api")
 _try_import_driver("driver_openai_api")
 # driver_gemini is not registered: GeminiProvider implements the whole Provider
-# interface and rides along with refactorings (the 2026-06-04 cost accounting unified
-# its cached-token handling), but the driver has never been exercised against the live
+# interface, but the driver has never been exercised against the live
 # API. The file stays; uncomment to try it, and install google-genai yourself -- the
 # `gemini` extra is gone too.
 # _try_import_driver("driver_gemini")
@@ -206,13 +205,13 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # network.  Skipped under the test driver: snapshot tests must stay silent.
     if not is_test_driver:
         await _ensure_semantic_db(connection)
-        # The interpretation policy shell (CHECK_OUTDATE_PLAN §8): ONE startup
+        # The interpretation policy shell: ONE startup
         # check per `by aoa` -- gate, dry run over this proof's context (an
         # as-is root, so locale-local facts are seen) and its ancestor cone,
         # then the threshold policy: small updates run silently, big ones ask
         # (the run itself never asks again -- AoA's query-time lookups pass
         # interpret_in_auto_embed=False in model.py; a per-call parameter, so
-        # nothing sticks to the connection-cached store, review R7).
+        # nothing sticks to the connection-cached store).
         # Best-effort like the check above: a broken semantic DB must never
         # take down the proof RPC.
         try:
@@ -343,8 +342,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             await session.initialize(root)
             await session.run()
             # Final missing-lemma survey before the MAIN agent winds down —
-            # mirrors the worker_end survey in Session.run (workers fire one
-            # when they wind down; the top-level major never did). Without it a
+            # mirrors the worker_end survey in Session.run. Without it a
             # main-agent case that proved/failed having made fewer than the
             # query-interval count of successful queries — and dispatched no
             # worker — logs ZERO surveys, losing the loop's entire signal.
@@ -357,7 +355,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                 await session.run_missing_lemma_survey("session_end")
             # LearningTask reflection on success: distil reusable experience into
             # memories. No-op for a UsualTask (see maybe_run_memorize_interaction);
-            # gated on a finished proof (decision 6: proof_done fires on success).
+            # gated on a finished proof: proof_done fires only on success.
             if root.is_proof_finished():
                 await session.maybe_run_memorize_interaction("proof_done")
             quit_obj = session.quit_info

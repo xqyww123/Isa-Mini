@@ -1,6 +1,11 @@
 # 计划：Runaway-loop 检测 → 强制 context Restart（方案甲）
 
-> 状态：**待评审 / 未实现**。本文件只是方案，代码尚未改动。
+> 状态：**已归档 —— 已实现**。本文件是历史方案记录，不再维护。
+>
+> 实现比本方案更进一步：阈值 `LOOP_REPEAT_THRESHOLD` 是 `model.py` 的模块常量（而非方案里的
+> `ToolExecutor._LOOP_REPEAT_THRESHOLD`），且覆盖面超出 §4——`driver_claude_code.permission_control`
+> 也对重复的 SDK 原生 `Read`（`recall`）计数。当前行为以 `Session._note_repeat`、
+> `ToolExecutor._should_loop_restart`、`Session.request_restart` 和 `test_loop_restart_detection.py` 为准。
 
 ## 1. 动机与证据
 

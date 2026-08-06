@@ -24,7 +24,7 @@ operations. Two kinds of agent operate on that tree:
 The agents never speak raw Isar. They emit **Minilang operations** (a small high-level vocabulary),
 which the ML side executes against a live Isabelle proof state. Agents perceive the proof as a
 YAML-shaped rendering (`proof.yaml`) and act through a handful of MCP tools (`edit`, `delete`,
-`query`, `recall`, `report`, `request_lemmas`, `write_memory`).
+`query`, `recall`, `report`, `request`, `subagent`, `cancel_subagent`, `refresh`, `write_memory`, answer-*).
 
 ---
 
@@ -118,7 +118,7 @@ it. Pending-goal detection goes entirely through `has_pending_goal` / `opening`.
 `_is_declarative` nodes (`Have`, `Obtain`, `Define`, …) publish their named fact to later steps
 *regardless* of proof status, mirroring Isar `have name: P sorry` keeping `name` usable downstream.
 `Have._fixed_facts_after_me` unconditionally adds `name : conclusion` to the hypotheses visible to
-successors; there is no status guard. This is *why* the worker's "available declarations" list (§5)
+successors; there is no status guard. This is *why* the worker's `premises:` section (§5)
 deliberately surfaces posed-but-unproved SUCCESS declarations — the fact is genuinely in scope. The
 unproved-ness shows up separately, through `unfinished_nodes`.
 
@@ -231,17 +231,22 @@ A worker communicates back through events rather than dying:
 
 - `WorkerRefute` — "this goal looks unprovable"; the worker *blocks* on a review future while the
   planner decides, preserving its context.
-- `WorkerRequestLemmas` — "I need a background lemma" (via the worker-side `request_lemmas` tool);
+- `WorkerRequestConstraints` — "I need a background lemma or an extra premise" (via the worker-side `request` tool, constant `TOOL_REQUEST_LEMMAS`);
   the worker *blocks* while the planner authors + proves helper lemmas, then resumes — *conditionally
   terminal*: if the new lemmas/constraints discharge the worker's whole target scope, the `request`
   response announces completion and the worker terminates (the interrupt handshake, like `edit`).
 - `WorkerDifficulty` — emitted by the system struggle checkpoint when it detects a stuck worker;
   the worker *blocks* (PARK) while the dispatcher decides to continue or abandon (non-terminal).
-  Shares the same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestLemmas`.
+  Shares the same `_pending_resume` slot + `resolve_resume` path as `WorkerRequestConstraints`.
 - `WorkerSurrender` — "I give up" (terminal).
+- `WorkerRegionDead` — the target lost its usable proof state (terminal).
 - `WorkerDone` — synthesised when the task ends; `success` reflects `target.is_proof_finished()`.
 
-When a worker raises `WorkerRequestLemmas`, the **planner itself** authors and proves the accepted
+Two `Worker*` dataclasses are **not** events on this queue: `run_until_yield` *returns* a
+`WorkerYield` (the terminal-outcome-or-park value the `subagent` tool logic consumes), and it wraps an
+accepted refute into a `WorkerComplaint` as the payload for `Interaction_ReviewRefutation`.
+
+When a worker raises `WorkerRequestConstraints`, the **planner itself** authors and proves the accepted
 helper lemmas into the global env (there is no separate lemma sub-agent / `LemmaDrive`); the worker
 then resumes with them in scope. `WorkerHandle.aclose`, called from the session-close sweep
 (`Session.close` → the `aclose_all_subagents` / `discard` recursion over the tree), guarantees no
@@ -252,12 +257,12 @@ worker is left blocked on a review future.
 A worker should see *only its sub-problem*, presented as a self-contained goal.
 `Session.print_proof_scope` renders, for a worker:
 
-1. the ambient logical context — `variables:` / type variables / `premises:` from `root.context`
-   (the original goal's fixed vars and hypotheses), via `print_vars` / `print_hyps`;
-2. `available declarations:` — preceding **declarative SUCCESS** siblings in `global_env` (named
-   lemmas already in scope; remember from §2.4 these may be posed-but-unproved, which is correct);
-3. the target goal (`print_goal`), whose own premises (from its `SUFFICES` / `fix` / `assume`) appear
-   under `premises:`;
+1. the in-scope variables and type variables (`print_vars` / `print_type_vars`, merged from the root
+   context, the enclosing blocks and the target itself);
+2. a unified `premises:` section (`print_hyps`) — assumptions plus already-declared facts,
+   standard-printed via the prefetched `_worker_premise_cache` (remember from §2.4 that declared
+   facts may be posed-but-unproved, which is correct);
+3. the target goal (`print_goal`), with its own context suppressed since it is already above;
 4. the target's own substeps under `proof:`.
 
 The contextual facts becoming "premises of the goal" is realised at the Isabelle level by the
@@ -280,7 +285,7 @@ retry layers (`_with_retry` for quota — 20-minute wait; `_retry_transient` —
 
 **Tools** (abstract ids in `model.py`) map to external names per driver: `edit`, `delete`,
 `query` (search — incl. `kinds:["experience"]` for saved proof strategies), `recall` (read `proof.yaml`), `report` (refute/surrender),
-`request_lemmas` (dual-role: a worker→planner channel, or a planner self-formalize hint),
+`request` (constant `TOOL_REQUEST_LEMMAS`; dual-role: a worker→planner channel, or a planner self-formalize hint),
 `write_memory` (save a reusable experience; `_write_memory_tool_logic`), answer-*. The tool→operation logic is in `mcp_http_server.py`: `_edit_tool_logic` parses the agent's
 `proof_operations` and dispatches to `root.fill` / `insert_before` / `amend`. Tool JSON schemas live in `tools/*.jsonc`.
 
@@ -300,8 +305,8 @@ Two renderings, both emitting YAML-ish text:
   `_quickview_children_compressed`.
 
 Helpers in `model.py`: `print_vars` (banner `variables`), `print_hyps` (banner **`premises`**),
-`print_goal`, `print_pending_goal` (banner **`pending proof goal:`**). The worker scope adds the
-**`available declarations:`** banner (in `print_proof_scope`).
+`print_goal`, `print_pending_goal` (banner **`pending proof goal:`**). The worker scope
+(`print_proof_scope`) folds declared facts into that same **`premises:`** banner.
 
 Agents read/write `proof.yaml`: drivers write it on init and `Session.refresh_YAML` rewrites it
 through `print_proof_scope`; the `recall` tool reads it back.
@@ -317,17 +322,19 @@ through `print_proof_scope`; the `recall` tool reads it back.
   Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in
   `toplevel.py`). Within it, **Python calls back into ML** repeatedly (`proof_opr`, `reset_state`,
   `lookup_fact`, `check_term`, …; ML callbacks defined in `agent_server.ML`).
-- Registered as the Isa-REPL app `Minilang.AoA` (`REPL_Server.register_app`). A client advances the
+- Registered as the Isa-REPL app `Minilang.AoA` (`REPL_Server.register_app` in
+  `Agent/AoA_REPL/aoa_repl_app.ML`). A client advances the
   theory to the `by aoa` line and calls `run_app('Minilang.AoA')`. The status the app reports —
   `success` / `remote_error` / an `Agent_Give_Up` reason (`stuck` / `false_statement` /
   `resource_exhausted` / `surrender` / `restart`) — comes from the `AoA_REPL_App` wrapper in
-  `agent_server.ML`.
+  `Agent/AoA_REPL/aoa_repl_app.ML`.
 - Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full agent run.
   Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
   The bool config `AoA_use_proof_cache` (default `true`, `Attrib.setup_config_bool` in
   `agent_server.ML`) gates only cache *reading*: set it `false` (`declare [[AoA_use_proof_cache =
-  false]]`) to bypass both levels of lookup and always run the agent. Writing is unconditional — a
-  finished proof is still stored into both levels (Python L1 SQLite + ML L2 Phi_Cache_DB) on success.
+  false]]`) to bypass both levels of lookup and always run the agent. Writing is gated separately by
+  `AoA_store_proof_cache` (default `true`); when it holds, a finished proof is stored into both
+  levels (Python L1 SQLite + ML L2 Phi_Cache_DB) on success.
 
 ---
 

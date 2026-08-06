@@ -3539,7 +3539,7 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     })])
     print_header("After CaseSplit", file)
     root.print(0, file)
-    # === DEBUG PROBE ===
+    # --- probe (output pinned in the golden) ---
     true_goal = root.locate_node("1.True")
     s = true_goal.ml_state
     file.write(f"[probe] 1.True: display_goals_count={s.display_goals_count}")
@@ -3564,7 +3564,7 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     print_header("Intro node print (1.True.1)", file)
     intro_node = root.locate_node("1.True.1")
     intro_node.print(0, file)
-    # === DEBUG PROBE ===
+    # --- probe (output pinned in the golden) ---
     rs = intro_node.resulting_state()
     file.write(f"[probe] Intro: new_subgoals_count={rs.new_subgoals_count}, display_goals_count={rs.display_goals_count}\n")
     print_header("Full tree after Intro", file)
@@ -3573,24 +3573,16 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
 
 @model_test("InferenceRule_in_CaseSplit", "Test_InferenceRule_in_CaseSplit.thy", 8)
 async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
-    """Verify that an InferenceRule producing exactly 1 subgoal inside a
-    CaseSplit case triggers the same sibling-leak display bug as Intro
-    no-op. Both inherit SubgoalMaker (model.py:5722, 5926); neither
-    overrides `_refresh_the_beginning_opr` / `_should_open_proof_block`,
-    so the "open a 2-child block iff top_goals() > 1" check at
-    model.py:3932 fires for both whenever the top HHF leaves exactly 1
-    goal (→ `prt0` gives `PROP` → MAGIC's `cat_tree` composes it with
-    the sibling case into a *leaf* BUNDL → `MLPT_Bundle.top_goals`
-    returns both).
+    """Regression guard against the sibling-leak display bug: an
+    InferenceRule producing exactly 1 subgoal inside a CaseSplit case must
+    NOT pull in the sibling case. Pre-fix, the enclosing CaseSplit's False
+    case leaked in as a second child of `1.True.1`.
 
-    Setup: goal `b ⟶ P b`, CaseSplit on b, then impI in the True case.
-    impI applied via `Thm.biresolution` gives exactly 1 resulting
-    subgoal (`True ⟹ P True`), so the top HHF has 1 goal.
+    Setup: goal `P b ∨ Q b`, CaseSplit on b, then disjI1 in the True case.
+    The rule leaves exactly 1 protected subgoal, so the top HHF has 1 goal.
 
-    Expected: `1.True.1` (the InferenceRule) spuriously shows 2 child
-    subgoals — `1.True.1.1` plus a sibling-leak `1.True.1.False`
-    renamed from the outer CaseSplit's False case — same symptom as
-    Intro no-op.
+    Expected now: `display_goals_count=1` and no child block at all
+    (`sub_nodes == []`).
     """
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -3601,44 +3593,41 @@ async def _test_InferenceRule_in_CaseSplit(root: Root, file: MyIO):
     })])
     print_header("After CaseSplit", file)
     root.print(0, file)
-    # Apply disjI1 to `P True ∨ P True` — produces exactly 1 protected
-    # subgoal `P True` in the top HHF. With the top HHF at 1 goal,
-    # `print_stack`'s `prt0` returns PROP; the MAGIC PRT callback then
-    # composes it with the False sibling into a leaf BUNDL, so
-    # `top_goals()` leaks to 2.
+    # Apply disjI1 to `P True ∨ Q True` — produces exactly 1 protected
+    # subgoal `P True` in the top HHF. Pre-fix, with the top HHF at 1 goal,
+    # `print_stack`'s `prt0` returned PROP and the MAGIC PRT callback composed
+    # it with the False sibling into a leaf BUNDL, so the goal count leaked to 2.
     root.session.age += 1
     await root.fill("1.True.1", [InferenceRule.gen_single({
         "thought": "Apply disjI1 (produces exactly 1 subgoal from disjunction)",
         "rule": {"name": "disjI1"}
     })])
-    # === DEBUG PROBE ===
+    # --- probe (output pinned in the golden) ---
     ir_node = root.locate_node("1.True.1")
     sab = cast(StdBlock, ir_node)._state_after_beginning()
     file.write(f"[probe] InferenceRule: new_subgoals_count={sab.new_subgoals_count}, display_goals_count={sab.display_goals_count}\n")
     file.write(f"[probe] InferenceRule sub_nodes ids: {[c.id for c in cast(NonLeaf_Node, ir_node).sub_nodes]}\n")
-    print_header("After InferenceRule (expect spurious 2nd sibling-leak subgoal)", file)
+    print_header("After InferenceRule (no sibling leak: 1 goal, no child block)", file)
     root.print(0, file)
 
 
 @model_test("Nested_InferenceRule_Leak",
             "Test_Nested_InferenceRule_Leak.thy", 8)
 async def _test_Nested_InferenceRule_Leak(root: Root, file: MyIO):
-    """Verify that the sibling-leak bug also manifests WITHOUT a CaseSplit —
-    plain nested `InferenceRule`s are enough.
+    """Regression guard for the sibling-leak bug in its CaseSplit-free form:
+    plain nested `InferenceRule`s used to be enough to trigger it.
 
     Setup: goal `((1=1) ∧ (2=2)) ∧ (3=3)`.
     - Outer conjI → 2 subgoals: `(1=1) ∧ (2=2)` and `(3=3)`.
-    - Inner conjI on the first subgoal → expected 2 subgoals (`1=1`, `2=2`);
-      however at the ML level RULE does NOT push a new frame, so
-      `Thm.biresolution ... 1` just rewrites the single top HHF from
-      `[(1=1)∧(2=2), 3=3]` to `[1=1, 2=2, 3=3]` — three *flat* protected
-      subgoals.  Python's `MLPT_Bundle.top_goals` (model.py:935-942) returns
-      `[1=1, 2=2, 3=3]` and `SubgoalMaker._refresh_the_beginning_opr` at
-      model.py:3932 opens a 3-child block.  The third child is advanced by
-      `sorry_next` and lands on the outer sibling `3=3` — same symptom as
-      the CaseSplit-based leaks, without any CaseSplit involved.
+    - Inner conjI on the first subgoal → 2 subgoals (`1=1`, `2=2`).  At the
+      ML level RULE does NOT push a new frame, so `Thm.biresolution ... 1`
+      just rewrites the single top HHF from `[(1=1)∧(2=2), 3=3]` to
+      `[1=1, 2=2, 3=3]` — three *flat* protected subgoals.  Pre-fix, the
+      block was opened over all three, so its third child leaked onto the
+      outer sibling `3=3`.
 
-    Expected (empirically): inner InferenceRule has 3 sub_nodes, not 2.
+    Expected now: `display_goals_count=3` but the inner InferenceRule opens
+    exactly 2 children.
     """
     print_header("Initial YAML", file)
     root.print(0, file)
@@ -6457,8 +6446,8 @@ async def _test_Derive_OverDischarge(root: Root, file: MyIO):
     # docstring.)
     #
     # ROOT CAUSE: The THM 3 exception is raised during Attrib.eval_thms
-    # (fact-reference evaluation at proof.ML:3540), which is BEFORE the
-    # `handle THM _` at proof.ML:3543 that catches discharge failures.
+    # (fact-reference evaluation in proof.ML), which is BEFORE the
+    # `handle THM _` that catches discharge failures.
     # The exception escapes as a raw IsabelleError instead of being
     # wrapped in OPR_FAIL with a clean diagnostic message.
     root.session.age += 1
@@ -7288,21 +7277,18 @@ async def _test_abbrev_query(root: Root, file: MyIO):
 
 @model_test("FactNameResolution", "Test_FactNameResolution.thy", 11)
 async def _test_fact_name_resolution(root: Root, file: MyIO):
-    """Reproduce bug: during amend, _find_alive_state_among_children uses
-    position = index of the amended child, which is < len(sub_nodes).
-    StdBlock's override (model.py:2613) only returns _state_before_ending_
-    when position >= len(sub_nodes) (the append/fill path), so the amend
-    path falls through to sub_nodes[i-1].ml_state — the INPUT state of the
-    preceding step, missing that step's named facts.
+    """Regression guard: an amend must see the named facts of the steps
+    preceding it.  Pre-fix, the amend path resolved its alive state to the
+    INPUT state of the preceding step rather than that step's output, so a
+    fact declared by that step looked Unfound.
 
     The test proves  x > 2 ==> x > 0  via:
     1. Fill step 1 (Have "x_gt_1": x > 1) + step 1.1 (Obvious proves it)
     2. Fill step 2 (plain Obvious) — completes the proof
-    3. Amend step 2 with FactByName("x_gt_1") — amend's alive_state is
-       step1.ml_state (pre-Have), so "x_gt_1" is Unfound.
+    3. Amend step 2 with FactByName("x_gt_1").
 
-    The proof still succeeds (auto uses the correct ml_state), but
-    the "not found" warning proves the stale alive_state."""
+    Expected now: zero "not found" warnings on the amended step (the trailing
+    assertion enforces it) and the step still SUCCESSes."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
@@ -7324,9 +7310,8 @@ async def _test_fact_name_resolution(root: Root, file: MyIO):
     root.print(0, file)
 
     # Now AMEND step 2 with a FactByName reference to "x_gt_1".
-    # _amend_child passes position = index of step 2 (< len(sub_nodes)),
-    # so _find_alive_state_among_children skips the _state_before_ending_
-    # shortcut and returns step1.ml_state — the pre-Have state.
+    # Pre-fix, the amend path resolved to step 1's pre-Have input state here,
+    # so "x_gt_1" was not yet in scope.
     root.session.age += 1
     _outcome = await root.amend("2", [Obvious.gen_single({
         "facts": [{"name": "x_gt_1"}]
@@ -7628,7 +7613,7 @@ async def _test_Induction_IHRename(root: Root, file: MyIO):
         f"of the induction variable (seen: {offending}). The step's "
         "`fixing variables` reports the external display name, but the "
         "IH hyp term retains the variant-renamed Free. The mismatch "
-        "happens in library/proof.ML:2353-2355: `items'.vars` is built "
+        "happens in library/proof.ML: `items'.vars` is built "
         "from `map (apfst Binding.name_of) fixes` (the rule's Case "
         "struct's original bindings), while `items'.hyps` comes from "
         "`Thm.prop_of thms` (which carry Frees with the post-`apply_case` "
@@ -7651,7 +7636,7 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
         -> Python validation rejects step 2 ("f, p not classified")
       amend step 2 = Induction(vars=[i gen, ile gen, f fix, p fix])
 
-    Before the fix at model.py:6235: on amend the `if is_init:` guard
+    Before the fix: on amend the `if is_init:` guard
     skipped target-stripping, so `i` stayed in `self.variables` with
     status `generalized` and `beginning_opr()` emitted
         INDUCT(('i', None, ['i', 'ile'], 'less_induct'))
@@ -7743,7 +7728,8 @@ async def _test_Induction_AmendTargetFree(root: Root, file: MyIO):
     assert not offending, (
         "REPRODUCED: on amend, the induction target reached ML's "
         "arbitrary: slot and produced a degenerate IH. "
-        f"Offending hyps: {offending}. Fix is at model.py:6235 "
+        f"Offending hyps: {offending}. The fix is in "
+        "`Induction._refresh_the_beginning_opr` "
         "(strip target frees from self.variables unconditionally, "
         "not only when is_init).")
 
@@ -7762,12 +7748,12 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
 
     Root cause (confirmed by ``isabelle process`` probe):
 
-    * ``library/proof.ML:2320`` binds each case hyp under
+    * ``library/proof.ML`` binds each case hyp under
       ``Binding.qualify_name true binding (fst asms)`` — e.g.
       ``"1.IH"`` — and the qualified name lands in ``items'`` /
       ``Consider_Case``. Python prints it verbatim under ``assuming
-      premises:`` (``model.py:4234``).
-    * ``agent.ML`` / ``read_fact`` (line 1103) calls ``Parse.thm``.
+      premises:`` (``print_hyps``).
+    * ``read_fact`` in ``agent.ML`` calls ``Parse.thm``.
       ``Parse.thm`` uses ``name = short_ident | long_ident | number |
       ...``. For input ``"1.IH"`` the tokenizer produces **three**
       tokens ``[1, ., IH]`` (``scan_longid`` requires both segments to
@@ -7860,8 +7846,8 @@ async def _test_Induction_IHFactRef(root: Root, file: MyIO):
         "`[1, ., IH]` (scan_longid needs both segments to be "
         "identifiers, and `1` is a Nat). The fix has to either quote "
         "numeric-prefix qualified names before handing them to "
-        "Parse.thm (agent.ML:1103 read_fact), or display the hyp "
-        "under a parseable name (library/proof.ML:2320). Observed "
+        "Parse.thm (`read_fact` in agent.ML), or display the hyp "
+        "under a parseable name (library/proof.ML). Observed "
         "reason: " + reason_text)
 
 
@@ -8477,8 +8463,8 @@ async def _test_Induction_MetaIHFact(root: Root, file: MyIO):
     root.print(0, file)
 
     # Step 2: Induction on n, generalize f, carry h.
-    # h has prop `⋀i. Trueprop(i < n) ⟹ Trueprop(f i < n)` — NOT
-    # Trueprop at top level → wraps should crash with Trueprop_conv.
+    # h has prop `⋀i. Trueprop(i < n) ⟹ Trueprop(f i < n)` — NOT Trueprop at
+    # top level; pre-fix, `wraps` crashed here with Trueprop_conv.
     root.session.age += 1
     await root.fill("2", [Induction.gen_single({
         "thought": "induct on n, generalize f, carry the meta-level fact h",
@@ -8707,8 +8693,9 @@ async def _test_Obtain_Skip_Introduced(root: Root, file: MyIO):
 
 @model_test("HaveGenLeakObtain", "Test_HaveGenLeakObtain.thy", 13)
 async def _test_HaveGenLeakObtain(root: Root, file: MyIO):
-    """Repro: a Have referencing a STRAY free variable leaks the raw kernel
-    exception `THM 0 ... generalize: variable free in assumptions`.
+    """Regression guard: a Have referencing a STRAY free variable used to leak
+    the raw kernel exception `THM 0 ... generalize: variable free in
+    assumptions`.
 
     Root cause: the goal `{r. 0<r} ⊆ S` is a set-subset, which Minilang INTRO
     does NOT introduce (it only fires on Pure/HOL ⋀/⟶/∀, never `subsetI`), so
@@ -8719,25 +8706,16 @@ async def _test_HaveGenLeakObtain(root: Root, file: MyIO):
     raises `THM 0 ... generalize: variable free in assumptions`, which leaks
     verbatim to the agent instead of a clean, actionable diagnostic.
 
-    Mirrors putnam_1962_a6 (log `edbca7bee_1`, worker 2.2, step 7).  See
-    `/tmp/aoa_bug_have_generalize_thm_leak.md`.
+    Mirrors putnam_1962_a6 (log `edbca7bee_1`, worker 2.2, step 7).
 
-    The agreed fix rejects the offending constraint at the OBTAIN step (a
-    constraint referencing a free variable that is neither already fixed nor
-    introduced by this Obtain is refused with a clean diagnostic), so this test
-    captures BOTH the Obtain-step outcome and the downstream Have-step outcome:
+    The fix rejects the offending constraint at the OBTAIN step: a constraint
+    referencing a free variable that is neither already fixed nor introduced by
+    this Obtain is refused with a clean diagnostic.  So step 1 now fails cleanly
+    and the Have at step 2 is never reached; pre-fix the Obtain wrongly
+    succeeded and the raw kernel `THM 0` leaked at the Have.
 
-      * CURRENT (buggy): the Obtain at step 1 wrongly succeeds (planting the
-        stray `r`), and the raw kernel `THM 0` then leaks at the Have (step 2).
-      * AFTER FIX: the Obtain at step 1 is rejected with a clean diagnostic and
-        the Have step is never reached.
-
-    Either way the hard invariant is: **no raw `THM 0` / `thm.ML` kernel string
-    may ever surface to the agent.**  The trailing assertion enforces exactly
-    that — so this test is RED until the fix lands and GREEN afterwards.
-
-    This golden captures the CURRENT (buggy) behavior.  When the defect is
-    fixed, the golden must be updated with user approval."""
+    The hard invariant either way: **no raw `THM 0` / `thm.ML` kernel string may
+    ever surface to the agent.**  The trailing assertion enforces exactly that."""
     from .mcp_http_server import _edit_tool_logic
 
     def _leaks_thm0(s: str) -> bool:
@@ -8767,9 +8745,8 @@ async def _test_HaveGenLeakObtain(root: Root, file: MyIO):
     print_header("After Obtain", file)
     root.print(0, file)
     root.session.age += 1
-    # Step 2: Have over the stray `r`.  CURRENT behavior: raw kernel `THM 0`
-    # leaks here.  (After the fix the proof never reaches this step, because
-    # the Obtain above is rejected.)
+    # Step 2: Have over the stray `r`.  Pre-fix, a raw kernel `THM 0` leaked
+    # here; post-fix the Obtain above is rejected and this step is cancelled.
     have_res, have_err = await _edit_tool_logic(
         root.session,
         {"target_step": "2", "action": "fill", "proof_operations": [
@@ -8784,7 +8761,7 @@ async def _test_HaveGenLeakObtain(root: Root, file: MyIO):
     file.write(f"is_error: {have_err}\n")
 
     # Hard invariant (the user's directive): a raw kernel THM-0 string must NEVER
-    # surface to the agent — not at Obtain, not at Have.  RED now, GREEN post-fix.
+    # surface to the agent — not at Obtain, not at Have.
     assert not _leaks_thm0(obtain_res) and not _leaks_thm0(have_res), \
         "raw kernel `THM 0 ... generalize: variable free in assumptions` leaked to the agent"
 
@@ -9537,16 +9514,16 @@ async def _test_query_exact_name_op(root: Root, file: MyIO):
 @model_test("AmendLeafToNonLeaf", "Test_AmendLeafToNonLeaf.thy", 8)
 async def _test_AmendLeafToNonLeaf(root: Root, file: MyIO):
     """Reproduce: AttributeError: 'Obvious' object has no attribute 'sub_nodes'
-    at model.py:2825 (NonLeaf_Node._amend_from).
+    in `NonLeaf_Node._amend_from`.
 
     Trigger: amend a Leaf (Obvious) into a NonLeaf (InferenceRule). The
     NonLeaf override of _amend_from unconditionally executes
         self.sub_nodes[:] = old.sub_nodes
-    but _amend_child (model.py:2815) calls new_node._amend_from(child)
+    but `_amend_child` calls new_node._amend_from(child)
     without guarding on the old node's kind, so any Leaf -> NonLeaf amend
     crashes here before refresh.
 
-    The reverse-revert path in Node.amend (model.py:2560) already has the
+    The reverse-revert path in `Node.amend` already has the
     correct `isinstance(new_node, NonLeaf_Node) and isinstance(old_node,
     NonLeaf_Node)` guard — the forward _amend_from is missing it.
 
@@ -10231,7 +10208,7 @@ async def _test_TerminateOnDeadRegion(root: Root, file: MyIO):
 @model_test("CancelledNodeMayKeepLiveState", "Test_CancelledNodeMayKeepLiveState.thy", 8)
 async def _test_CancelledNodeMayKeepLiveState(root: Root, file: MyIO):
     """A CANCELLED node's `ml_state` is NOT necessarily dead. Guards the predicate
-    choice in `Session._terminate_if_region_dead` (see docs/D1_FIX_PLAN.md §3, §6b).
+    choice in `Session._terminate_if_region_dead` (see docs/archive/D1_FIX_PLAN.md §3, §6b).
 
     `X.ml_state` is destroyed **iff X's immediate predecessor sibling was `_cancel`ed**
     — because `_cancel` resets `self.resulting_state()`, and a node's resulting state
@@ -12269,10 +12246,10 @@ async def _test_CcontrIntroMatch(root: Root, file: MyIO):
     two-level CASES nest (Induction + Branch) plus accumulated local facts
     reaches the cat_tree(BLOCK, PROP) mismatch.
 
-    Structural hypothesis: agent_server.ML:272 sets INTRO_mk_block=true →
+    Structural hypothesis: agent_server.ML sets INTRO_mk_block=true →
     INTRO''.PRT wraps in BLOCK → the enclosing single-sibling CASES PRT
-    (library/proof.ML:2374) invokes cat_tree (BLOCK _) (PROP _) →
-    cat_tree has no BLOCK pattern at lib/proof.ML:675-677 → Match.
+    (library/proof.ML) invokes cat_tree (BLOCK _) (PROP _) →
+    cat_tree had no BLOCK pattern → Match.
     """
     from .mcp_http_server import _edit_tool_logic
     print_header("Initial YAML", file)
@@ -12744,7 +12721,7 @@ async def _test_AmendHaveToConjI(root: Root, file: MyIO):
     proof steps. The transfer is therefore type-incoherent for any
     StdBlock → SubgoalMaker amend.
 
-    SubgoalMaker._refresh_the_beginning_opr (model.py:3992) tries to
+    SubgoalMaker._refresh_the_beginning_opr tries to
     rebuild GoalNodes only when the count differs (warn-discard branch);
     when the inherited count happens to match the new subgoal count, the
     `pass` branch silently keeps the wrong-typed children.
@@ -12972,7 +12949,7 @@ async def _test_SpliceAutoIntro(root: Root, file: MyIO):
 
 @model_test("MultilineThought", "Test_MultilineThought.thy", 8)
 async def _test_MultilineThought(root: Root, file: MyIO):
-    """Exercise _print_thought multi-line path (lines 2477-2483).
+    """Exercise _print_thought multi-line path.
     When the thought string contains newlines, it should render as a
     YAML literal block `thought: |` instead of inline."""
     print_header("Initial YAML", file)
@@ -12991,7 +12968,7 @@ async def _test_MultilineThought(root: Root, file: MyIO):
 
 @model_test("RenameVarNotFound", "Test_RenameVarNotFound.thy", 8)
 async def _test_RenameVarNotFound(root: Root, file: MyIO):
-    """Exercise rename_var raising CannotRename_VariableNotFound (lines 2754-2760).
+    """Exercise rename_var raising CannotRename_VariableNotFound.
     Attempting to rename a variable that doesn't exist in the proof tree
     must raise the appropriate error."""
     print_header("Initial YAML", file)
@@ -13005,7 +12982,7 @@ async def _test_RenameVarNotFound(root: Root, file: MyIO):
 
 @model_test("RenameFactNotFound", "Test_RenameFactNotFound.thy", 8)
 async def _test_RenameFactNotFound(root: Root, file: MyIO):
-    """Exercise rename_fact raising CannotRename_FactNotFound (lines 2762-2767).
+    """Exercise rename_fact raising CannotRename_FactNotFound.
     Attempting to rename a fact that doesn't exist in the proof tree
     must raise the appropriate error."""
     print_header("Initial YAML", file)
@@ -13019,8 +12996,8 @@ async def _test_RenameFactNotFound(root: Root, file: MyIO):
 
 @model_test("RenameIntroVar", "Test_RenameIntroVar.thy", 8)
 async def _test_RenameIntroVar(root: Root, file: MyIO):
-    """Exercise Intro._rename_var (lines 6358-6364) and the successful
-    rename_var path (lines 2754-2760) with refresh cascade."""
+    """Exercise Intro._rename_var and the successful rename_var path with
+    refresh cascade."""
     print_header("Initial YAML (auto-intro fixes x)", file)
     root.print(0, file)
     await root.rename_var(IsaTerm.from_agent("x"), IsaTerm.from_agent("y"))
@@ -13030,7 +13007,7 @@ async def _test_RenameIntroVar(root: Root, file: MyIO):
 
 @model_test("ObtainMultiConstraint", "Test_ObtainMultiConstraint.thy", 8)
 async def _test_ObtainMultiConstraint(root: Root, file: MyIO):
-    """Exercise Obtain._print_header multiple-constraints path (lines 6114-6126).
+    """Exercise Obtain._print_header multiple-constraints path.
     When the Obtain block has >1 constraints, they are printed as a
     bulleted list under `constraints:` instead of singular `constraint:`."""
     print_header("Initial YAML", file)
@@ -13054,7 +13031,7 @@ async def _test_ObtainMultiConstraint(root: Root, file: MyIO):
 
 @model_test("ObtainQuickview", "Test_ObtainQuickview.thy", 8)
 async def _test_ObtainQuickview(root: Root, file: MyIO):
-    """Exercise Obtain.quickview dedup (lines 6069-6084).
+    """Exercise Obtain.quickview dedup.
     After Obtain fires, quickview must announce the obtained variables
     and constraints. A second quickview call must NOT re-emit them (dedup)."""
     root.session.age += 1
@@ -13076,7 +13053,7 @@ async def _test_ObtainQuickview(root: Root, file: MyIO):
 
 @model_test("FailedLeafQuickview", "Test_FailedLeafQuickview.thy", 8)
 async def _test_FailedLeafQuickview(root: Root, file: MyIO):
-    """Exercise _print_evaluation_status_quickview FAILURE path (lines 2431-2439).
+    """Exercise _print_evaluation_status_quickview FAILURE path.
     A deliberately failing Have (nonsensical statement) produces a FAILURE
     status; quickview should print 'evaluation failed'."""
     await root.fill("1", [Have.gen_single({
@@ -14194,7 +14171,7 @@ async def _test_Branch_SorryNextFail(root: Root, file: MyIO):
     initialized!").
 
     Root cause (from conversation e5fe3afb6_6): SubgoalMaker._refresh_the
-    _beginning_opr's sorry_next loop (model.py ~line 4736) can raise
+    _beginning_opr's sorry_next loop can raise
     IsabelleError (e.g. "Conclusion in obtained context must be object-logic
     judgment" from Obtain.eliminate in the CONSIDER MAGIC callback). The
     unhandled exception leaves sub_nodes partially populated with

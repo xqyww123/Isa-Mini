@@ -103,7 +103,7 @@ def _flatten_edit_schema_deepseek(raw: dict) -> dict:
     DeepSeek strict compiles the tool schema into a constrained-decoding grammar
     that CANNOT resolve ``$ref`` — any ``$ref`` makes compilation fall back to a
     path that silently drops the schema from the prompt (the model then
-    hallucinates field names). See memory ``deepseek-v4-strict-not-enforced``.
+    hallucinates field names).
     So we fully inline (no ``$ref``) and additionally:
       - remove every ``proof``/``proofs`` field (no inline sub-proofs; the agent
         builds the tree incrementally — a bodiless op auto-opens a fillable
@@ -352,8 +352,10 @@ class OpenAIChatProvider(OpenAIBase):
                               rc_parts: list[str],
                               tc_map: dict[int, dict[str, str]]) -> Any:
         """Drain a streaming completion into the given accumulators; return the
-        final usage chunk. Raises ``TimeoutError`` if no chunk arrives within
-        ``_max_stream_time`` (caller maps it to a transient stall error)."""
+        final usage chunk. Raises ``TimeoutError`` if the stream has not
+        completed within ``_max_stream_time`` — a deadline on the whole stream,
+        not an inter-chunk idle timeout (caller maps it to a transient stall
+        error)."""
         stream_usage: Any = None
         async with asyncio.timeout(self._max_stream_time):
             async for chunk in stream:
@@ -456,7 +458,7 @@ class OpenAIChatProvider(OpenAIBase):
             # is already handled by the RateLimitError branch above. A status
             # error outside that set — 400/401/403/404/422/… — is a permanent
             # request error: re-raise so it propagates instead of being retried
-            # forever (the bug behind the deepseek allowed_tools 400 wedge).
+            # forever.
             # Non-status APIErrors (connection/timeout, no ``status_code``) stay
             # transient via the fall-through.
             if isinstance(e, openai.APIStatusError) and \
@@ -542,8 +544,8 @@ class OpenAIResponsesProvider(OpenAIBase):
     exhausting the 1-hour background retry budget propagate.
     """
 
-    # --- Endpoint policy (overridable per subclass; defaults == platform
-    # behavior, so APIDriver_OpenAI is byte-identical). `chat` reads these so
+    # --- Endpoint policy (overridable per subclass; the defaults match the
+    # platform-API behavior). `chat` reads these so
     # there is no per-request "mode" branching. CodexResponsesProvider flips them
     # for the stateless ChatGPT-subscription codex backend. ---
     STORE: bool                     = True   # params["store"]
@@ -907,7 +909,7 @@ class CodexResponsesProvider(OpenAIResponsesProvider):
     ``previous_response_id``, full transcript resent each turn — the backend
     rejects ``previous_response_id`` over HTTP) and fail-fast when the proxy is
     unreachable. Reasoning items are still resent verbatim (codex-faithful; never
-    stripped). See ``OpenAI_Codex_API_driver_plan.md``."""
+    stripped). See ``docs/archive/OpenAI_Codex_API_driver_plan.md``."""
     STORE                     = False   # codex backend
     SEND_PREVIOUS_RESPONSE_ID = False   # probe-3: 400 over HTTP -> full transcript each turn
     SURFACE_RESPONSE_ID       = False   # response_id None -> loop/fork resend full transcript
@@ -1060,7 +1062,7 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
     wholesale; only swaps in ``CodexResponsesProvider`` (stateless + fail-fast)
     pointed at the proxy. The proxy is launcher-owned — this driver never starts
     it and fails fast (``LMUnreachable`` -> ``ResourceUnavailable``) if it is
-    unreachable. See ``OpenAI_Codex_API_driver_plan.md``."""
+    unreachable. See ``docs/archive/OpenAI_Codex_API_driver_plan.md``."""
     DEFAULT_MODEL      = "gpt-5.5-high"
     # None ⇒ APIDriver_OpenAI._fork_provider's cheaper-fork guard is falsy, so
     # every fork reuses self._provider (the proxy-configured CodexResponsesProvider)
@@ -1115,9 +1117,10 @@ class APIDriver_K2Think(APIDriver):
 # _ChatProvider, whose context_window returns it verbatim — so this table (plus
 # the env cap) is authoritative even for ids that also live in
 # OpenAIBase._CONTEXT_WINDOWS (which would otherwise shadow the cap).
-# Values mirror each provider's own per-model table (true model maxima), except
-# DeepSeek V4 which *supports* 1M (official V4 Model Card, 2026-04-27) but is
-# capped here to 384K as a practical default. Unlisted ids fall back to
+# Values are each model's documented maximum, except the OpenAI gpt series,
+# Anthropic 4-6 and DeepSeek V4 — all 1M-capable — which are capped to 384K as a
+# practical default; the Gemini ids deliberately keep their full 1M window.
+# See the per-section comments. Unlisted ids fall back to
 # _CHAT_DEFAULT_CONTEXT; proxy ids like "deepseek/deepseek-v4-flash" don't match.
 _CHAT_DEFAULT_CONTEXT = 131_072
 _CHAT_CONTEXT_WINDOWS: dict[str, int] = {
@@ -1236,9 +1239,8 @@ class DeepSeekProvider(OpenAIChatProvider):
 
     Strict mode is applied to the ``edit`` tool ONLY — its schema is sent fully
     inlined (no ``$ref``) with proof fields removed, the only form that keeps the
-    schema in the prompt under DeepSeek strict (memory:
-    ``deepseek-v4-strict-not-enforced``). All other tools are sent non-strict with
-    their raw schemas; ``/beta`` accepts the mix (verified). Enforcement is soft
+    schema in the prompt under DeepSeek strict. All other tools are sent
+    non-strict with their raw schemas; ``/beta`` accepts the mix. Enforcement is soft
     even so — the existing error->tool-result->next-turn self-correction is the
     real safety net.
     """

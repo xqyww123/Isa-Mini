@@ -1,6 +1,8 @@
 # D1 fix plan — terminate a sub-agent whose target fell into a dead region
 
-> **Status:** plan only. NO code written. Awaiting user approval.
+> **Status:** ARCHIVED — this design shipped. Historical record, no longer maintained;
+> the code is the authority (`WorkerRegionDead` in `model.py`, the `CancelledNodeMayKeepLiveState`
+> model test, the `not _status_can_continue` gate).
 > **Date:** 2026-07-09
 > **Line numbers drift** — every claim is anchored on a symbol name. Grep for it.
 

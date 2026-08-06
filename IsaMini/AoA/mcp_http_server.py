@@ -123,7 +123,7 @@ def _flatten_edit_schema(schema: dict) -> dict:
     """Produce a Gemini-compatible edit schema: no $defs/$ref, no recursion.
 
     Proof fields become ``anyOf: [{"const": "GivenLater"}, Obvious]``.
-    FactByName.discharge items become ``{"type": "string"}``.
+    FactByName.discharge items become ``anyOf: [string, null]``.
     """
     flat = copy.deepcopy(schema)
     defs: dict[str, Any] = flat.pop("$defs", {})
@@ -165,7 +165,7 @@ def _flatten_edit_schema(schema: dict) -> dict:
         return {"anyOf": [{"const": "GivenLater"}, _make_flat_obvious()]}
 
     def _resolve_operation() -> dict:
-        """Inline the full Operation anyOf (all 16 operation types)."""
+        """Inline the full Operation anyOf (all operation types)."""
         op_def = defs["Operation"]
         return _resolve(copy.deepcopy(op_def), in_proof=False)
 
@@ -872,7 +872,7 @@ async def _read_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 
     # Normalize ``step_id`` to a list (the schema requires an array; a bare
     # scalar is tolerated defensively). Requesting exactly one id keeps the
-    # legacy single-id error semantics (abort + small-file fallback).
+    # single-id error semantics (abort + small-file fallback).
     raw_step = args.get("step_id")
     if raw_step is None:
         step_ids: list[str] | None = None
@@ -1331,7 +1331,7 @@ async def _lemma_statement_is_general(state, statement) -> 'tuple[bool, list[str
 
 
 def _requested_lemma_failed_line(name: str, reason: str) -> str:
-    """§G4 failed-outcome line, relaying the prover's actual terminal reason."""
+    """Failed-outcome line, relaying the prover's actual terminal reason."""
     reason = (reason or "").strip()
     if not reason:
         return f"Requested lemma `{name}` could not be established."
@@ -1454,8 +1454,7 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # declarations visible; worker-local fixes excluded. Any non-general item
         # REJECTS the whole call upfront (process nothing) so it resubmits with every
         # free variable declared in `for_any` — the already-general items are then
-        # auto-proved cleanly on the retry, with no duplicate global Haves. This
-        # replaces v3's non-general planner-park branch entirely.
+        # auto-proved cleanly on the retry, with no duplicate global Haves.
         slot_state = (gl_anchor.ml_state if gl_anchor is not None
                       else global_env._resulting_state_of_all_children())
         nongeneral_lines: list[str] = []
@@ -1557,8 +1556,8 @@ async def _request_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
             # worker's target subtree), so it holds no handle and blocks nobody.
             assert node.worker_handle is None
             outcome = await _run_worker_on(session, node, "", [], headless=True)
-            # A headless prover yields ONLY terminal outcomes (建议1 removes the
-            # difficulty park; refute forks an autonomous adjudicator; a constraint
+            # A headless prover yields ONLY terminal outcomes (the difficulty park
+            # is skipped for it; refute forks an autonomous adjudicator; a constraint
             # it raises on its OWN global Have is resolved IN-LOOP, never a park). A
             # park kind here would mean that invariant broke — fail loudly.
             #
@@ -1775,7 +1774,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
         return (full, True)
 
     def _whole_goal_err() -> tuple[str, bool]:
-        # Post-A2 the `target is None` case (no narrower named sub-goal above) and the
+        # The `target is None` case (no narrower named sub-goal above) and the
         # `target is psr` whole-goal case are semantically identical — there is no
         # narrower delegatable sub-goal, so delegating hands over the whole goal. One
         # message, emitted at both sites (`step_id`/`_tn` resolve at call time).
@@ -1816,7 +1815,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     if target is None:
         # No narrower delegatable sub-goal: `_nearest_goal_for_subagent` walked up to
         # the Root container / GlobalEnv without finding a named block or Define.
-        # Post-A2 this is how a main agent dispatching a (bare) top-level goal lands
+        # This is how a main agent dispatching a (bare) top-level goal lands
         # here — it IS the whole goal, just with no narrower unit (NOT "no goal").
         return _whole_goal_err()
     # A goal-transforming step (e.g. Contradiction, or a freshly-emptied slot)
@@ -1825,7 +1824,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     # session is responsible for, delegating it would hand the sub-agent the
     # entire proof — reject rather than silently scope the worker to it.
     #   - worker: its own target IS `proof_scope_root` → `target is psr`.
-    #   - main: `proof_scope_root` is the `Root` *container*. Post-A2 a top-level
+    #   - main: `proof_scope_root` is the `Root` *container*. A top-level
     #     `GoalNode` redirects UP to `Root` (a GoalContainer → None), so it is caught
     #     by the `target is None` arm above. The `target.parent is psr` clause below
     #     is thus unreachable-by-construction (no delegatable node has `.parent is
@@ -1840,7 +1839,7 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     node = target
     # Invariant: _nearest_goal_for_subagent only ever returns a provable goal
     # block (Have / Obtain / Suffices / SetupRewriting / Define), all StdBlock
-    # subtypes. (Post-A2 a bare GoalNode is never returned — obligation GoalNodes
+    # subtypes. (A bare GoalNode is never returned — obligation GoalNodes
     # redirect to the Define; case GoalNodes redirect to the enclosing named block.)
     assert isinstance(node, StdBlock)
 
@@ -2155,13 +2154,7 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
             for name, t in base.items()}
 
 
-# The experience document text is now assembled by the single authority
-# Isabelle_Semantic_Embedding.document_text.document_text_of (moved down from here, as
-# experience_document_text, so write and re-embed share one convention -- see
-# EMBED_TEXT_LAYERING_REFACTOR).
-
-
-# --- write_memory corpus-dedup (adjacency mechanism, §3.1) -------------------
+# --- write_memory corpus-dedup (adjacency mechanism) ------------------------
 # Cosine threshold above which an existing experience is treated as a possible
 # duplicate of a new one. Named constant (validate the embedding model's
 # `normalize` so this sits on a [0,1] cosine — see EXPERIENCE_MEMORY docs).
@@ -2315,14 +2308,12 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     # Build the record ONCE, up front. put_experience embeds document_text_of(rec) and
     # the dedup search below queries document_text_of(rec) too, so write, dedup, and
     # any later re-embed all derive their text from this single record -- byte-identical
-    # by construction (the core invariant of EMBED_TEXT_LAYERING_REFACTOR).
-    # expr stays None: goal_patterns is a real list field now (it used to be JSON-packed
-    # into expr, which forced every reader to parse it and made pretty_print render raw
-    # JSON for an experience).
+    # by construction.
+    # expr stays None: goal_patterns is a real list field, not JSON packed into expr.
     rec = SemanticRecord(EntityKind.EXPERIENCE, name, None, desc,
                          None, constituents, experience, pats_ascii)
 
-    # 3. adjacency handshake (§3.1). "adjacent" = a dedup rejection is pending and
+    # 3. adjacency handshake. "adjacent" = a dedup rejection is pending and
     # only read-only / interaction tools have been called since it was raised.
     created = session.runtime.created_memories
     store = await conn.semantic_vector_store()
@@ -2332,9 +2323,10 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
                     for t in session.tool_call_log[block.log_len:]))
 
     # Deletion of an experience (record + vectors in ALL model stores + availability
-    # index) is now the single transaction store.delete_experience(uk); see
-    # experience_store.delete_experience (Del1: purges every vector_*.lmdb, not just
-    # the active model, so a content-addressed overwrite leaves no orphan vectors).
+    # index) is the single transaction store.delete_experience(uk); see
+    # experience_store.delete_experience for the ordering contract and for why
+    # it invalidates the key in EVERY model's vector_*.lmdb, not just the active
+    # one -- a content-addressed overwrite must leave no orphan vectors.
 
     async def _persist(verb: str) -> tuple[str, bool]:
         # put_experience embeds FIRST -- the only fallible/remote step -- then writes
@@ -2359,11 +2351,11 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     if targets:
         # Persist the new record durably FIRST, then delete the old one(s): a
         # transient embed failure in _persist must not have already destroyed the
-        # prior good memory (concern #4). delete_experience of the same `key` is
-        # guarded by the `if uk != key` check below (C2).
+        # prior good memory. delete_experience of the same `key` is guarded by
+        # the `if uk != key` check below.
         result = await _persist("Updated")
         for uk in targets:
-            if uk != key:            # C2: never delete the very key we just wrote
+            if uk != key:            # never delete the very key we just wrote
                 store.delete_experience(uk)
         return result
 
@@ -2581,8 +2573,8 @@ class ToolExecutor:
         """Execute a tool call. Returns (result_text, is_error).
 
         Handles permission checks, cooldown logic, and the search hint.
-        Edit and delete run as channel-connected Tasks (supporting
-        non-forking interactions); other tools run inline.
+        Edit, delete, request, and subagent run as channel-connected Tasks
+        (supporting non-forking interactions); other tools run inline.
         """
         session = self._session
         bind_session_context(session)
