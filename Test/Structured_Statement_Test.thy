@@ -14,6 +14,17 @@ lemma "A \<and> B \<Longrightarrow> B \<and> A"
     RULE NEXT END
   \<close>)
 
+(* Guards that SUFFICES objectifies the leading subgoal: the \<And>y parameter occurs in the
+   conclusion, so before objectification this died with "Loose bound variable: B.0".
+   Keep it bare -- no `if`, no `for`, no leading INTRO -- or it stops guarding anything. *)
+
+lemma "\<And>y. P y \<Longrightarrow> P y"
+  by (min_script \<open>
+    SUFFICES "\<forall>y. P y \<longrightarrow> P y"
+      END
+    END
+  \<close>)
+
 section \<open>SUFFICES with for only\<close>
 
 lemma "\<forall>x::nat. x \<le> x"
@@ -103,6 +114,18 @@ lemma "A \<Longrightarrow> B \<Longrightarrow> A \<and> B"
     SUFFICES "A \<and> B"
       END
     RULE NEXT END
+  \<close>)
+
+section \<open>SUFFICES restating the goal's own premises with if\<close>
+
+(* The obligation now carries the goal's premises, so the residual goal does not:
+   restate them with `if` (or run INTRO first) to keep them available. *)
+
+lemma "A \<Longrightarrow> B \<Longrightarrow> A \<and> B"
+  by (min_script \<open>
+    SUFFICES "A \<and> B" if h1: "A" and h2: "B"
+      END
+    END WITH h1 h2
   \<close>)
 
 section \<open>SUFFICES with nontrivial sufficiency proof\<close>
