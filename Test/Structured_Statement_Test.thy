@@ -8,6 +8,7 @@ section \<open>Backward compat: bare SUFFICES still works\<close>
 
 lemma "A \<and> B \<Longrightarrow> B \<and> A"
   by (min_script \<open>
+    INTRO
     SUFFICES "B \<and> A"
       END
     RULE NEXT END
@@ -98,6 +99,7 @@ section \<open>SUFFICES bare inside a nested proof\<close>
 
 lemma "A \<Longrightarrow> B \<Longrightarrow> A \<and> B"
   by (min_script \<open>
+    INTRO
     SUFFICES "A \<and> B"
       END
     RULE NEXT END

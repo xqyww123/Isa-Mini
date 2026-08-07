@@ -37,6 +37,7 @@ definition \<open>PROTECT X \<equiv> X\<close>
 definition \<open>ISO_ALL \<equiv> HOL.All\<close>
 definition \<open>ISO_IMP \<equiv> HOL.implies\<close>
 definition \<open>ISO_PROP (X::bool) \<equiv> X\<close>
+definition \<open>ISO_TERM (x::'a::{}) \<equiv> True\<close>
 
 lemma ISO_PROP:
   \<open>Trueprop (ISO_PROP P) \<equiv> Pure.prop (Trueprop P)\<close>

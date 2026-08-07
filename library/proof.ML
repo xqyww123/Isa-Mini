@@ -2106,84 +2106,6 @@ val INTRO_ALL_CMD = (OPT_VARS -- OPT_PREMS)
         >> (fn args => fn s => #2 (timed_OPR_with_ret 2 (uncurry (INTRO' ALL_SUBGOALS NONE) args) s))
 val TRANSPARENT_INTRO = OPR_NO_INCR TRANSPARENT_INTRO'
 
-local
-(*
-fun read_trrules thy raw_rules =
-  let
-    val ctxt = Proof_Context.init_global thy;
-    val read_root =
-      #1 o dest_Type o Proof_Context.read_type_name {proper = true, strict = false} ctxt;
-  in
-    raw_rules
-    |> map (Syntax.map_trrule (fn (r, s) => Syntax_Phases.parse_ast_pattern ctxt (read_root r, s)))
-  end;
-
-val trrules = read_trrules \<^theory> [
-      Syntax.Parse_Rule (("logic", "(a \<le> b) \<le> c"), ("logic", "a \<le> b \<and> b \<le> c")),
-      Syntax.Parse_Rule (("logic", "(a < b) < c"), ("logic", "a < b \<and> b < c")),
-      Syntax.Parse_Rule (("logic", "a = b = c"), ("logic", "a = b \<and> b = c")),
-      Syntax.Parse_Rule (("logic", "a \<longleftrightarrow> b \<longleftrightarrow> c"), ("logic", "a \<longleftrightarrow> b \<and> b \<longleftrightarrow> c"))
-  ]
-*)
-
-val term_qchk = exists_subterm (
-      fn Const(\<^const_name>\<open>less\<close>, _) $ (Const(\<^const_name>\<open>less\<close>, _) $ _ $ _) $ _ => true
-       | Const(\<^const_name>\<open>less_eq\<close>, _) $ (Const(\<^const_name>\<open>less_eq\<close>, _) $ _ $ _) $ _ => true
-       | Const("HOL.eq", _) $ (Const("HOL.eq", _) $ _ $ _) $ _ => true
-       | Const("HOL.iff", _) $ _ $ (Const("HOL.iff", _) $ _ $ _) => true
-       | _ => false )
-
-
-fun term_check tm =
-  if term_qchk tm
-  then let
-      fun maptm (Const(\<^const_name>\<open>less\<close>, _) $ (Const(\<^const_name>\<open>less\<close>, T1) $ A $ B) $ C)
-            = \<^Const>\<open>conj\<close> $ (Const(\<^const_name>\<open>less\<close>, T1) $ A $ B)
-                          $ (Const(\<^const_name>\<open>less\<close>, T1) $ B $ C)
-        | maptm (Const(\<^const_name>\<open>less_eq\<close>, _) $ (Const(\<^const_name>\<open>less_eq\<close>, T1) $ A $ B) $ C)
-            = \<^Const>\<open>conj\<close> $ (Const(\<^const_name>\<open>less_eq\<close>, T1) $ A $ B)
-                          $ (Const(\<^const_name>\<open>less_eq\<close>, T1) $ B $ C)
-        | maptm (Const("HOL.eq", _) $ (Const("HOL.eq", T1) $ A $ B) $ C)
-            = \<^Const>\<open>conj\<close> $ (Const("HOL.eq", T1) $ A $ B)
-                          $ (Const("HOL.eq", T1) $ B $ C)
-        | maptm (Const("HOL.iff", _) $ (Const("HOL.iff", T1) $ A $ B) $ C)
-            = \<^Const>\<open>conj\<close> $ (Const("HOL.iff", T1) $ A $ B)
-                          $ (Const("HOL.iff", T1) $ B $ C)
-        | maptm (origin as (A $ B)) =
-            let val A' = maptm A
-                val B' = maptm B
-             in if pointer_eq (A', A) andalso pointer_eq (B', B)
-                then origin
-                else A' $ B'
-            end
-        | maptm (origin as Abs (N,T,X)) =
-            let val X' = maptm X
-             in if pointer_eq (X', X)
-                then origin
-                else Abs (N, T, X')
-            end
-        | maptm X = X
-   in maptm tm
-  end
-  else tm
-
-in
-
-fun INIT_SYNTAX ctxt = ctxt
-  |> Proof_Context.notation false Syntax.mode_default [
-      (Const (\<^const_name>\<open>less_eq\<close>, dummyT), Mixfix (Input.string "(_/ \<le> _)", [51, 51], 50, Position.no_range)),
-      (Const (\<^const_name>\<open>less\<close>,    dummyT), Mixfix (Input.string "(_/ < _)",     [51, 51], 50, Position.no_range))
-    ]
-  |> Proof_Context.notation true Syntax.mode_default [
-      (Const (\<^const_name>\<open>less_eq\<close>, dummyT), Mixfix (Input.string "(_/ \<le> _)", [50, 51], 50, Position.no_range)),
-      (Const (\<^const_name>\<open>less\<close>,    dummyT), Mixfix (Input.string "(_/ < _)",     [50, 51], 50, Position.no_range))
-    ]
-  (* DISABLED: the "a < b < c" chained-relation term_check phase. *)
-  (* |> Context.proof_map (
-        Syntax_Phases.term_check ~200  "a < b < c" (K (map term_check))) *)
-
-end
-
 
 (* INIT *)
 
@@ -3585,19 +3507,32 @@ fun apply_suffices_rule st impl_lem ctxt =
                   "Failed to apply suffices rule - goal might not match")
   end
 
-fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) =
+fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0raw, items0) :: S) =
   let
+    (* Objectify the leading subgoal first: with its ⋀-parameters and meta
+       premises turned into ∀ / ⟶, the goal is ONE HOL proposition, so no part
+       of it can be silently dropped while building the sufficiency obligation,
+       and the obligation resolves against it without any lifting. *)
+    val st0 = case Seq.pull (Object_Logic.full_atomize_tac ctxt0 1 st0raw)
+                of SOME (st, _) => st
+                 | NONE => st0raw
+
+    (* Check for schematic variables in goal — deliberately on the ORIGINAL
+       conclusion, so this rejection covers exactly what it covered before
+       objectification (which folds the premises into the goal as well). *)
+    val _ = case goals_of' st0raw of
+              [] => raise OPR_FAIL (INVALID_OPR, "SUFFICES requires at least one goal")
+            | (G :: _) =>
+                if has_schematic_vars (Logic.strip_assums_concl G)
+                then raise OPR_FAIL (INVALID_OPR,
+                       "SUFFICES does not support goals with schematic variables")
+                else ()
+
     (* Extract the current goal *)
     val goals = goals_of' st0
     val goal_G = case goals of
                    [] => raise OPR_FAIL (INVALID_OPR, "SUFFICES requires at least one goal")
-                 | (G :: _) => Logic.strip_assums_concl G
-
-    (* Check for schematic variables in goal *)
-    val _ = if has_schematic_vars goal_G
-            then raise OPR_FAIL (INVALID_OPR,
-                   "SUFFICES does not support goals with schematic variables")
-            else ()
+                 | (G :: _) => G
 
     (* Parse the sufficient condition P *)
     val prop_P_raw = prep_prop ctxt0 raw_prop
@@ -3605,10 +3540,13 @@ fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0, items0) :: S) 
                    Const(\<^const_name>\<open>Trueprop\<close>, _) $ P => P
                  | P => P
 
-    (* Create HOL implication: P --> G (where G is atomized if needed) *)
+    (* Create HOL implication: P --> G.  Anything meta-level surviving the
+       objectification above means the goal does not live in HOL; refuse
+       instead of building a malformed term. *)
     val goal_G_atom = case goal_G of
                         Const(\<^const_name>\<open>Trueprop\<close>, _) $ G => G
-                      | G => G
+                      | _ => raise OPR_FAIL (INVALID_OPR,
+                               "Fail to atomize the proposition into HOL")
     val impl_term = HOLogic.mk_imp (prop_P, goal_G_atom)
                  |> HOLogic.mk_Trueprop
 
@@ -6241,7 +6179,6 @@ fun conclude initial_ctxt ((ctxt', S  as [HHF (st',_)]),_,_) =
 
 fun PROVE tr ctxt st =
       INIT ctxt st
-   |> OPR_NO_INCR (apfst INIT_SYNTAX)
    |> tr
    |> conclude ctxt
 
