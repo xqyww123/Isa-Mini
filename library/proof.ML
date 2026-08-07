@@ -2132,6 +2132,22 @@ fun INIT c st =
   let val st0 = if Config.get c auto_deconflict_bound
                 then deconflict_bound_names_thm st
                 else st
+      (* Minilang does not support an initial state whose top-level subgoals share a
+         schematic variable.  Instantiation is state-global, not per subgoal, so
+         pinning such a variable while working on one subgoal silently specialises
+         the others -- steps that were available in a sibling stop applying, with
+         nothing pointing back at the cause. *)
+      val _ =
+        let val occurrences = maps (fn g => map #1 (Term.add_vars g [])) (Thm.prems_of st0)
+            val shared = duplicates (op =) occurrences
+         in if null shared then ()
+            else raise OPR_FAIL (INVALID_OPR,
+                   "Minilang does not support an initial goal state whose subgoals share the \
+                   \schematic variable" ^ (if length shared > 1 then "s " else " ") ^
+                   commas (map (quote o Term.string_of_vname) shared) ^
+                   ". Instantiate " ^ (if length shared > 1 then "them" else "it") ^
+                   " first, or prove the subgoals as separate lemmas.")
+        end
       val facts = Proof_Context.facts_of c
       val facts' = if can Local_Theory.assert c
                    then Proof_Context.facts_of (Local_Theory.target_of c)
@@ -4509,7 +4525,9 @@ val type_of_end = type_of_end' o #2 o #1
 (** SORRY **)
 
 fun SORRY_i (ctxt, HHF (s,facts) :: S) =
-    let val s' = rule_by_tactic ctxt (Skip_Proof.cheat_tac ctxt 1) s
+    let val s' = case Seq.pull (Skip_Proof.cheat_tac ctxt 1 s) of
+                   SOME (s', _) => s'
+                 | NONE => raise OPR_FAIL (INVALID_OPR, "SORRY: no subgoal to cheat")
      in (ctxt, HHF (s', facts) :: S)
      |> maintain
     end
