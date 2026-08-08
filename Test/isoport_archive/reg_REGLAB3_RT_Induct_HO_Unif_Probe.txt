@@ -1,0 +1,896 @@
+Running Draft ...
+
+Output (line 9 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  NO_SIMP :: "'a ⇒ 'a"
+
+Output (line 11 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem NO_SIMP_cong: NO_SIMP ?X ≡ NO_SIMP ?X
+
+Output (line 13 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem Ball_All_comm: (∀x∈?A. ∀y. ?P x y) = (∀y. ∀x∈?A. ?P x y)
+
+Output (line 17 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem All_Ball_comm: (∀x. ∀y∈?B. ?P x y) = (∀y∈?B. ∀x. ?P x y)
+
+Output (line 21 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem Ball_Ball_comm: (∀x∈?A. ∀y∈?B. ?P x y) = (∀y∈?B. ∀x∈?A. ?P x y)
+
+Output (line 25 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pull_Ball_eq: ?P ⟶ (∀x∈?A. ?Q x) ≡ ∀x∈?A. ?P ⟶ ?Q x
+
+Output (line 34 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  TAG :: "'a ⇒ 'a"
+
+Output (line 35 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  GOAL :: "prop ⇒ prop"
+
+Output (line 36 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  PROTECT :: "'a ⇒ 'a"
+
+Output (line 40 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature PHI_CONV =
+  sig
+    val atomize: context -> thm -> thm
+    val atomize_conv: context -> conv
+    val atomize_rules: context -> thm list
+    val atomize_term: context -> term -> term
+    val iso_atomize: context -> thm -> thm
+    val iso_atomize_conv: context -> conv
+    val iso_engine: string Config.T
+    val iso_rulify: context -> thm -> thm
+    val iso_rulify_conv: context -> conv
+    val rulify: context -> thm -> thm
+    val rulify_rules: context -> thm list
+    val simp_atomize_conv: context -> conv
+    val simp_rulify_conv: context -> conv
+    val struct_atomize_conv: context -> conv
+    val struct_atomize_conv_of: thm list -> context -> conv
+    val struct_rulify_conv: context -> conv
+    val struct_rulify_conv_fix: thm list -> context -> conv
+    val struct_rulify_conv_of: thm list -> context -> conv
+  end
+structure Phi_Conv: PHI_CONV
+
+Output (line 42 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_imp_embed :: "bool ⇒ bool ⇒ bool"
+
+Output (line 43 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_all_embed :: "('a ⇒ bool) ⇒ bool"
+
+Output (line 45 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_conj_embed :: "bool ⇒ bool ⇒ bool"
+
+Output (line 46 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_prop_embed :: "'a ⇒ 'a"
+
+Output (line 47 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_eq_embed :: "'a ⇒ 'a ⇒ bool"
+
+Output (line 48 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+consts
+  pure_term_embed :: "'a ⇒ bool"
+
+Output (line 50 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pure_eq_embed ?X ?Y ≡ (?X ≡ ?Y)
+
+Output (line 54 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pure_imp_embed ?P ?Q ≡ (?P ⟹ ?Q)
+
+Output (line 58 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pure_conj_embed ?P ?Q ≡ (?P &&& ?Q)
+
+Output (line 62 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem ∀⇩e⇩m⇩b⇩e⇩d x. ?P x ≡ (⋀x. ?P x)
+
+Output (line 66 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pure_prop_embed ?P ≡ (?P)
+
+Output (line 76 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+theorem pure_term_embed ?x ≡ TERM ?x
+
+Warning (line 81 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 80 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux_thms.ML"):
+### Value identifier (combination_conv') has not been referenced.
+
+Output (line 81 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature MINILANG_AUX =
+  sig
+    structure Thms:
+      sig
+        val GOAL_def: thm
+        val GOAL_def'sym: thm
+        val TAG_def: thm
+        val TAG_def'sym: thm
+        val TrueI: thm
+        val allI: thm
+        val atomize_all: thm
+        val atomize_all'sym: thm
+        val atomize_imp: thm
+        val atomize_imp'sym: thm
+        val conjE: thm
+        val conjI: thm
+        val conj_imp_eq_imp_imp: thm
+        val conjunct1: thm
+        val conjunct2: thm
+        val conjunctionD1: thm
+        val conjunctionD2: thm
+        val conjunction_imp: thm
+        val conjunction_imp'sym: thm
+        val disjE: thm
+        val ex1I: thm
+        val exE: thm
+        val exI: thm
+        val impI: thm
+        val prop_def: thm
+        val prop_def'sym: thm
+        val spec: thm
+      end
+    val concl_conv: (context -> conv) -> context -> conv
+    val simp_fact_name': string -> string
+  end
+structure Minilang_Aux: MINILANG_AUX
+
+Warning (line 87 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 109 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/unify_diagnostic.ML"):
+### Value identifier (red) has not been referenced.
+
+Warning (line 87 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 227 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/unify_diagnostic.ML"):
+### Matches are not exhaustive.
+
+Output (line 87 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature UNIFY_DIAGNOSTIC =
+  sig
+    exception Unif_Diagnostic of unify_diagnostic
+    val diagnose_of_failure: context -> thm -> thm list -> string option
+    val diagnose_pair: context -> term -> term -> unify_diagnostic option
+    val diagnose_rule_vs_goal: context -> (bool * thm) list -> term -> string option
+    val diagnostic_unify: Context.generic -> term * term -> Envir.env -> Envir.env
+    val format_diag_body: context -> unify_diagnostic -> string
+    datatype unify_diagnostic = BoundVar_Clash of int * int | Clash of string * string | Occurs_Check of indexname * term | Projection_Fail of indexname * int list * term | Type_Clash of typ * typ
+  end
+structure Unify_Diagnostic: UNIFY_DIAGNOSTIC
+
+Warning (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 189 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux.ML"):
+### Value identifier (beta_eta_contract_cterm) has not been referenced.
+
+Warning (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 315 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux.ML"):
+### Value identifier (j) has not been referenced.
+
+Warning (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 489 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux.ML"):
+### Matches are not exhaustive.
+
+Warning (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 515 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux.ML"):
+### Matches are not exhaustive.
+
+Warning (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 516 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/aux.ML"):
+### Matches are not exhaustive.
+
+Output (line 88 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature MINILANG_AUX =
+  sig
+    structure Thms:
+      sig
+        val GOAL_def: thm
+        val GOAL_def'sym: thm
+        val TAG_def: thm
+        val TAG_def'sym: thm
+        val TrueI: thm
+        val allI: thm
+        val atomize_all: thm
+        val atomize_all'sym: thm
+        val atomize_imp: thm
+        val atomize_imp'sym: thm
+        val conjE: thm
+        val conjI: thm
+        val conj_imp_eq_imp_imp: thm
+        val conjunct1: thm
+        val conjunct2: thm
+        val conjunctionD1: thm
+        val conjunctionD2: thm
+        val conjunction_imp: thm
+        val conjunction_imp'sym: thm
+        val disjE: thm
+        val ex1I: thm
+        val exE: thm
+        val exI: thm
+        val impI: thm
+        val prop_def: thm
+        val prop_def'sym: thm
+        val spec: thm
+      end
+    val base_name: string -> string
+    val case_synt: Context.generic -> (bool * (term option list list * thm option)) parser
+    val case_synt': (bool * (term option list list * thm option)) context_parser
+    val concl_conv: (context -> conv) -> context -> conv
+    val deconflict_bound_names: term -> term
+    val filter_redundant_facts: (string * term) list -> (string * term) list
+    val flatten_facts: (string * term list) list -> (string * term) list
+    val implode_with: 'a -> 'a list list -> 'a list
+    val implode_with': 'a -> 'a list list -> 'a list -> 'a list
+    val ind_synt: Context.generic -> (bool * ((binding option * (term * bool)) option list list * (((string * typ) list list * term option list) * thm list option))) parser
+    val ind_synt': (bool * ((binding option * (term * bool)) option list list * (((string * typ) list list * term option list) * thm list option))) context_parser
+    val induction_tac:
+       (string * string list) list ref ->
+         bool -> (binding option * (term * bool)) option list list -> (string * typ) list list -> term option list -> thm list option -> thm list -> int -> context_tactic
+    val inst_hol_alls: context -> (string * cterm) list -> thm -> thm
+    val inst_universal_quantifiers: context -> (var_name * term) list * (indexname * typ) list -> thm -> thm
+    val inst_universal_quantifiers': context -> (var_name * string) list -> thm -> thm
+    val is_tvar_name: var_name -> bool
+    val method_sorry: Method.text
+    val parse_var: string -> indexname
+    val print_toks: Token.src -> string list
+    val rule_of_ind: Context.generic -> Token.T list -> thm list option
+    val simp_fact_name: context -> string -> string
+    val simp_fact_name': string -> string
+    val strip_meta_and_hol_hhf: term -> (string * typ) list * term list * term
+    val trim_markup: string -> string
+    val tvar_indexname: var_name -> indexname
+    val unflatten_facts: (string * 'a) list -> (string * (string * 'a) list) list
+    datatype var_name = VN_IndexName of indexname | VN_Name of string
+    val variant_factname: context -> string -> string
+    val variant_name: string -> Name.context -> string * Name.context
+    val variant_name_list: string list -> string list -> string list
+    val xOF: bool -> context -> thm option list -> thm -> thm
+    val xof: context -> string option list * string option list -> (binding * string option * mixfix) list -> thm -> thm
+    val xwhere: context -> ((var_name * Position.T) * (string * string)) list -> (binding * string option * mixfix) list -> thm -> thm
+  end
+structure Minilang_Aux: MINILANG_AUX
+
+Warning (line 89 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 50 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_lthy.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 89 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 62 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_lthy.ML"):
+### Pattern is not exhaustive.
+
+Output (line 89 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature PROOF_LOCAL_LTHY =
+  sig
+    val declaration: {pervasive: bool, pos: Position.T, syntax: bool} -> Morphism.declaration -> context -> context
+    val define: (binding * mixfix) * (Attrib.binding * term) -> context -> (term * (string * thm)) * context
+    val note: Attrib.binding * thm list -> context -> (string * thm list) * context
+    val notes: Attrib.fact list -> context -> (string * thm list) list * context
+    val notes_kind: string -> Attrib.fact list -> context -> (string * thm list) list * context
+  end
+structure Proof_Local_Lthy: PROOF_LOCAL_LTHY
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 44 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (i) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 44 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (g) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 44 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (f) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 53 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (x) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 53 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (T) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 79 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (a) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 215 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 373 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 450 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 478 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 556 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (preds) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 555 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Value identifier (spec_name) has not been referenced.
+
+Warning (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 583 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_inductive.ML"):
+### Pattern is not exhaustive.
+
+Output (line 90 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+structure Proof_Local_Inductive:
+  sig
+    val add_ind_def: Inductive.add_ind_def
+    val arg_types_of: int -> term -> typ list
+    val atomize_term: theory -> term -> term
+    val bad_app: string
+    val bad_concl: string
+    val bad_ind_occ: string
+    val check_rule: Proof.context -> term list -> term list -> (binding * 'a) * term -> (binding * 'a) * term
+    val clean_message: Proof.context -> bool -> string -> unit
+    val coind_prefix: bool -> string
+    val declare_rules:
+       binding ->
+         bool ->
+           bool ->
+             'a ->
+               string list ->
+                 'b -> thm list -> binding list -> Token.src list list -> (thm * string list * int) list -> thm list -> thm -> context -> thm list * thm list * thm list * thm * thm list * context
+    val dest_predicate: term list -> term list -> term -> (term * int * term list * (typ list * typ list)) option
+    val err_in_prem: Proof.context -> binding -> term -> term -> string -> 'a
+    val err_in_rule: Proof.context -> binding -> term -> string -> 'a
+    val find_arg: typ -> 'a -> (typ * ('a option * 'b)) list -> 'b * (typ * ('a option * 'b)) list
+    val inductive_atomize: thm list
+    val inductive_conj_def: thm
+    val log: int -> int -> int -> int
+    val make_args: typ list -> (term * typ) list -> term list
+    val make_args': typ list -> 'a list -> typ list -> 'a list
+    val make_bool_args: ('a -> 'b) -> ('a -> 'b) -> 'a list -> int -> 'b list
+    val make_bool_args': 'a list -> int -> term list
+    val message: bool -> string -> unit
+    val mk_ind_def:
+       bool ->
+         bool ->
+           binding ->
+             bool ->
+               term list ->
+                 term list -> thm list -> term list -> (binding * mixfix) list -> Proof.context -> context * Proof.context * binding * thm * thm * thm list * term * term list * typ list * ...
+    val mk_mono: Proof.context -> thm -> thm
+    val mk_names: string -> int -> string list
+    val prove_elims: bool -> term list -> term list -> term list -> 'a list -> thm -> thm list -> Proof.context -> Proof.context -> (thm * 'a list * int) list
+    val prove_eqs: bool -> term list -> term list -> term list -> thm list -> (thm * bstring list * int) list -> Proof.context -> Proof.context -> thm list
+    val prove_indrule: bool -> term list -> typ list -> term list -> term list -> term -> term list -> term list -> thm -> thm -> thm list -> Proof.context -> Proof.context -> thm
+    val prove_intrs: bool -> bool -> thm -> thm -> int -> term list -> thm list -> Proof.context -> Proof.context -> thm list * thm
+    val prove_mono: bool -> bool -> typ -> term -> thm list -> Proof.context -> thm
+    val simp_thms1: thm list
+    val simp_thms2: thm list
+  end
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 269 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (thms) has not been referenced.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 498 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 523 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Matches are not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 586 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 835 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 910 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (G_induct) has not been referenced.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1053 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1137 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1211 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1235 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1239 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Matches are not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1245 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Matches are not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1385 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1372 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Matches are not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1437 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (add_function_local) has not been referenced.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1438 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (add_function_cmd_local) has not been referenced.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1461 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Matches are not exhaustive.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1500 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (termination) has not been referenced.
+
+Warning (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1498 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/function/proof_local_function.ML"):
+### Value identifier (prove_termination_local) has not been referenced.
+
+Output (line 91 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature PROOF_LOCAL_FUNCTION =
+  sig
+    val add_fun_cmd: (binding * string option * mixfix) list -> Specification.multi_specs_cmd -> Function_Common.function_config -> bool -> context -> context
+    val prepare_pat_goal:
+       (binding * string option * mixfix) list ->
+         Specification.multi_specs_cmd -> Function_Common.function_config -> bool -> context -> {lthy_after_prepare: context, pat_afterqed: thm list list -> context -> context, pat_goal_state: thm}
+    val prepare_term_goal: context -> {term_afterqed: thm list list -> context -> context, term_goal: term}
+  end
+structure Proof_Local_Function: PROOF_LOCAL_FUNCTION
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 517 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 519 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 827 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (incr_premise_counter) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 855 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (get_premise_counter) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 976 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (xxxx) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 985 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (file "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (file "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1405 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (conjI) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1406 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (asm_rl) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1650 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (attrs) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 1763 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (VARS) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2137 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (term_check) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2256 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (st) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2291 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (origin) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2388 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2781 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 2845 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (concls) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 3276 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 3300 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 3963 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern is not exhaustive.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 4489 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (param) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5160 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (exn) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5160 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5164 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Value identifier (can_use_definition_cmd) has not been referenced.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5211 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5309 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5355 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5725 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 5730 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Pattern 2 is redundant.
+
+Warning (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+### ML warning (line 6087 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/library/proof.ML"):
+### Matches are not exhaustive.
+
+Output (line 92 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/Minilang.thy"):
+signature MINILANG =
+  sig
+    val APPLY: Time.time option -> thm list -> Method.text -> operation
+    val APPLY'': Time.time option -> fact list -> Method.text -> operation
+    val APPLY_CMD: command
+    val CASE_SPLIT: bool * (term option list list * thm option) -> opt_var_names -> thm list -> operation
+    val CASE_SPLIT'': Token.src * opt_var_names * fact list -> operation
+    val CASE_SPLIT_CMD: command
+    val CHAINING: string option -> thm list -> operation
+    val CHAINING_CMD: command
+    val CHOOSE: term list -> operation
+    val CHOOSE'': (string * (binding * string option * mixfix) list) list -> operation
+    val CHOOSE_CMD: command
+    val COMPUTE: string -> term -> operation
+    val CONFIG: config list -> operation
+    val CONFIG_BUNDL'': string list -> operation
+    val CONFIG_CMD: command
+    val CONFIG_FACTS'': (Attrib.binding * (Facts.ref * Token.src list) list) list -> operation
+    val CONSIDER:
+       ((binding * string option * mixfix) list * ((binding * string option * mixfix) list * (string * string list) list list * (Attrib.binding * (string * string list) list) list)) list -> operation
+    val CONSIDER_CMD: command
+    val CRUSH: opt_var_names * with_clause -> operation
+    val CRUSH_CMD: command
+    val DEFINE: (binding * typ option * mixfix) list -> (Thm.binding * (term * term list) list) list -> (binding * typ option * mixfix) list -> operation
+    val DEFINE'': (binding * string option * mixfix) list -> (Attrib.binding * (string * string list) list) list -> (binding * string option * mixfix) list -> operation
+    val DEFINE_CMD: command
+    exception DISCARDED_VARS of (string * string) list
+    exception DROPPED_INSERTION_FACTS of string list
+    val END: Sledgehammer.fact_override -> operation
+    val END_CMD: command
+    val END_or_NXT: opt_var_names -> Sledgehammer.fact_override -> operation
+    val END_or_NXT_by_SORRY: opt_var_names -> state -> state
+    val END_or_NXT_by_SORRY_CMD: command
+    val FUN'': (binding * string option * mixfix) list -> Specification.multi_specs_cmd -> {metric: string list, open_on_fail: bool} -> operation
+    val FUN_CMD: command
+    val FUN_DEBUG_CMD: command
+    val HAMMER: (string option -> context -> thm -> string * thm) -> operation
+    val HAMMER_CMD: command
+    val HAVE: (binding * string option * mixfix) list -> (Attrib.binding * (string * string list) list) list -> (Attrib.binding * (string * string list) list) list -> operation
+    val HAVE'': (binding * typ option * mixfix) list -> (Attrib.binding * (term * term list) list) list -> (Attrib.binding * (term * term list) list) list -> operation
+    val HAVE_CMD: command
+    exception IH_MAP of (string * string list) list
+    val INDUCT: bool * ((binding option * (term * bool)) option list list * (((string * typ) list list * term option list) * thm list option)) -> opt_var_names -> induct_facts -> operation
+    val INDUCT'': Token.src * opt_var_names * fact list -> operation
+    val INDUCT_CMD: command
+    val INIT: context -> thm -> state
+    val INIT': Proof.state -> state
+    val INST_GOAL_VARS: (indexname * string) list * (indexname * string) list -> operation
+    val INST_VAR: (indexname * string) list -> operation
+    val INST_VAR'': (indexname * term) list -> operation
+    val INST_VAR_CMD: command
+    exception INTERPRET_FACTS_COUNT of int
+    val INTRO: intros_mode -> bool option -> opt_var_names -> opt_prem_names -> state -> items * state
+    val INTRO_CMD: command
+    val INTRO_mk_block: bool Config.T
+    val INTRO_split_prem_conj: bool Config.T
+    val INTRO_split_prem_conj_size_limit: int Config.T
+    val LET: (term list * term) list -> operation
+    val LET'': (string list * string) list -> operation
+    val LET_CMD: command
+    val METHOD: string -> Method.method
+    val MP: context -> thm -> thm -> thm
+    val NOTATION: Syntax.mode -> (term * mixfix) list -> operation
+    val NOTATION'': Syntax.mode -> (string * mixfix) list -> operation
+    val NOTATION_CMD: command
+    val NXT: opt_var_names -> Sledgehammer.fact_override -> operation
+    val NXT_CMD: command
+    val OPEN_MODULE: Expression.expression_i -> state -> state
+    val OPEN_MODULE'': {auto_unfold_locale: bool} -> Expression.expression -> state -> state
+    val OPEN_MODULE_CMD: Token.T list -> (state -> state) * Token.T list
+    exception OPR_FAIL of fail_reason * string
+    exception PAT_COMPLETENESS_PROOF_OPENED
+    val PRINT: operation
+    val PRINT_CMD: command
+    val PROVE: operation -> context -> thm -> thm
+    exception REPLACE_CMD of string * string
+    val RULE: (Facts.ref * Token.src list) list -> (Facts.ref * Token.src list) list -> operation
+    val RULE_CMD: command
+    exception SH_PRF of string * Time.time
+    val SIMP: with_clause -> operation
+    val SIMP'': (bool * (Facts.ref * Token.src list)) list -> operation
+    val SIMPLIFY_CMD: command
+    val SIMPLIFY_GOAL_AND_PREMISES:
+       thm list -> simproc list -> bool -> string list -> bool -> (term list -> string list) option -> ((string * typ) list -> string list) option -> Time.time option -> state -> items * state
+    val SIMPLIFY_GOAL_AND_PREMISES'': fact list -> bool -> string list -> bool -> operation
+    val SIMP_CMD: command
+    val SORRY_END_ALL: opt_var_names -> state -> state
+    val SORRY_END_ALL_CMD: command
+    val SORRY_NEXT: opt_var_names -> state -> state
+    val SORRY_NEXT_CMD: command
+    val SORRY_ONLY: operation
+    val SORRY_ONLY_CMD: command
+    val SPECIALIZE: string option -> fact list -> (Minilang_Aux.var_name * string) list -> fact list -> operation
+    val SPECIALIZE'': string option -> thm list -> (Minilang_Aux.var_name * term) list * (indexname * typ) list -> thm list -> operation
+    val SPECIALIZE_CMD: command
+    val SPLIT_CONJS: operation
+    val SPLIT_CONJS2: operation
+    val SPLIT_CONJS2_CMD: command
+    val SPLIT_CONJS_CMD: command
+    val STEP: fact list -> term -> operation
+    val STEP'': fact list -> string -> operation
+    val STEP_CMD: command
+    val SUFFICES: (binding * string option * mixfix) list -> (Attrib.binding * (string * string list) list) list -> (Attrib.binding * (string * string list) list) list -> operation
+    val SUFFICES'': (binding * typ option * mixfix) list -> (Attrib.binding * (term * term list) list) list -> (Attrib.binding * (term * term list) list) list -> operation
+    val SUFFICES_CMD: command
+    exception TERMINATION_PROOF_OPENED
+    val TRANSPARENT_INTRO: operation
+    val UNFOLD: thm list -> operation
+    val UNFOLD_CMD: command
+    val analyze_case_split: context -> bool * (term option list list * thm option) -> thm list -> induct_analysis option
+    val analyze_induct: context -> bool * ((binding option * (term * bool)) option list list * (((string * typ) list list * term option list) * thm list option)) -> thm list -> induct_analysis option
+    val apply: string -> context_tactic -> Time.time option -> stack -> stack
+    val apply_method: string -> thm list -> Method.method -> Time.time option -> stack -> stack
+    val atomize_goals_in_printing: bool Config.T
+    val atomize_tree: context -> tree -> tree
+    val auto_calculation: bool Config.T
+    val auto_deconflict_bound: bool Config.T
+    val cat_items: items -> items -> items
+    val chk_working_mode: string -> unit
+    type command = operation parser
+    val conclude: context -> state -> thm
+    datatype config = CFG_BUNDLE of Bundle.name | CFG_NOTE of Thm.binding * (thm list * attribute list) list
+    val consumes_policy: string Config.T
+    val context_of: state -> context
+    val context_of_leading_goal: tree -> items * term
+    val counter_mode: string Config.T
+    val crush_timeout: int Config.T
+    val deconflict_bound_names: term -> term
+    val deconflict_bound_names_thm: thm -> thm
+    val deconflict_case_fixes: bool Config.T
+    val deep_destruct_prem: context -> thm -> thm list
+    val deep_destruct_term: context -> term -> term list
+    val default_prover: Time.time option -> Sledgehammer.fact_override -> context -> string option -> context -> thm -> string * thm
+    val empty_items: items
+    val enable_cache_by_step: bool Config.T
+    datatype endblk_type = T_END | T_NXT
+    val equiv_proof_state: state * state -> bool
+    type fact = Facts.ref * Token.src list
+    datatype fail_reason = INVALID_OPR | OTHER | PROOF_FAIL | TERMLANG
+    val fun_fake_automatic_failure: bool Config.T
+    val fun_fake_pat_completeness_failure: bool Config.T
+    val get_local_facts: state -> local_facts
+    val get_reporter: unit -> message -> unit
+    val goals_of': thm -> term list
+    val high_auto_mode: bool Config.T
+    type induct_analysis = {consume_premises: term list, consumes: int, remaining_premises: term list, rule: thm, rule_name: string option}
+    val induct_auto_insert_facts: bool Config.T
+    type induct_facts = {insertion: (string * thm list) list, using: thm list}
+    val install_relaxed_typ_parsing: Context.generic -> Context.generic
+    datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
+    val is_conj_goal: thm -> bool
+    val is_finished: state -> bool
+    val is_nullary_def_cmd: (binding * string option * mixfix) list -> Specification.multi_specs_cmd -> context -> bool
+    type items = variables * local_facts
+    val leading_goal_data: state -> (items * term) option * int
+    val leading_proof_sequent_of: state -> thm
+    val lex_cmds: string -> Token.src list
+    type local_facts = (string * term) list
+    val map_context: (context -> context) -> state -> state
+    datatype message = Consider_Case of string * items | Goals of term list | Internal of exn | New_Items of items | Newly_Fixed of (string * typ) list
+    val mini_single_cmd_timeout: int Config.T
+    val mini_use_improved_SH: bool Config.T
+    val need_intro: thm -> bool
+    val num_goals: state -> int
+    type operation = state -> state
+    type opt_prem_names = string option list option
+    type opt_var_names = string option list option
+    val parse_cmds: Token.src list -> operation
+    val potential_defs_of: context -> term -> term list -> (string * thm) list
+    val print_state: state -> tree
+    val raw_apply_state: string -> (message -> unit) -> context_tactic -> Time.time option -> state -> state
+    val ready_to_finish: state -> bool
+    val record_history: string -> operation
+    val remove_looping_simps: context -> context
+    val restore_history: string -> operation
+    val schematic_vars_of_goal: bool -> state -> (indexname * typ) list * (indexname * sort) list
+    val set_reporter: (message -> unit) -> unit
+    type stack
+    type state
+    val strict_end: bool Config.T
+    val strip_meta_and_hol_hhf: term -> (string * typ) list * term list * term
+    val thms_to_targeted_simprocs: context -> (thm * term list) list -> simproc list
+    val transparent_intro: bool Config.T
+    datatype tree = BLOCK of tree | BUNDL of items * tree list | PROP of items * term
+    val typ_parsing_mode: string Config.T
+    val type_of_end: state -> endblk_type option
+    type variables = (string * typ) list
+    type with_clause = (bool * string * thm) list
+    val working_mode: string Config.T
+  end
+structure Minilang: MINILANG
+
+Error (line 10 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+*** No such file: "/tmp/t1" (line 11 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy")
+
+Output (line 30 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+val print_state_tac = fn: string -> Proof.context -> tactic
+
+Output (line 54 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem baseline_raw_isabelle_using:
+ ?i ≤ p - 2 ⟹ Q (f ?i)
+
+Output (line 64 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem baseline_minilang_no_arbitrary:
+ ?i ≤ p - 2 ⟹ Q (f ?i)
+
+Output (line 70 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem baseline_minilang_arbitrary_just_ile:
+ ?i ≤ p - 2 ⟹ Q (f ?i)
+
+Output (line 97 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem pathology_minimal_less_induct:
+ ?i ≤ p - 2 ⟹ Q (f ?i)
+
+Output (line 73 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+proof state after step 1
+block of goal
+  Q (f i)
+variables
+  p :: nat
+  f :: nat ⇒ nat
+  Q :: nat ⇒ bool
+  i :: nat
+facts
+  ile : i ≤ p - 2
+  less.IH : ⟦?y < i; ?y ≤ p - 2⟧ ⟹ Q (f ?y)
+
+Output (line 73 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+All goals are solved!
+
+Output (line 67 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+proof state after step 1
+block of goal
+  Q (f i)
+variables
+  p :: nat
+  f :: nat ⇒ nat
+  Q :: nat ⇒ bool
+  i :: nat
+facts
+  ile : i ≤ p - 2
+  less.IH : ⟦?y < i; ?y ≤ p - 2⟧ ⟹ Q (f ?y)
+
+Output (line 67 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+All goals are solved!
+
+Output (line 108 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem pathology_rabinowitz_less_induct:
+ (∀x. f x = x * x + x + p) ⟶ (∀k≤p div 3. Q (f k)) ⟶ (∀i≤p - 2. Q (f i))
+
+Output (line 124 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+theorem pathology_rabinowitz_nat_less_induct:
+ (∀x. f x = x * x + x + p) ⟶ (∀k≤p div 3. Q (f k)) ⟶ (∀i≤p - 2. Q (f i))
+
+Output (line 100 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+proof state after step 1
+block of goal
+  Q (f i)
+variables
+  p :: nat
+  f :: nat ⇒ nat
+  Q :: nat ⇒ bool
+  x :: nat
+  i :: nat
+facts
+  ile : i ≤ p - 2
+  less.IH : ⟦?y < x; ?i ≤ p - 2⟧ ⟹ Q (f ?i)
+
+Output (line 100 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+All goals are solved!
+
+Output (line 112 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+proof state after step 4
+block of goal
+  Q (f i)
+variables
+  p :: nat
+  f :: nat ⇒ nat
+  Q :: nat ⇒ bool
+  x :: nat
+  i :: nat
+facts
+  assm0 : ∀x. f x = x * x + x + p
+  assm1 : ∀k≤p div 3. Q (f k)
+  assm2 : i ≤ p - 2
+  less.IH : ⟦?y < x; ?i ≤ p - 2⟧ ⟹ Q (f ?i)
+
+Output (line 112 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+All goals are solved!
+
+Output (line 128 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+proof state after step 4
+block of goal
+  Q (f i)
+variables
+  p :: nat
+  f :: nat ⇒ nat
+  Q :: nat ⇒ bool
+  n :: nat
+  i :: nat
+facts
+  assm0 : ∀x. f x = x * x + x + p
+  assm1 : ∀k≤p div 3. Q (f k)
+  assm2 : i ≤ p - 2
+  1.IH : ∀m<n. ∀x≤p - 2. Q (f x)
+
+Output (line 128 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy"):
+All goals are solved!
+Draft FAILED (see also "isabelle build_log -H Error Draft")
+*** No such file: "/tmp/t1" (line 11 of "/tmp/claude-1002/-home-qiyuan-Current-MLML/e23f54fc-1364-4316-a8a3-e93e30a4407e/scratchpad/isoport/isamini_lab3/RT_Induct_HO_Unif_Probe.thy")
+Unfinished session(s): Draft

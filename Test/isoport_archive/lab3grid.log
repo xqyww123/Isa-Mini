@@ -1,0 +1,16 @@
+----- LAB3 / Iso_D -----
+##RESULT caseD: QQ 7  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_A -----
+##RESULT caseA: QQ 7  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_A2 -----
+##RESULT caseA2: RR 7  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_B -----
+##RESULT caseB: QQ 7 ∧ PP 3  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_C1 -----
+##RESULT c1a: PP 3  ||oracles=[]  ||hyps=[]
+##RESULT c1b: QQ 7  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_C2 -----
+##RESULT c2a: PP 3  ||oracles=[]  ||hyps=[]
+##RESULT c2b: QQ 7  ||oracles=[]  ||hyps=[]
+----- LAB3 / Iso_E -----
+##RESULT caseE: QQ 7  ||oracles=[]  ||hyps=[]

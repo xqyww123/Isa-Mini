@@ -1,0 +1,49 @@
+只在 isamini_base 中存在：Iso_A2.thy
+只在 isamini_base 中存在：Iso_A.thy
+只在 isamini_base 中存在：Iso_Base.thy
+只在 isamini_base 中存在：Iso_B.thy
+只在 isamini_base 中存在：Iso_C0.thy
+只在 isamini_base 中存在：Iso_C1.thy
+只在 isamini_base 中存在：Iso_C2.thy
+只在 isamini_base 中存在：Iso_Ctx.thy
+只在 isamini_base 中存在：Iso_D.thy
+只在 isamini_base 中存在：Iso_E0.thy
+只在 isamini_base 中存在：Iso_E2E2.thy
+只在 isamini_base 中存在：Iso_E2E.thy
+只在 isamini_base 中存在：Iso_E.thy
+只在 isamini_base 中存在：Iso_GoalSide.thy
+只在 isamini_base 中存在：Iso_Isar.thy
+只在 isamini_base 中存在：Iso_NST.thy
+只在 isamini_base 中存在：Iso_ObjAtom.thy
+只在 isamini_base 中存在：Iso_OldConv.thy
+只在 isamini_base 中存在：Iso_Shape.thy
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/library/proof.ML isamini_basefix/library/proof.ML
+--- isamini_base/library/proof.ML	2026-08-06 12:59:52.043027216 +0800
++++ isamini_basefix/library/proof.ML	2026-08-06 17:05:21.194364088 +0800
+@@ -3479,7 +3479,14 @@
+             end
+ 
+           val thy01 = Proof_Context.theory_of ctxt01
++          (* The preview items handed to the printer must be in USER shape, not
++             in iso-atomized shape: `goal` has been through `init_goal`
++             (= iso_atomize + protect_goals), and `pretty_tree0` prints items
++             with a bare `Syntax.pretty_term` -- no rulify anywhere on that
++             path.  Rulifying here also restores `&&&`, without which
++             `Logic.dest_conjunctions` cannot split a multi-`shows` HAVE. *)
+           val preruns = concl_of (Thm.prop_of goal)
++                  |> (fn t => Thm.term_of (Thm.rhs_of (iso_rulify ctxt01 (Thm.cterm_of ctxt01 t))))
+                   |> Logic.dest_conjunctions
+                   |> filter_out is_term_marker
+                   |> map (Skip_Proof.make_thm thy01)
+只在 isamini_base 中存在：RT_Ball_InstUniv_Test.thy
+只在 isamini_base 中存在：RT_Chaining_Test.thy
+只在 isamini_base 中存在：RT_Clarsimp_Tac_Test.thy
+只在 isamini_base 中存在：RT_Consumes_Validation_Test.thy
+只在 isamini_base 中存在：RT_Fun_In_Proof_Test.thy
+只在 isamini_base 中存在：RT_Induct_HO_Unif_Probe.thy
+只在 isamini_base 中存在：RT_Inst_Universal_Quantifiers_Test.thy
+只在 isamini_base 中存在：RT_Structured_Statement_Test.thy
+只在 isamini_base 中存在：RT_Test_CaseSplit_Penetrate_Scratch.thy
+只在 isamini_base 中存在：RT_Test_Define_Facts_Visible.thy
+只在 isamini_base 中存在：RT_Test_SplitConjs2_Scratch.thy
+只在 isamini_base 中存在：RT_Test_SplitConjs.thy

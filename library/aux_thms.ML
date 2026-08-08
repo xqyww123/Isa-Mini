@@ -34,10 +34,6 @@ structure Thms : sig
 
 end
 
-val iso_atomize : Proof.context -> conv
-val iso_rulify  : Proof.context -> conv
-val iso_atomize': Proof.context -> thm -> thm
-val iso_rulify' : Proof.context -> thm -> thm
 val concl_conv : (Proof.context -> conv) -> Proof.context -> conv
 
 val simp_fact_name' : string -> string
@@ -76,13 +72,6 @@ val GOAL_def'sym = @{thm GOAL_def[symmetric]}
 val TAG_def      = @{thm TAG_def}
 val TAG_def'sym  = @{thm TAG_def[symmetric]}
 
-val ISO_ALL_def  = @{thm atomize_all[folded ISO_ALL_def, symmetric]}
-val ISO_ALL'sym_def  = @{thm atomize_all[folded ISO_ALL_def]}
-val ISO_IMP_def  = @{thm atomize_imp[folded ISO_IMP_def, symmetric]}
-val ISO_IMP'sym_def  = @{thm atomize_imp[folded ISO_IMP_def]}
-val ISO_PROP_def  = @{thm ISO_PROP}
-val ISO_PROP'sym_def  = @{thm ISO_PROP[symmetric]}
-
 val conjunction_imp = @{thm conjunction_imp}
 val conjunction_imp'sym = @{thm conjunction_imp[symmetric]}
 
@@ -93,43 +82,6 @@ fun combination_conv' cv1 cv2 ct =
       val y2 = (cv2 ct2)
       val y1 = (cv1 ct1)
   in Thm.combination y1 y2 end;
-
-fun iso_atomize ctxt ctm =
-  let open Conv
-   in case Thm.term_of ctm
-   of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
-        ( combination_conv (arg_conv (iso_atomize ctxt))
-                           (iso_atomize ctxt)
-          then_conv rewr_conv Thms.ISO_IMP'sym_def
-        ) ctm
-    | Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
-        ( arg_conv (abs_conv (iso_atomize o snd) ctxt)
-          then_conv rewr_conv Thms.ISO_ALL'sym_def
-        ) ctm
-    | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ =>
-        ( rewr_conv Thms.ISO_PROP'sym_def ) ctm
-    | _ => all_conv ctm
-  end
-
-fun iso_rulify ctxt ctm =
-  let open Conv
-   in case Thm.term_of ctm
-   of _ $ (Const(\<^const_name>\<open>ISO_IMP\<close>, _) $ _ $ _) =>
-        ( rewr_conv Thms.ISO_IMP_def then_conv
-          combination_conv (arg_conv (iso_rulify ctxt))
-                           (iso_rulify ctxt) 
-        ) ctm
-    | _ $ (Const(\<^const_name>\<open>ISO_ALL\<close>, _) $ Abs _) =>
-        ( rewr_conv Thms.ISO_ALL_def then_conv
-          arg_conv (abs_conv (iso_rulify o snd) ctxt)
-        ) ctm
-    | _ $ (Const(\<^const_name>\<open>ISO_PROP\<close>, _) $ _) =>
-        ( rewr_conv Thms.ISO_PROP_def ) ctm
-    | _ => all_conv ctm
-  end
-
-val iso_atomize' = Conv.fconv_rule o iso_atomize
-val iso_rulify'  = Conv.fconv_rule o iso_rulify
 
 fun concl_conv C ctxt ctm =
   case Thm.term_of ctm

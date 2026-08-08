@@ -300,7 +300,7 @@ fun string_of_term ctxt =
               |> Config.put Printer.show_markup false
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
-     in Object_Logic.atomize_term ctxt'
+     in My_Object_Logic.atomize_term {strict=false} ctxt'
      #> Minilang.deconflict_bound_names
      #> RPC_Pretty.print_term printing_cfg ctxt'
     end

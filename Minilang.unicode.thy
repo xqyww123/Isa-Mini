@@ -34,18 +34,57 @@ lemma pull_Ball_eq:
 definition ‹TAG X ≡ X›
 definition ‹GOAL (X::prop) ≡ X›
 definition ‹PROTECT X ≡ X›
-definition ‹ISO_ALL ≡ HOL.All›
-definition ‹ISO_IMP ≡ HOL.implies›
-definition ‹ISO_PROP (X::bool) ≡ X›
 
-lemma ISO_PROP:
-  ‹Trueprop (ISO_PROP P) ≡ Pure.prop (Trueprop P)›
-  unfolding ISO_PROP_def Pure.prop_def .
+subsubsection ‹Isomorphic Atomize (ported from phi-system PLPR)›
+
+definition ‹pure_imp_embed ≡ (⟶)›
+definition pure_all_embed :: ‹('a ⇒ bool) ⇒ bool› (binder ‹∀⇩e⇩m⇩b⇩e⇩d › 10)
+    ― ‹We give it a binder syntax to prevent eta-contraction which
+        deprives names of quantifier variables›
+  where ‹pure_all_embed ≡ (All)›
+definition ‹pure_conj_embed ≡ (∧)›
+definition ‹pure_prop_embed x ≡ x›
+definition ‹pure_eq_embed ≡ (=)›
+definition ‹pure_term_embed (x::'a::{}) ≡ True›
 
 ML_file ‹./library/aux_thms.ML›
 
-hide_fact ISO_PROP
-hide_const (open) TAG GOAL PROTECT ISO_ALL ISO_IMP ISO_PROP
+ML_file ‹./library/my_object_logic.ML›
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹(X ≡ Y) ≡ Trueprop (pure_eq_embed X Y)›
+  unfolding pure_eq_embed_def atomize_eq .
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹(P ⟹ Q) ≡ Trueprop (pure_imp_embed P Q)›
+  unfolding atomize_imp pure_imp_embed_def .
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹(P &&& Q) ≡ Trueprop (pure_conj_embed P Q)›
+  unfolding atomize_conj pure_conj_embed_def .
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹(⋀x. P x) ≡ Trueprop (pure_all_embed (λx. P x))›
+  unfolding atomize_all pure_all_embed_def .
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹PROP Pure.prop (Trueprop P) ≡ Trueprop (pure_prop_embed P)›
+  unfolding Pure.prop_def pure_prop_embed_def .
+
+(* phi's 6th predefined rule, `atomize_Ball`, is NOT ported: it is stated over
+   phi's own meta binder `meta_Ball` (+ `Premise`), constants Minilang does not
+   have.  HOL's own `atomize_ball` is deliberately NOT used in its place: its
+   LHS `(⋀x. x ∈ A ⟹ P x)` also matches the atomize_all/atomize_imp rules,
+   which would make the rule set non-confluent. *)
+
+lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
+  ‹(TERM (x::'a::{})) ≡ Trueprop (pure_term_embed x)›
+  unfolding pure_term_embed_def term_def
+  by (rule equal_intr_rule; (rule TrueI | assumption))
+
+hide_const (open) TAG GOAL PROTECT
+  pure_imp_embed pure_all_embed pure_conj_embed pure_prop_embed pure_eq_embed
+  pure_term_embed
 
 ML_file ‹./library/unify_diagnostic.ML›  (* before aux.ML: xOF uses Unify_Diagnostic *)
 ML_file ‹./library/aux.ML›

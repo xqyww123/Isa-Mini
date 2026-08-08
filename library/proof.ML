@@ -577,7 +577,7 @@ fun pop_n_goals n th =
   end
 
 fun init_goal ctxt th = th
-      |> Conv.fconv_rule (concl_conv iso_atomize ctxt)
+      |> Conv.fconv_rule (concl_conv My_Object_Logic.iso_atomize_conv ctxt)
       |> protect_goals
 
 val num_goals_of =
@@ -663,7 +663,7 @@ fun conclude_goal th =
   end
 
 fun finalize_goal ctxt th = th
-      |> Conv.fconv_rule (concl_conv iso_rulify ctxt)
+      |> Conv.fconv_rule (concl_conv My_Object_Logic.iso_rulify_conv ctxt)
 
 (* Printer *)
 
@@ -702,7 +702,7 @@ fun cat_tree (PROP (items, goal)) (PROP (items', _)) = PROP (cat_items items ite
   | cat_tree (BLOCK T) U = BLOCK (cat_tree T U)
   | cat_tree T (BLOCK U) = BLOCK (cat_tree T U)
 
-fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, Object_Logic.atomize_term ctxt goal)
+fun atomize_tree ctxt (PROP (items, goal)) = PROP (items, My_Object_Logic.atomize_term {strict=false} ctxt goal)
   | atomize_tree ctxt (BUNDL (items, goal)) = BUNDL (items, map (atomize_tree ctxt) goal)
   | atomize_tree ctxt (BLOCK tree) = BLOCK (atomize_tree ctxt tree)
 
@@ -1141,7 +1141,7 @@ fun deep_destruct_term ctxt term =
    in map (unprop o Thm.concl_of) atoms end
 
 fun wraps ctxt ths = ths
-      |> map (Conv.fconv_rule (Object_Logic.atomize ctxt
+      |> map (Conv.fconv_rule (My_Object_Logic.atomize_conv {strict=true} ctxt
               then_conv HOLogic.Trueprop_conv (Conv.rewr_conv Thms.TAG_def'sym)))
       |> foldr1 (fn (A,B) => MP ctxt (MP ctxt Thms.conjI A) B)
 
@@ -3496,6 +3496,8 @@ fun gen_HAVE' mkG shows (ctxt0, HHF (st,items) :: S) =
 
           val thy01 = Proof_Context.theory_of ctxt01
           val preruns = concl_of (Thm.prop_of goal)
+                  |> (fn t => Thm.term_of (Thm.rhs_of
+                        (My_Object_Logic.iso_rulify_conv ctxt01 (Thm.cterm_of ctxt01 t))))
                   |> Logic.dest_conjunctions
                   |> filter_out is_term_marker
                   |> map (Skip_Proof.make_thm thy01)
@@ -3537,11 +3539,10 @@ val HAVE_CMD =
           tolerate_typ (HAVE fixes assumes shows)
                        (fn s => HAVE fixes (remove_typ_ass assumes) (remove_typ_ass shows) s) )
 
-fun atomize_term ctxt =
-      Object_Logic.atomize_term ctxt
-  #> (fn X => if Term.fastype_of X = \<^Type>\<open>bool\<close>
-              then X
-              else raise OPR_FAIL (INVALID_OPR, "Fail to atomize the proposition into HOL"))
+fun atomize_term ctxt t =
+      My_Object_Logic.atomize_term {strict=true} ctxt t
+      handle TERM ("Fail to atomize", _) =>
+        raise OPR_FAIL (INVALID_OPR, "Fail to atomize the proposition into HOL")
 
 (** SUFFICES **)
 
@@ -3598,7 +3599,7 @@ fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0raw, items0) :: 
        premises turned into ∀ / ⟶, the goal is ONE HOL proposition, so no part
        of it can be silently dropped while building the sufficiency obligation,
        and the obligation resolves against it without any lifting. *)
-    val st0 = case Seq.pull (Object_Logic.full_atomize_tac ctxt0 1 st0raw)
+    val st0 = case Seq.pull (My_Object_Logic.full_atomize_tac {strict=true} ctxt0 1 st0raw)
                 of SOME (st, _) => st
                  | NONE => st0raw
 
@@ -5002,7 +5003,8 @@ fun OPEN_MODULE' ({auto_unfold_locale} : {auto_unfold_locale: bool})
          locale, or one whose obligation `unfold_locales` discharged outright --
          hands us Isar's EMPTY goal state `#(⋀dummy. PROP dummy ⟹ PROP dummy)`,
          which is already finished.  There is nothing to protect, and iso_atomize
-         cannot rewrite that degenerate shape (it raises CTERM in rewr_conv).  So
+         cannot rewrite that degenerate shape (no rule matches its Pure-only
+         skeleton, so the completeness check raises CTERM).  So
          gate the wrap on `no_subgoal'`, and gate the CB's matching unwrap on the
          SAME flag -- the two must never disagree.  The block is still pushed and
          still closed by END: that END is what fires the CB, and the CB is what
@@ -5529,16 +5531,17 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
            (* Convert the raw prepped state into minilang's
               Minilang.GOAL-wrapped shape so the HHF satisfies minilang's
               invariants. init_goal = iso_atomize + protect_goals;
-              for our Pure-level termination goal iso_atomize is a
-              no-op, so this is effectively just protect_goals. *)
+              iso_atomize embeds any meta connectives in the termination
+              goal's conclusion, and the callback's finalize_goal
+              inverts that embedding. *)
            val init_st = init_goal lthy_for_user prepped
            fun term_cb ctxt_user (tstate, _, SK', _) =
              let
                val lthy2' = Variable.set_body false ctxt_user
                (* Follow HAVE's CB pattern: Goal.conclude strips the
                   Pure.prop wrapping, finalize_goal runs iso_rulify
-                  (no-op here), Conjunction.elim_conjunctions splits
-                  any conjunctions (we expect a single result). *)
+                  (inverts init_goal's embedding), Conjunction.elim_conjunctions
+                  splits any conjunctions (we expect a single result). *)
                val lems =
                  Goal.conclude tstate
                  |> finalize_goal lthy2'
@@ -5937,10 +5940,11 @@ fun FUN_by_fun_ext fixes specs config metric_strs open_on_fail
            complete)` — Conjunction.intr then Goal.protect 0, BEFORE any
            tactic runs — so the protected conclusion is a two-way meta
            conjunction for every FUN shape, whatever escalate_pat left behind.
-           init_goal rewrites only the subgoal spine into Minilang.GOAL
-           wrappers: the trailing `Pure.prop C` is untouched, and
-           iso_atomize/iso_rulify are all_conv on a `&&&` head.  So the
-           callback inverts init_goal with Goal.conclude |> finalize_goal;
+           init_goal wraps the subgoal spine into Minilang.GOAL wrappers
+           and embeds the protected conclusion's meta connectives: the
+           `&&&` head becomes `pure_conj_embed` under Trueprop.  The
+           callback inverts init_goal with Goal.conclude |> finalize_goal
+           (whose iso_rulify restores the `&&&` head);
            when phase 2's residuals were merged in, one further
            Conjunction.elim_balanced 2 separates the phase-1 theorem from the
            totality theorem.  pat_afterqed consumes the phase-1 conjunction

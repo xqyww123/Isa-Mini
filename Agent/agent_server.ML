@@ -411,7 +411,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                    "The goal has multiple subgoals sharing schematic variables \
                    \and could not be merged into one.", zero_cost)
              val atomized =
-               case SINGLE (ALLGOALS (Object_Logic.full_atomize_tac ctxt0)) sequent of
+               case SINGLE (ALLGOALS (My_Object_Logic.full_atomize_tac {strict=true} ctxt0)) sequent of
                  SOME st => st
                | NONE => give_up ()
              (* Freeze schematics: Thm.assume rejects schematic hypotheses. *)

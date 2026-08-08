@@ -289,7 +289,7 @@ fun xOF prove_discharge ctxt opt_thms st =
              |> Thm.forall_elim_vars (Thm.maxidx_of st + 1)
       val atomize_back =
         if LEN <= Thm.nprems_of st then I
-        else fconv_rule (Object_Logic.atomize ctxt)
+        else fconv_rule (My_Object_Logic.atomize_conv {strict=true} ctxt)
 
       (* ---- informative failure (DRAFT wording) ---- *)
       fun thm_desc fallback th =
@@ -316,7 +316,7 @@ fun xOF prove_discharge ctxt opt_thms st =
             | blame (j, SOME f) =
                 let val prem = nth (Thm.prems_of st') (j - 1)
                 in case (pair_diag f prem,
-                         pair_diag (Object_Logic.rulify ctxt f) prem)
+                         pair_diag (My_Object_Logic.rulify ctxt f) prem)
                      of (SOME d, SOME _) => SOME (j, f, prem, SOME d)
                       | _ => NONE
                 end
@@ -360,7 +360,7 @@ fun xOF prove_discharge ctxt opt_thms st =
             | step (i, SOME fact) rule =
                 fact RSN (i, rule)
                 handle THM _ =>
-                  (Object_Logic.rulify ctxt fact RSN (i, rule)
+                  (My_Object_Logic.rulify ctxt fact RSN (i, rule)
                    handle THM _ =>
                      (case (if prove_discharge
                             then prove_premise ctxt fact

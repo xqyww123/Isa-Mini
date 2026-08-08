@@ -1,0 +1,17 @@
+RT_Chaining_Test : IDENTICAL (content, order-insensitive)
+RT_Fun_In_Proof_Test : IDENTICAL (content, order-insensitive)
+RT_Inst_Universal_Quantifiers_Test : IDENTICAL (content, order-insensitive)
+RT_Structured_Statement_Test : IDENTICAL (content, order-insensitive)
+RT_Induct_HO_Unif_Probe : IDENTICAL (content, order-insensitive)
+RT_Test_CaseSplit_Penetrate_Scratch : IDENTICAL (content, order-insensitive)
+RT_Test_Define_Facts_Visible : IDENTICAL (content, order-insensitive)
+RT_Test_SplitConjs2_Scratch : IDENTICAL (content, order-insensitive)
+RT_Ball_InstUniv_Test : CONTENT DIFFERS
+115,118d114
+< val iso_atomize = fn: context -> conv
+< val iso_atomize' = fn: context -> thm -> thm
+< val iso_rulify = fn: context -> conv
+< val iso_rulify' = fn: context -> thm -> thm
+RT_Clarsimp_Tac_Test : IDENTICAL (content, order-insensitive)
+RT_Consumes_Validation_Test : IDENTICAL (content, order-insensitive)
+RT_Test_SplitConjs : IDENTICAL (content, order-insensitive)

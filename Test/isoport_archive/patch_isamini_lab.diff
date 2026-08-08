@@ -1,0 +1,194 @@
+只在 isamini_base 中存在：Iso_Ctx.thy
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/Iso_E2E2.thy isamini_lab/Iso_E2E2.thy
+--- isamini_base/Iso_E2E2.thy	2026-08-06 16:37:16.300822765 +0800
++++ isamini_lab/Iso_E2E2.thy	2026-08-06 16:37:16.300822765 +0800
+@@ -1,6 +1,7 @@
+ theory Iso_E2E2
+   imports Minilang
+ begin
++declare [[iso_engine = "simp_strict"]]
+ 
+ axiomatization AA :: bool and PP :: "nat \<Rightarrow> bool"
+ 
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/Iso_E2E.thy isamini_lab/Iso_E2E.thy
+--- isamini_base/Iso_E2E.thy	2026-08-06 16:35:14.689586835 +0800
++++ isamini_lab/Iso_E2E.thy	2026-08-06 16:35:14.689586835 +0800
+@@ -1,6 +1,7 @@
+ theory Iso_E2E
+   imports Minilang
+ begin
++declare [[iso_engine = "simp_strict"]]
+ 
+ axiomatization AA :: bool and BB :: bool
+            and PP :: "nat \<Rightarrow> bool" and RR5 :: "nat \<Rightarrow> bool"
+只在 isamini_base 中存在：Iso_GoalSide.thy
+只在 isamini_lab 中存在：Iso_LabBall.thy
+只在 isamini_lab 中存在：Iso_Lab.thy
+只在 isamini_base 中存在：Iso_Leak.thy
+只在 isamini_base 中存在：Iso_NST.thy
+只在 isamini_base 中存在：Iso_ObjAtom.thy
+只在 isamini_base 中存在：Iso_OldConv.thy
+只在 isamini_lab 中存在：Iso_Sanity.thy
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/library/aux_thms.ML isamini_lab/library/aux_thms.ML
+--- isamini_base/library/aux_thms.ML	2026-06-11 19:07:13.714556402 +0800
++++ isamini_lab/library/aux_thms.ML	2026-08-06 16:19:21.027152926 +0800
+@@ -34,10 +34,6 @@
+ 
+ end
+ 
+-val iso_atomize : Proof.context -> conv
+-val iso_rulify  : Proof.context -> conv
+-val iso_atomize': Proof.context -> thm -> thm
+-val iso_rulify' : Proof.context -> thm -> thm
+ val concl_conv : (Proof.context -> conv) -> Proof.context -> conv
+ 
+ val simp_fact_name' : string -> string
+@@ -76,13 +72,6 @@
+ val TAG_def      = @{thm TAG_def}
+ val TAG_def'sym  = @{thm TAG_def[symmetric]}
+ 
+-val ISO_ALL_def  = @{thm atomize_all[folded ISO_ALL_def, symmetric]}
+-val ISO_ALL'sym_def  = @{thm atomize_all[folded ISO_ALL_def]}
+-val ISO_IMP_def  = @{thm atomize_imp[folded ISO_IMP_def, symmetric]}
+-val ISO_IMP'sym_def  = @{thm atomize_imp[folded ISO_IMP_def]}
+-val ISO_PROP_def  = @{thm ISO_PROP}
+-val ISO_PROP'sym_def  = @{thm ISO_PROP[symmetric]}
+-
+ val conjunction_imp = @{thm conjunction_imp}
+ val conjunction_imp'sym = @{thm conjunction_imp[symmetric]}
+ 
+@@ -94,43 +83,6 @@
+       val y1 = (cv1 ct1)
+   in Thm.combination y1 y2 end;
+ 
+-fun iso_atomize ctxt ctm =
+-  let open Conv
+-   in case Thm.term_of ctm
+-   of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+-        ( combination_conv (arg_conv (iso_atomize ctxt))
+-                           (iso_atomize ctxt)
+-          then_conv rewr_conv Thms.ISO_IMP'sym_def
+-        ) ctm
+-    | Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
+-        ( arg_conv (abs_conv (iso_atomize o snd) ctxt)
+-          then_conv rewr_conv Thms.ISO_ALL'sym_def
+-        ) ctm
+-    | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ =>
+-        ( rewr_conv Thms.ISO_PROP'sym_def ) ctm
+-    | _ => all_conv ctm
+-  end
+-
+-fun iso_rulify ctxt ctm =
+-  let open Conv
+-   in case Thm.term_of ctm
+-   of _ $ (Const(\<^const_name>\<open>ISO_IMP\<close>, _) $ _ $ _) =>
+-        ( rewr_conv Thms.ISO_IMP_def then_conv
+-          combination_conv (arg_conv (iso_rulify ctxt))
+-                           (iso_rulify ctxt) 
+-        ) ctm
+-    | _ $ (Const(\<^const_name>\<open>ISO_ALL\<close>, _) $ Abs _) =>
+-        ( rewr_conv Thms.ISO_ALL_def then_conv
+-          arg_conv (abs_conv (iso_rulify o snd) ctxt)
+-        ) ctm
+-    | _ $ (Const(\<^const_name>\<open>ISO_PROP\<close>, _) $ _) =>
+-        ( rewr_conv Thms.ISO_PROP_def ) ctm
+-    | _ => all_conv ctm
+-  end
+-
+-val iso_atomize' = Conv.fconv_rule o iso_atomize
+-val iso_rulify'  = Conv.fconv_rule o iso_rulify
+-
+ fun concl_conv C ctxt ctm =
+   case Thm.term_of ctm
+     of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
+只在 isamini_lab/library 中存在：iso_atomize.ML
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/library/proof.ML isamini_lab/library/proof.ML
+--- isamini_base/library/proof.ML	2026-08-06 12:59:52.043027216 +0800
++++ isamini_lab/library/proof.ML	2026-08-06 16:19:32.560315578 +0800
+@@ -575,7 +575,7 @@
+   end
+ 
+ fun init_goal ctxt th = th
+-      |> Conv.fconv_rule (concl_conv iso_atomize ctxt)
++      |> Conv.fconv_rule (concl_conv Phi_Conv.iso_atomize_conv ctxt)
+       |> protect_goals
+ 
+ val num_goals_of =
+@@ -661,7 +661,7 @@
+   end
+ 
+ fun finalize_goal ctxt th = th
+-      |> Conv.fconv_rule (concl_conv iso_rulify ctxt)
++      |> Conv.fconv_rule (concl_conv Phi_Conv.iso_rulify_conv ctxt)
+ 
+ (* Printer *)
+ 
+diff --color -ru '--exclude=*.proof-cache*' '--exclude=__pycache__' '--exclude=*~' '--exclude=.git*' '--exclude=*.pyc' isamini_base/Minilang.thy isamini_lab/Minilang.thy
+--- isamini_base/Minilang.thy	2026-08-06 15:27:25.329986773 +0800
++++ isamini_lab/Minilang.thy	2026-08-06 16:20:17.548994761 +0800
+@@ -34,19 +34,55 @@
+ definition \<open>TAG X \<equiv> X\<close>
+ definition \<open>GOAL (X::prop) \<equiv> X\<close>
+ definition \<open>PROTECT X \<equiv> X\<close>
+-definition \<open>ISO_ALL \<equiv> HOL.All\<close>
+-definition \<open>ISO_IMP \<equiv> HOL.implies\<close>
+-definition \<open>ISO_PROP (X::bool) \<equiv> X\<close>
+-definition \<open>ISO_TERM (x::'a::{}) \<equiv> True\<close>
+-
+-lemma ISO_PROP:
+-  \<open>Trueprop (ISO_PROP P) \<equiv> Pure.prop (Trueprop P)\<close>
+-  unfolding ISO_PROP_def Pure.prop_def .
++
++subsubsection \<open>Isomorphic Atomize (ported from phi-system PLPR)\<close>
++
++ML_file \<open>./library/iso_atomize.ML\<close>
++
++definition \<open>pure_imp_embed \<equiv> (\<longrightarrow>)\<close>
++definition pure_all_embed :: \<open>('a \<Rightarrow> bool) \<Rightarrow> bool\<close> (binder \<open>\<forall>\<^sub>e\<^sub>m\<^sub>b\<^sub>e\<^sub>d \<close> 10)
++  where \<open>pure_all_embed \<equiv> (All)\<close>
++definition \<open>pure_conj_embed \<equiv> (\<and>)\<close>
++definition \<open>pure_prop_embed x \<equiv> x\<close>
++definition \<open>pure_eq_embed \<equiv> (=)\<close>
++definition \<open>pure_term_embed (x::'a::{}) \<equiv> True\<close>
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>(X \<equiv> Y) \<equiv> Trueprop (pure_eq_embed X Y)\<close>
++  unfolding pure_eq_embed_def atomize_eq .
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>(P \<Longrightarrow> Q) \<equiv> Trueprop (pure_imp_embed P Q)\<close>
++  unfolding atomize_imp pure_imp_embed_def .
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>(P &&& Q) \<equiv> Trueprop (pure_conj_embed P Q)\<close>
++  unfolding atomize_conj pure_conj_embed_def .
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>(\<And>x. P x) \<equiv> Trueprop (pure_all_embed (\<lambda>x. P x))\<close>
++  unfolding atomize_all pure_all_embed_def .
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>PROP Pure.prop (Trueprop P) \<equiv> Trueprop (pure_prop_embed P)\<close>
++  unfolding Pure.prop_def pure_prop_embed_def .
++
++(* phi's 6th predefined rule, `atomize_Ball`, is NOT ported: it is stated over
++   phi's own meta binder `meta_Ball` (+ `Premise`), constants Minilang does not
++   have.  HOL's own `atomize_ball` is deliberately NOT used in its place: its
++   LHS `(\<And>x. x \<in> A \<Longrightarrow> P x)` also matches the atomize_all/atomize_imp rules,
++   which would make the rule set non-confluent. *)
++
++lemma [iso_atomize_rules, symmetric, iso_rulify_rules]:
++  \<open>(TERM (x::'a::{})) \<equiv> Trueprop (pure_term_embed x)\<close>
++  unfolding pure_term_embed_def term_def
++  by (rule equal_intr_rule; (rule TrueI | assumption))
+ 
+ ML_file \<open>./library/aux_thms.ML\<close>
+ 
+-hide_fact ISO_PROP
+-hide_const (open) TAG GOAL PROTECT ISO_ALL ISO_IMP ISO_PROP
++hide_const (open) TAG GOAL PROTECT
++  pure_imp_embed pure_all_embed pure_conj_embed pure_prop_embed pure_eq_embed
++  pure_term_embed
+ 
+ ML_file \<open>./library/unify_diagnostic.ML\<close>  (* before aux.ML: xOF uses Unify_Diagnostic *)
+ ML_file \<open>./library/aux.ML\<close>

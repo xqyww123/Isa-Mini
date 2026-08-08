@@ -1,0 +1,12 @@
+===== REGNEW / RT_Chaining_Test : exit=0
+===== REGNEW / RT_Fun_In_Proof_Test : exit=1
+===== REGNEW / RT_Inst_Universal_Quantifiers_Test : exit=1
+===== REGNEW / RT_Structured_Statement_Test : exit=1
+===== REGNEW / RT_Induct_HO_Unif_Probe : exit=1
+===== REGNEW / RT_Test_CaseSplit_Penetrate_Scratch : exit=1
+===== REGNEW / RT_Test_Define_Facts_Visible : exit=0
+===== REGNEW / RT_Test_SplitConjs2_Scratch : exit=0
+===== REGNEW / RT_Ball_InstUniv_Test : exit=0
+===== REGNEW / RT_Clarsimp_Tac_Test : exit=1
+===== REGNEW / RT_Consumes_Validation_Test : exit=0
+===== REGNEW / RT_Test_SplitConjs : exit=0
