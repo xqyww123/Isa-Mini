@@ -174,6 +174,11 @@ val _ = writeln ("CORPUS: " ^ string_of_int (length corpus_all) ^ " shapes");
 fun oracle_target t =
   let val t0 = Object_Logic.atomize_term ctxt t
   in if fastype_of t0 = bT then Tp t0 else t0 end;
+
+(* positional binder-name walk: aconv ignores Abs names, this does not *)
+fun binder_names (Abs (n, _, b)) = n :: binder_names b
+  | binder_names (f $ x) = binder_names f @ binder_names x
+  | binder_names _ = [];
 \<close>
 
 section \<open>8-2: facade sweep -- every shape, output aconv the oracle target\<close>
@@ -190,11 +195,18 @@ fun sweep (nm, t) =
       val rhs = Thm.term_of (Thm.rhs_of eq);
       val target = oracle_target t;
       val rhs_ok = rhs aconv target;
+      (* aconv is alpha-blind; the repaired branch must also keep the
+         target's binder names (positionally valid since rhs aconv target) *)
+      val names_ok = binder_names rhs = binder_names target;
       val _ = if lhs_ok then () else fail (nm ^ ": conv lhs <> input");
       val _ = if rhs_ok then () else
         fail (nm ^ ": output <> target\n  GOT  " ^ @{make_string} rhs ^
               "\n  WANT " ^ @{make_string} target);
-    in rhs_ok end
+      val _ = if not rhs_ok orelse names_ok then () else
+        fail (nm ^ ": binder names diverge from target\n  GOT  " ^
+              @{make_string} (binder_names rhs) ^ "\n  WANT " ^
+              @{make_string} (binder_names target));
+    in rhs_ok andalso names_ok end
     catch exn => (fail (nm ^ ": EXCEPTION " ^ @{make_string} exn); false)\<close>;
 
 val sweep_results = map sweep corpus_all;
@@ -208,15 +220,28 @@ val _ = writeln ("SWEEP: " ^ string_of_int (length corpus_all) ^ " shapes, ok=" 
    system damages (repaired > 0), else the trimming rule of 8-2 is violated *)
 val _ = check "census: fallback must be 0" (fallback = 0);
 val _ = check "corpus red line: no damaged (identical=false) shapes left" (repaired > 0);
+
+(* pinned binder names, hardcoded from the INPUT: unlike the sweep's
+   rhs-vs-target comparison this cannot float with atomize_term, so an
+   alpha-renaming refactor of the target computation itself turns red here *)
+val _ = List.app (fn (nm, t, want) =>
+  let
+    val rhs = Thm.term_of (Thm.rhs_of
+                (My_Object_Logic.atomize_conv {strict = false} ctxt (Thm.cterm_of ctxt t)));
+  in
+    if binder_names rhs = want then ()
+    else fail (nm ^ ": pinned binder names\n  GOT  " ^ @{make_string} (binder_names rhs) ^
+               "\n  WANT " ^ @{make_string} want)
+  end)
+  [("pin_t1", #2 (hd probe_corpus), ["a", "xx"]),
+   ("pin_flagship_yyy",
+    Logic.mk_implies (Tp AA, Tp (HOLogic.mk_imp (allx "yyy" (PP $ Bound 0), BB))),
+    ["yyy"])];
 \<close>
 
 section \<open>8-2: K4 standing assertion -- fast path never hides binder-name loss\<close>
 
 ML \<open>
-fun binder_names (Abs (n, _, b)) = n :: binder_names b
-  | binder_names (f $ x) = binder_names f @ binder_names x
-  | binder_names _ = [];
-
 fun k4_scan (nm, t) =
   let
     val target = oracle_target t;
