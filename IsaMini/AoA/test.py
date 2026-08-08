@@ -1129,6 +1129,90 @@ async def _test_PostInstRuleShared(root: Root, file: MyIO):
     await _assert_schematic_free(root, file, kinds)
 
 
+@model_test("GateSchematic", "Test_GateSchematic.thy", 16)
+async def _test_GateSchematic(root: Root, file: MyIO):
+    # The schematic-variable gate (can_operate_on_schematic_goal): on a goal
+    # carrying ?x in both conjuncts, Branch / CaseSplit / SplitConjs must each
+    # be REJECTED before their beginning op executes (no state landed), with
+    # the uniform rejection wording; after InstVarsInGoal pins ?x the proof
+    # completes; deleting the InstVarsInGoal step re-schematizes the goal and
+    # the refresh must re-reject the downstream SplitConjs.
+    print_header("Initial", file)
+    root.print(0, file)
+
+    async def attempt_rejected(label: str, opr) -> None:
+        root.session.age += 1
+        [n] = (await root.fill("1", [opr])).committed
+        print_header(f"After rejected {label}", file)
+        root.print(0, file)
+        file.write(f"[{label}] state landed on target: "
+                   f"{n._state_after_beginning()._initialized}\n")
+        await root.delete([n.id])
+
+    await attempt_rejected("Branch", Branch.gen_single({
+        "thought": "case on sign (should be gated)",
+        "cases": [
+            {"statement": {"english": "x is 7", "isabelle": "PP 7", "name": "yes"}},
+            {"statement": {"english": "x is not 7", "isabelle": "\N{NOT SIGN} PP 7", "name": "no"}},
+        ]}))
+    await attempt_rejected("CaseSplit", CaseSplit.gen_single({
+        "thought": "split on PP 7 (should be gated)",
+        "target_isabelle_term": "PP 7"}))
+    await attempt_rejected("SplitConjs", SplitConjs.gen_single({
+        "thought": "split the conjunction (should be gated)"}))
+
+    root.session.age += 1
+    await root.fill("1", [
+        InstVarsInGoal.gen_single({
+            "thought": "pin ?x to 7",
+            "instantiations": [{"name": "?x", "value": "7::nat"}]}),
+        SplitConjs.gen_single({"thought": "now the goal is schematic-free"}),
+    ])
+    print_header("After InstVarsInGoal + SplitConjs", file)
+    root.print(0, file)
+
+    root.session.age += 1
+    [_] = (await root.fill("2.1.1", [InferenceRule.gen_single({
+        "thought": "close PP 7", "rule": {"name": "pp7"}})])).committed
+    [_] = (await root.fill("2.2.1", [InferenceRule.gen_single({
+        "thought": "close QQ 7", "rule": {"name": "qq7"}})])).committed
+    print_header("Completed", file)
+    root.print(0, file)
+    s: set = set()
+    root.unfinished_nodes(s)
+    file.write(f"unfinished: {len(s)}\n")
+
+    # Upstream edit: removing the InstVarsInGoal step re-schematizes the goal
+    # flowing into SplitConjs; the refresh must re-reject it at the gate.
+    root.session.age += 1
+    await root.delete(["1"])
+    print_header("After deleting the InstVarsInGoal step", file)
+    root.print(0, file)
+    s = set()
+    root.unfinished_nodes(s)
+    file.write(f"unfinished after upstream delete: {len(s)}\n")
+
+
+@model_test("InstVarsTypeVar", "Test_InstVarsTypeVar.thy", 10)
+async def _test_InstVarsTypeVar(root: Root, file: MyIO):
+    # InstVarsInGoal's type-variable form: a leading ' in the name takes a
+    # TYPE expression as value; refl then closes the goal.
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    await root.fill("1", [
+        InstVarsInGoal.gen_single({
+            "thought": "pin ?'a to nat",
+            "instantiations": [{"name": "?'a", "value": "nat"}]}),
+        InferenceRule.gen_single({"thought": "reflexivity", "rule": {"name": "refl"}}),
+    ])
+    print_header("After InstVarsInGoal + refl", file)
+    root.print(0, file)
+    s: set = set()
+    root.unfinished_nodes(s)
+    file.write(f"unfinished: {len(s)}\n")
+
+
 @model_test("PostInstValidation", "Test_PostInstValidation.thy", 22)
 async def _test_PostInstValidation(root: Root, file: MyIO):
     # Exercise the answer validator: empty / missing / unknown / duplicate /

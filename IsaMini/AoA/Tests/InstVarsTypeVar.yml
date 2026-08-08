@@ -1,0 +1,23 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ?y = ?y
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After InstVarsInGoal + refl
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ?y = ?y
+proof:
+  - step id: 1
+    thought: pin ?'a to nat
+    operation: InstVarsInGoal
+    instantiations: ?'a := nat
+  - step id: 2
+    thought: reflexivity
+    operation: Inference Rule
+    rule:
+      - refl: ?t = ?t
+unfinished: 0
