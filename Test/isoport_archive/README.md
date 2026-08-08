@@ -20,6 +20,14 @@ iso-atomize/rulify 移植（`MY_OBJECT_LOGIC_PLAN.md` 第二部分）2026-08-06 
 - 其余 `*.txt`（`ctx_*` / `e2e*` / `leak*` / `ol*` / `objatom` / `goalside_*` 等）——
   探针输出。
 
+## `out_LANDED_Iso_*.txt`（2026-08-08 落地验收列）
+
+落地当日在**已切换的工作树**（提交 `51c0157`）上用 `corpus/Iso_*.thy` 重跑的
+候选列（引擎 = `iNet_Thm_Collection` + `Merely_Rewrite` + `My_Object_Logic`,
+即真正落地的形态）。十格全过：A/A2/B/C1/C2/E 六格由 BEFORE 列的 OBTAIN 崩溃
+转为成功,`##RESULT` 与 LAB3 列逐字同；C0/D/E0/Isar 与 BEFORE 列逐字同。
+上文对 LAB3 列「不是落地形态」的告诫不适用于本列。
+
 ## `corpus/`（2026-08-08 落地当日补档）
 
 对拍矩阵与回归的 **theory 源码**（`Iso_*.thy` 32 件、`RT_*.thy` 12 件,取自
