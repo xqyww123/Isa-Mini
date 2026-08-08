@@ -22,7 +22,11 @@ val zero_cost: agent_cost
 
 (* Raised by AoA_RPC to signal the agent gave up (surrender/refute/resource
    exhaustion). Exposed so the REPL-app wrapper in the Minilang_AoA_REPL session
-   can catch it after the app moved out of this structure. *)
+   can catch it after the app moved out of this structure.
+   Also raised BEFORE any agent starts (with reason "technical_failure" and
+   zero_cost) when the goal cannot be brought into an AoA-workable shape —
+   e.g. the shared-schematic subgoal merge at the head of AoA_RPC fails to
+   atomize. *)
 exception Agent_Give_Up of string * string * agent_cost
 
 (* The extra `string * raw_packer` group is the Task: a task-kind tag plus a
@@ -364,6 +368,72 @@ end
 fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (ctxt0, sequent) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
+
+      (* Unfold locale/class instance goals (needs `standard`) before the agent runs *)
+      val sequent =
+        if Phi_Sledgehammer_Solver.need_standard_tac ctxt0 sequent
+        then (case SINGLE (Classical.standard_tac ctxt0 []) sequent of
+                SOME st' => st'
+              | NONE => sequent)
+        else sequent
+      (* Preprocess: split large goals before handing to the agent *)
+      val sequent =
+        (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt0) sequent of
+           SOME st' => st'
+         | NONE => sequent)
+
+      (* S12-S14: when several top-level subgoals share a schematic variable,
+         AoA's per-subgoal proof trees would instantiate it independently and
+         the final replay fails only after the whole budget is spent.  Merge
+         such subgoals into ONE goal before anything else sees them: atomize
+         each subgoal into a HOL proposition and conjoin with HOL.conj
+         (SplitConjs can split those back; Pure `&&&` it cannot).  The state
+         is rebuilt by kernel forward construction, so it still proves the
+         ORIGINAL conclusion and the exit path is untouched.  Must stay before
+         `Hasher.goal` and `Minilang.INIT` — the cache key and `$init` see the
+         merged goal. *)
+      val sequent =
+        let val prems = Thm.prems_of sequent
+            (* Sharing is keyed on indexed names (term and type variables alike),
+               matching Minilang.INIT's rejection predicate exactly — so on this
+               path every state INIT would reject gets merged (or gives up
+               cleanly) before INIT ever sees it. *)
+            fun var_names t = distinct (op =)
+                  (map #1 (Term.add_vars t []) @ map #1 (Term.add_tvars t []))
+            fun shares (t1, t2) =
+              exists (member (op =) (var_names t2)) (var_names t1)
+            fun any_shared [] = false
+              | any_shared (t :: ts) =
+                  exists (fn t' => shares (t, t')) ts orelse any_shared ts
+        in if length prems < 2 orelse not (any_shared prems) then sequent
+           else let
+             fun give_up () = raise Agent_Give_Up ("technical_failure",
+                   "The goal has multiple subgoals sharing schematic variables \
+                   \and could not be merged into one.", zero_cost)
+             val atomized =
+               case SINGLE (ALLGOALS (Object_Logic.full_atomize_tac ctxt0)) sequent of
+                 SOME st => st
+               | NONE => give_up ()
+             (* Freeze schematics: Thm.assume rejects schematic hypotheses. *)
+             val ((_, [atomized']), ctxt') = Variable.import true [atomized] ctxt0
+             val props = map (fn t => HOLogic.dest_Trueprop t
+                                      handle TERM _ => give_up ())
+                             (Thm.prems_of atomized')
+             val conj_ct = Thm.cterm_of ctxt'
+                             (HOLogic.mk_Trueprop (foldr1 HOLogic.mk_conj props))
+             val cj = Thm.assume conj_ct
+             fun conjuncts 1 th = [th]
+               | conjuncts k th =
+                   (th RS @{thm conjunct1}) :: conjuncts (k - 1) (th RS @{thm conjunct2})
+             val merged' =
+               fold (fn th => fn st => Thm.implies_elim st th)
+                    (conjuncts (length props) cj) atomized'
+               |> Thm.implies_intr conj_ct
+          in case Variable.export ctxt' ctxt0 [merged'] of
+               [th] => th
+             | _ => give_up ()
+          end
+        end
 
       (* Shared state for all callbacks *)
       val counters = {
@@ -881,6 +951,61 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
         timeout = NONE
       }
 
+      (* Gate prerun: execute `opr` on the state named by `state_id` WITHOUT
+         recording the result into the state table, and return, for each
+         derived subgoal, its schematic term/type variables.  The reporter is
+         captured (not emitted) for the duration, so the Python side sees no
+         protocol messages from the prerun; derived subgoals are discriminated
+         structurally by Minilang.derived_subgoals_of.  Only sound for
+         operations whose dispatch path does not advance session-shared
+         counters — see the contract note on Minilang.derived_subgoals_of. *)
+      val schematic_vars_of_derived_subgoals_callback = {
+        name = "IsaMini.schematic_vars_of_derived_subgoals",
+        (* (state_id, opr): opr in the same (cmd, arg) shape as proof_opr's. *)
+        arg_schema = unpackPair (unpackString, MiniLang_Agent.xcmd_unpacker),
+        (* per derived subgoal: (term-vars, type-vars), each a list of
+           (display-name, type-or-sort) — same convention as
+           IsaMini.schematic_variables_of. *)
+        ret_schema = packList (packPair
+          (packList (packPair (packString, packString)),
+           packList (packPair (packString, packString)))),
+        function = (fn (state_id, opr) =>
+          let val s0 = get_state state_id
+              val (cfg', budget) = cfg
+              val mode = if !replay_mode then MiniLang_Agent.REPLAY
+                         else MiniLang_Agent.LIVE
+              val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
+              val (s1, prerun_msgs) =
+                Minilang.record_reporter (MiniLang_Agent.interpret full_config opr) s0
+              val subgoals = Minilang.derived_subgoals_of s0 s1 prerun_msgs
+              val ctxt = Minilang.context_of s1
+              val string_of_type = MiniLang_Agent.string_of_type ctxt
+              val string_of_sort = MiniLang_Agent.string_of_sort ctxt
+           in map (fn g =>
+                (Term.add_vars g [] |> rev |> map (fn (xi, T) =>
+                   (Term.string_of_vname xi, string_of_type T)),
+                 Term.add_tvars g [] |> rev |> map (fn (xi, S) =>
+                   (Term.string_of_vname xi, string_of_sort S))))
+              subgoals
+          end handle Minilang.OPR_FAIL (Minilang.PROOF_FAIL, msg) =>
+              error (RPC_Pretty.trim_markup msg)
+            | Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
+              error (RPC_Pretty.trim_markup msg)
+            | Minilang.OPR_FAIL (Minilang.TERMLANG, msg) =>
+              error (String.concat ["Syntax Error in Term Language.\n", RPC_Pretty.trim_markup msg])
+            | Minilang.OPR_FAIL (Minilang.OTHER, msg) =>
+              error (RPC_Pretty.trim_markup msg)
+            | MiniLang_Agent.FACT_IN_TIME_FAIL prop =>
+              error (String.concat [
+                "The following indicated fact is non-trivial, you must prove it manually:\n",
+                RPC_Pretty.trim_markup (MiniLang_Agent.string_of_term
+                  (Minilang.context_of (get_state state_id)) prop)])
+            | Phi_Sledgehammer_Solver.Auto_Fail _ =>
+              error "Proof operation failed."
+            | ERROR msg => error (RPC_Pretty.trim_markup msg)),
+        timeout = NONE
+      }
+
       (* All free variables of the ENTIRE leading goal (premises ⟹ conclusion),
        * reverted to agent-facing names. Used by the Induction pre-flight to
        * restrict the variable-classification offer to variables that actually
@@ -1388,6 +1513,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
           mk_callback resolve_notation_callback,
           mk_callback abbrev_expansion_head_callback,
           mk_callback schematic_vars_callback,
+          mk_callback schematic_vars_of_derived_subgoals_callback,
           mk_callback goal_variables_callback,
           mk_callback potential_defs_callback,
           mk_callback abbreviation_defs_callback,
@@ -1490,20 +1616,15 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val log_path = if log_dir = "" then "(no logging)"
                           else log_dir ^ "/" ^ invocation_id
            val _ = writeln ("AoA (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
-           (* Unfold locale/class instance goals (needs `standard`) before the agent runs *)
-           val sequent =
-             if Phi_Sledgehammer_Solver.need_standard_tac ctxt sequent
-             then (case SINGLE (Classical.standard_tac ctxt []) sequent of
-                     SOME st' => st'
-                   | NONE => sequent)
-             else sequent
-           (* Preprocess: split large goals before handing to the agent *)
-           val sequent =
-             (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt) sequent of
-                SOME st' => st'
-              | NONE => sequent)
         in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) usual_task (ctxt, sequent)
            |> (fn (_, sequent', _) => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
+           (* Banner ⑤ of the failure-dispatch design (PHI_VC_SOLVER D51; only
+              this branch is implemented ahead of the rest): a technical stop
+              is neither "goal too hard" nor "goal refuted" — say so and carry
+              the detail. Other give-up reasons keep propagating raw until the
+              full dispatch lands. *)
+           handle Agent_Give_Up ("technical_failure", detail, _) =>
+             error ("The proof agent stopped for a technical reason:\n" ^ detail)
        end )
 
 

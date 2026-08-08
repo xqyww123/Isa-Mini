@@ -83,6 +83,8 @@ datatype message = New_Items of items
                  | Internal of exn
 val set_reporter : (message (*new items*) -> unit) -> unit
 val get_reporter : unit -> (message (*new items*) -> unit)
+val record_reporter : ('a -> 'b) -> 'a -> 'b * message list
+val derived_subgoals_of : state -> state -> message list -> term list
 
 val empty_items : items
 val cat_items : items -> items -> items
@@ -793,6 +795,58 @@ fun get_reporter () =
     of NONE => default_reporter
      | SOME r => r
 
+(* Run `f x` while capturing every reporter message into a buffer, returned in
+   emission order.  The caller's reporter is restored afterwards even on
+   exceptions (Thread_Data.setmp). *)
+fun record_reporter f x =
+  let val buf = Unsynchronized.ref ([] : message list)
+      val y = Thread_Data.setmp reporter (SOME (fn m => buf := m :: !buf)) f x
+   in (y, rev (!buf)) end
+
+(* Derived-subgoal query for gate/probe preruns.  Discriminates STRUCTURALLY,
+   never by operation name:
+   - block-opening operation (new HHF :: ENDBLK frames above the entry frame,
+     e.g. CASE_SPLIT): the derived subgoals are the terms of the FIRST Goals
+     message captured during the run — the final stack materializes only
+     case 1; the remaining cases live in a MAGIC closure until NEXT, so the
+     final state cannot count them;
+   - single-frame operation (stack depth unchanged, e.g. SPLIT_CONJS2, RULE):
+     the derived subgoals are the first n_new = |goals| - n0 + 1 goals of the
+     final leading sequent.  The final-state read is REQUIRED here, not just
+     an alternative to the message: a prerun op may carry baked post-rule
+     instantiation rounds, and the op's Goals message is emitted BEFORE
+     apply_post_insts runs — a pre-instantiation snapshot — whereas the
+     final state is post-instantiation.  A message-based read would make the
+     post-inst probe's convergence check blind to its own progress.
+   Known boundaries (decision-neutral for the current callers, which only
+   compare the count against <=1 / >=2 or read post-inst variable sets):
+   - if the prerun op SOLVES the frame's last goal above a MAGIC frame,
+     `maintain` fires the continuation and the stack shrinks — the result
+     then reports the PARENT frame's leftover goals, and a negative n_new
+     makes `take` silently return the whole list;
+   - a single-case CASE_SPLIT/INDUCT pushes HHF :: MAGIC with no ENDBLK and
+     is therefore classified single-frame.
+   Only valid for operations whose dispatch path does not advance session-
+   shared counters (HAVE / SUFFICES / SETUP_REWRITING / AUTO_INTRO /
+   AUTO_SIMPLIFY advance prem_counter — prerunning those would permanently
+   skip numbering).  Current callers — CASE_SPLIT (CaseSplit gate),
+   SPLIT_CONJS2 (SplitConjs gate), RULE (InferenceRule post-inst probe) —
+   are verified counter-clean; verify that property before adding any new
+   caller. *)
+fun derived_subgoals_of (((_, SK0), _, _) : state) (((_, SK1), _, _) : state) msgs =
+  if length SK1 > length SK0
+     andalso (case SK1 of HHF _ :: ENDBLK _ :: _ => true | _ => false)
+  then (case get_first (fn Goals gs => SOME gs | _ => NONE) msgs of
+          SOME gs => gs
+        | NONE => raise Fail "derived_subgoals_of: block-opening operation \
+                             \emitted no Goals message")
+  else
+    let val n0 = (case SK0 of HHF (st, _) :: _ => length (goals_of' st)
+                            | _ => raise BROKEN_INVARIANT)
+        val gs = (case SK1 of HHF (st, _) :: _ => goals_of' st
+                            | _ => raise BROKEN_INVARIANT)
+     in take (length gs - n0 + 1) gs end
+
 fun report_goal (ctxt, SK) = (
           (case SK of HHF (st, _) :: _ =>
              (case try Logic.dest_implies (Thm.prop_of st)
@@ -1429,9 +1483,20 @@ fun is_conj_goal st =
          | _ => false
   end
 
+(* Reports the newly split conjuncts (sibling goals excluded) through the
+   reporter, following raw_apply's convention: the Goals payload of an
+   operation is exactly its NEW subgoals — Python derives child counts from
+   it. Count via goals_of' (protected-GOAL form; Thm.nprems_of under-counts
+   here). *)
+fun report_split_goals st st' =
+  let val n_new = length (goals_of' st') - length (goals_of' st) + 1
+   in get_reporter () (Goals (take n_new (goals_of' st'))) end
+
 fun SPLIT_CONJS' (ctxt, HHF (st, items) :: L) =
     if is_conj_goal st
-    then (ctxt, HHF (protect_goals (split_conjs st), items) :: L)
+    then let val st' = protect_goals (split_conjs st)
+             val _ = report_split_goals st st'
+          in (ctxt, HHF (st', items) :: L) end
     else raise OPR_FAIL (INVALID_OPR, "SPLIT_CONJS: the leading goal is not a conjunction")
   | SPLIT_CONJS' _ = raise BROKEN_INVARIANT
 
@@ -1534,7 +1599,9 @@ end
 fun SPLIT_CONJS2' (ctxt, HHF (st, items) :: L) =
     let val st' = Conv.gconv_rule (distrib_goal_conj_conv ctxt) 1 st
      in if is_conj_goal st'
-        then (ctxt, HHF (protect_goals (split_conjs st'), items) :: L)
+        then let val st'' = protect_goals (split_conjs st')
+                 val _ = report_split_goals st st''
+              in (ctxt, HHF (st'', items) :: L) end
         (* Same message as SPLIT_CONJS' verbatim: keeps the MetaConjFromMultiShows
            golden green and authors no new user-facing wording. *)
         else raise OPR_FAIL (INVALID_OPR, "SPLIT_CONJS: the leading goal is not a conjunction")
@@ -2133,12 +2200,17 @@ fun INIT c st =
                 then deconflict_bound_names_thm st
                 else st
       (* Minilang does not support an initial state whose top-level subgoals share a
-         schematic variable.  Instantiation is state-global, not per subgoal, so
-         pinning such a variable while working on one subgoal silently specialises
-         the others -- steps that were available in a sibling stop applying, with
-         nothing pointing back at the cause. *)
+         schematic variable -- term or type.  Instantiation is state-global, not per
+         subgoal, so pinning such a variable while working on one subgoal silently
+         specialises the others -- steps that were available in a sibling stop
+         applying, with nothing pointing back at the cause.
+         Names are deduplicated per subgoal first: sharing means "occurs in >= 2
+         subgoals", so e.g. ?x::nat and ?x::int inside ONE subgoal must not count. *)
       val _ =
-        let val occurrences = maps (fn g => map #1 (Term.add_vars g [])) (Thm.prems_of st0)
+        let val occurrences =
+              maps (fn g => distinct (op =)
+                      (map #1 (Term.add_vars g []) @ map #1 (Term.add_tvars g [])))
+                   (Thm.prems_of st0)
             val shared = duplicates (op =) occurrences
          in if null shared then ()
             else raise OPR_FAIL (INVALID_OPR,
@@ -2395,18 +2467,24 @@ fun powerful_MP ctxt rule thA0 =
             | _ => Conv.all_conv ctm
       end
     val thA = Conv.fconv_rule (protect_prop ctxt) thA0
-  in rule
-  |> Conv.fconv_rule (Conv.arg1_conv (protect_prop ctxt))
-  |> (Thm.biresolution (SOME ctxt) true [(false, thA)]
-        THEN_ALL_NEW Thm.assumption (SOME ctxt)) 1
-  |> Seq.pull
-  |> (fn SOME (ret, _) => ret
-       | NONE => error (String.concat [
-            "BUG: CASES' MP\nrule: ", Thm.string_of_thm ctxt rule,
-            "\nthA0: ", Thm.string_of_thm ctxt thA0,
-            "\nthA (protected): ", Thm.string_of_thm ctxt thA,
-            "\nrule (protected): ", Thm.string_of_thm ctxt
-              (Conv.fconv_rule (Conv.arg1_conv (protect_prop ctxt)) rule)]))
+    val rule' = Conv.fconv_rule (Conv.arg1_conv (protect_prop ctxt)) rule
+    fun attempt match =
+      rule'
+      |> (Thm.biresolution (SOME ctxt) match [(false, thA)]
+            THEN_ALL_NEW Thm.assumption (SOME ctxt)) 1
+      |> Seq.pull
+  in case attempt true of
+       SOME (ret, _) => ret
+     | NONE =>
+        (* Strict matching can miss when the goal carries schematic variables;
+           retry the whole composed tactic as unification. *)
+        (case attempt false of
+           SOME (ret, _) => ret
+         | NONE => error (String.concat [
+              "BUG: CASES' MP\nrule: ", Thm.string_of_thm ctxt rule,
+              "\nthA0: ", Thm.string_of_thm ctxt thA0,
+              "\nthA (protected): ", Thm.string_of_thm ctxt thA,
+              "\nrule (protected): ", Thm.string_of_thm ctxt rule']))
  end
 
 fun make_case term =
@@ -3467,15 +3545,6 @@ fun atomize_term ctxt =
 
 (** SUFFICES **)
 
-(* Check if a term contains schematic variables *)
-fun has_schematic_vars tm =
-  let fun check (Var _) = true
-        | check (Abs (_, _, body)) = check body
-        | check (f $ x) = check f orelse check x
-        | check _ = false
-   in check tm
-  end
-
 (* Apply a "suffices" rule to transform a goal using P --> G *)
 fun apply_suffices_rule st impl_lem ctxt =
   let
@@ -3532,17 +3601,6 @@ fun SUFFICES' intro_bindings prep_prop raw_prop (ctxt0, HHF (st0raw, items0) :: 
     val st0 = case Seq.pull (Object_Logic.full_atomize_tac ctxt0 1 st0raw)
                 of SOME (st, _) => st
                  | NONE => st0raw
-
-    (* Check for schematic variables in goal — deliberately on the ORIGINAL
-       conclusion, so this rejection covers exactly what it covered before
-       objectification (which folds the premises into the goal as well). *)
-    val _ = case goals_of' st0raw of
-              [] => raise OPR_FAIL (INVALID_OPR, "SUFFICES requires at least one goal")
-            | (G :: _) =>
-                if has_schematic_vars (Logic.strip_assums_concl G)
-                then raise OPR_FAIL (INVALID_OPR,
-                       "SUFFICES does not support goals with schematic variables")
-                else ()
 
     (* Extract the current goal *)
     val goals = goals_of' st0

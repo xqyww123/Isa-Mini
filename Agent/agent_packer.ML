@@ -205,6 +205,8 @@ val unpacker =
      | "INTERPRET" => apfst INTERPRET o
          unpackTuple3 (unpackString, unpackString,
                        unpackList (unpackPair (unpackString, unpackString)))
+     | "INST_GOAL_VARS" => apfst INST_GOAL_VARS o
+         unpackList (unpackPair (unpackString, unpackString))
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -312,6 +314,9 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packTuple3 (
           packString, packString, packList (packPair (packString, packString))))
         ("INTERPRET", (qualifier, locale, insts))
+  | packer (INST_GOAL_VARS pairs) =
+      packPair (packString, packList (packPair (packString, packString)))
+        ("INST_GOAL_VARS", pairs)
 (* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
 
 end

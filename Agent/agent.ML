@@ -85,6 +85,11 @@ datatype ('term, 'thm, 'fact) command =
                      strings in both xcmd and icmd -- the terms are checked by
                      Isabelle's locale-expression parser, so `check_command` just
                      passes this through.*)
+  | INST_GOAL_VARS of (string * string) list
+      (*instantiations: (var-name, value-string) pairs; a leading "'" in the
+        name marks a type variable.  Plain strings in both xcmd and icmd —
+        parsed at interpret time, same shape as one post-rule instantiation
+        round.*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -275,6 +280,11 @@ datatype ('term, 'thm, 'fact) command =
                      strings in both xcmd and icmd -- the terms are checked by
                      Isabelle's locale-expression parser, so `check_command` just
                      passes this through.*)
+  | INST_GOAL_VARS of (string * string) list
+      (*instantiations: (var-name, value-string) pairs; a leading "'" in the
+        name marks a type variable.  Plain strings in both xcmd and icmd —
+        parsed at interpret time, same shape as one post-rule instantiation
+        round.*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -755,19 +765,11 @@ fun AUTO_INTRO (counters:counters) (opt_bindings: bindings option) (allow_fallba
       end
   end
 
-fun AUTO_SPLIT_CONJS (s: Minilang.state) : Minilang.state =
-  let val s' = Minilang.SPLIT_CONJS s
-      val _ = Minilang.get_reporter ()
-                (Minilang.Goals (Minilang.goals_of'
-                                   (Minilang.leading_proof_sequent_of s')))
-  in s' end
-
-fun AUTO_SPLIT_CONJS2 (s: Minilang.state) : Minilang.state =
-  let val s' = Minilang.SPLIT_CONJS2 s
-      val _ = Minilang.get_reporter ()
-                (Minilang.Goals (Minilang.goals_of'
-                                   (Minilang.leading_proof_sequent_of s')))
-  in s' end
+(* The Goals message is emitted by Minilang.SPLIT_CONJS/SPLIT_CONJS2 themselves
+   (library/proof.ML, report_split_goals) with only the NEWLY split conjuncts —
+   emitting the full frame list here would count sibling goals as children. *)
+val AUTO_SPLIT_CONJS  : Minilang.state -> Minilang.state = Minilang.SPLIT_CONJS
+val AUTO_SPLIT_CONJS2 : Minilang.state -> Minilang.state = Minilang.SPLIT_CONJS2
 
 (* Compute bindings for the leading proof goal by binding provided names in order.
    When Minilang.INTRO_split_prem_conj is on (the default for the agent) and a
@@ -1655,6 +1657,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         #2 (AUTO_INTRO counters opt_bindings allow_fallback s)
     | SPLIT_CONJS => AUTO_SPLIT_CONJS s
     | SPLIT_CONJS2 => AUTO_SPLIT_CONJS2 s
+    | INST_GOAL_VARS pairs => apply_post_insts [pairs] s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
             val rule_thms = resolve_to_thms ctxt [rule_fact]
@@ -2064,6 +2067,8 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i _ (INTRO opt_bindings) = INTRO opt_bindings
   | check_command_i _ SPLIT_CONJS = SPLIT_CONJS
   | check_command_i _ SPLIT_CONJS2 = SPLIT_CONJS2
+  | check_command_i _ (INST_GOAL_VARS pairs) = INST_GOAL_VARS pairs
+      (*plain-string payload; parsed at interpret time by apply_post_insts*)
   | check_command_i s (SPECIALIZE (name, rule_fact, insts, discharge_facts)) =
       let val ctxt = Minilang.context_of s
           val (names, raws) = ListPair.unzip insts

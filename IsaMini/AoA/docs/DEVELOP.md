@@ -178,9 +178,12 @@ Root(GoalContainer, StdBlock)             sub_nodes[0]=GlobalEnv, [1..]=top-leve
 
 Node ids look like `"global.1"`, `"2.1"`. Each proof-operation class is registered with
 `@proof_operation(name, ToolArg)` and compiles to a `Minilang_Operation` factory method (`HAVE`,
-`OBTAIN`, `RULE`, `HAMMER`, `INTRO`, `SUFFICES`, `BRANCH`, `CASE_SPLIT`, `INDUCT`, `END`, `NEXT`,
-`SORRY_*`, …). `Obvious` compiles to `HAMMER` (Sledgehammer/auto) — it is the planner's "close this
-routine goal" move, and a failed `Obvious` is exactly what triggers worker dispatch.
+`OBTAIN`, `RULE`, `HAMMER`, `INTRO`, `SUFFICES`, `BRANCH`, `CASE_SPLIT`, `INDUCT`,
+`INST_GOAL_VARS`, `END`, `NEXT`, `SORRY_*`, …). `Obvious` compiles to `HAMMER`
+(Sledgehammer/auto) — it is the planner's "close this routine goal" move, and a failed `Obvious`
+is exactly what triggers worker dispatch. `InstVarsInGoal` (a `Leaf`) compiles to
+`INST_GOAL_VARS` — one round of (name, value) instantiations for schematic variables remaining
+in the goal sequent.
 
 ### 4.3 Node lifecycle
 

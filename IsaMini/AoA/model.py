@@ -1608,6 +1608,19 @@ def _pack_varnames(varnames: list[varname_spec] | None) -> list[str | None] | No
         return None
     return [v.ascii if v is not None else None for v in varnames]
 
+def _gate_rejection(op_name: str, names: 'list[str]') -> str:
+    """The uniform gate-rejection sentence (user-approved wording).
+    Singular/plural computed explicitly — never write "variable(s)"."""
+    if len(names) == 1:
+        vars_part = f"schematic variable {names[0]}"
+        pronoun = "it"
+    else:
+        vars_part = f"schematic variables {', '.join(names)}"
+        pronoun = "them"
+    return (f"The proof goal contains {vars_part}. You must first instantiate "
+            f"{pronoun} using InstVarsInGoal before applying {op_name}.")
+
+
 def _pack_post_insts(insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> list[list[tuple[str, str]]]:
     """Pack post-rule schematic-instantiation rounds for the wire: a list of
     rounds, each a list of (var-name, value) pairs. Both components are
@@ -1735,6 +1748,14 @@ class Minilang_Operation(NamedTuple):
         # flattened and split in one step instead of forcing a deep Intro/SplitConjs
         # recursion. SPLIT_CONJS is kept for replaying older packed proofs.
         return Minilang_Operation("SPLIT_CONJS2", None)
+    @staticmethod
+    def INST_GOAL_VARS(insts: 'list[tuple[str, xterm | xtyp]]') -> 'Minilang_Operation':
+        """Instantiate residual schematic variables in the whole goal sequent:
+        one instantiation round in the same (var-name, value) shape as the
+        post-rule rounds of RULE/CASE_SPLIT/INDUCT. A leading "'" in the
+        var-name marks a type variable."""
+        return Minilang_Operation("INST_GOAL_VARS",
+            [(ascii_of_unicode(name), ascii_of_unicode(value)) for name, value in insts])
     @staticmethod
     def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
@@ -2495,6 +2516,24 @@ class Minilang_State:
         term_vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list}
         type_vars = {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in tvars_list}
         return term_vars, type_vars
+
+    async def schematic_vars_of_derived_subgoals(
+            self, opr: 'Minilang_Operation') -> 'list[tuple[Vars, TVars]]':
+        """Prerun `opr` on this state WITHOUT recording the resulting state
+        server-side, and return, for each subgoal the operation derives, its
+        schematic variables in the same `(term_vars, type_vars)` shape as
+        `schematic_variables_of`. Reporter messages emitted during the prerun
+        are captured server-side and never reach the protocol. Only sound for
+        operations whose ML dispatch path does not advance session-shared
+        counters — current callers (CASE_SPLIT / SPLIT_CONJS2 gates, RULE
+        post-inst probe) are verified counter-clean; verify that property
+        before adding a new one (see `Minilang.derived_subgoals_of`)."""
+        result = await self.connection.callback(
+            "IsaMini.schematic_vars_of_derived_subgoals", (self.name, opr.pack()))
+        return [
+            ({IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in vars_list},
+             {IsaTerm.from_isabelle(k): IsaTerm.from_isabelle(v) for k, v in tvars_list})
+            for vars_list, tvars_list in result]
 
     async def potential_defs_of(self, constant_names: 'list[name]') -> list[IsabelleFact_Presented]:
         """
@@ -4143,6 +4182,22 @@ class Node(ABC):
         prompt the agent to instantiate them before the op is committed."""
         await from_state.execute(opr, dest)
 
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        """The gate: may this node's beginning operation run on a goal that
+        carries schematic variables? Consulted by
+        `StdBlock._refresh_the_beginning_opr` right before the beginning op
+        executes (the P11 seam); ending ops are not gated, and the case-var
+        re-execution path bypasses it legitimately.
+
+        Return `None` to allow, or the agent-visible rejection reason to
+        refuse — a refusal MUST name the offending variables and point the
+        agent at `InstVarsInGoal`. Default: allowed — a node that derives no
+        subgoals cannot spread a schematic variable across sibling subgoals,
+        so the property holds vacuously."""
+        return None
+
     @classmethod
     def _validate_arg(cls, arg: Any, path: str) -> Any:
         """Validate arg against this class's registered ToolArg TypedDict."""
@@ -5682,6 +5737,18 @@ class StdBlock(NonLeaf_Node):
         opr = self.beginning_opr()
         assert isinstance(opr, Minilang_Operation), \
             f"_refresh_the_beginning_opr expects a Minilang_Operation, got {type(opr).__name__}"
+        # The gate seam (P11/S1): consult `can_operate_on_schematic_goal`
+        # after the concrete beginning op is known (CaseSplit_Like resolves
+        # its rule in overrides before this point) and before it executes.
+        # Gate-internal RPC failures (e.g. a lost state) take the same
+        # failure channel as execution errors — a clean node FAILURE, not a
+        # raw exception escaping the refresh.
+        try:
+            gate_reason = await self.can_operate_on_schematic_goal(self.ml_state, opr)
+        except IsabelleError as err:
+            return self._beginning_opr_err_msgs(err)
+        if gate_reason is not None:
+            return FailureReason(gate_reason)
         try:
             await self._execute_opr(self.ml_state, opr, self._state_after_beginning())
             return None
@@ -6470,9 +6537,10 @@ class SubgoalMaker(GoalContainer, StdBlock):
         # Post-rule schematic instantiation (RULE/CaseSplit/Induction only).
         # `None` = not yet probed; otherwise the ordered list of instantiation
         # rounds (each a list of (var-name, value) pairs) baked into the op so
-        # it produces a schematic-free state and replays from cache. Reset on
-        # upstream change (see _on_upstream_change). For non-rule subgoal makers
-        # it stays None and is never read.
+        # that no schematic variable is shared by ≥2 derived subgoals (a
+        # variable confined to one subgoal may remain), and the op replays
+        # from cache. Reset on upstream change (see _on_upstream_change). For
+        # non-rule subgoal makers it stays None and is never read.
         self._post_insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None
 
     def _on_upstream_change(self) -> None:
@@ -6480,6 +6548,34 @@ class SubgoalMaker(GoalContainer, StdBlock):
         # The state flowing in changed → any recorded instantiations were
         # computed against a stale goal; re-probe from scratch next refresh.
         self._post_insts = None
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # A subgoal-deriving operation can spread a schematic variable across
+        # its derived subgoals, so it MUST define its own gate. This default
+        # exists only to fail loudly when a new SubgoalMaker subclass forgot
+        # to (plan §11, 裁决三) — it never rejects a schematic-free goal.
+        term_vars, type_vars = await state.schematic_variables_of(whole=True)
+        if not term_vars and not type_vars:
+            return None
+        raise InternalError(
+            f"can_operate_on_schematic_goal is not designed for "
+            f"{type(self).__name__}.")
+
+    async def _probe_residual_schematics(
+            self, from_state: 'Minilang_State', scratch: 'Minilang_State',
+            scratch_op: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
+        """The post-inst probe's convergence check: return the variables that
+        still need instantiating; both maps empty = converged.
+
+        Default = the conservative criterion: read the scratch FINAL state
+        and require it schematic-free. Block-opening operations
+        (CaseSplit_Like) MUST keep this default — their only all-cases data
+        source, the Goals message, is emitted before `apply_post_insts` runs,
+        i.e. a pre-instantiation snapshot: a message-based check would never
+        observe the baked rounds and the probe would never converge (C1)."""
+        return await scratch.schematic_variables_of(whole=True)
 
     def _beginning_opr_with_insts(
             self, rounds: 'list[list[tuple[str, xterm | xtyp]]]') -> 'Minilang_Operation | FailureReason | None':
@@ -6508,7 +6604,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
                 except (IsabelleError, InternalError):
                     break  # the base op itself failed — let the real execute below surface it
                 try:
-                    term_vars, type_vars = await scratch.schematic_variables_of(whole=True)
+                    term_vars, type_vars = await self._probe_residual_schematics(
+                        from_state, scratch, scratch_op)
                     if not term_vars and not type_vars:
                         self._post_insts = rounds
                         break
@@ -8135,6 +8232,16 @@ class Define_ToolArg(TypedDict):
 class Define(SubgoalMaker):
     _is_declarative = True
     _done_label = "done"
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # Unconditionally allowed (measured, plan §4.11): Define's derived
+        # subgoals (pat-completeness / termination) contain no schematic
+        # variables — the gate property holds vacuously — and the reading
+        # layer refuses agent-injected ones.
+        return None
+
     """Define a (recursive) function proof-locally via minilang's FUN
     command. The Minilang.FUN'' ML API is invoked with
     `open_on_fail = true` so that if pat-completeness or termination
@@ -8391,6 +8498,14 @@ class Interpret_Locale(SubgoalMaker):
     independently provable (and delegatable) subgoal. Once they are all
     discharged, the interpretation is registered and every theorem of the locale
     becomes available as `<qualifier>.<name>`."""
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # Unconditionally allowed (measured, plan §4.11): the witness
+        # obligations carry no schematic variables — the gate property holds
+        # vacuously — and the reading layer refuses agent-injected ones.
+        return None
 
     def __init__(self, config: NodeConfig, arg: Interpret_Locale_ToolArg):
         super().__init__(config, arg.get("thought", ""), [])
@@ -10013,6 +10128,32 @@ class SplitConjs(SubgoalMaker):
                 str(i + self._initial_goal_index): (None, p)
                 for i, p in enumerate(parsed_proofs)
             }
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # S20: prerun SPLIT_CONJS2 and refuse when a schematic variable would
+        # land in ≥2 of the split subgoals (each would then instantiate it
+        # independently). Counting conjuncts naively would be WRONG — the
+        # meta-level prefix is copied verbatim into every subgoal, so a `?a`
+        # occurring only in a premise lands in ALL of them; hence the prerun.
+        term_vars, type_vars = await state.schematic_variables_of()
+        if not term_vars and not type_vars:
+            return None
+        try:
+            derived = await state.schematic_vars_of_derived_subgoals(opr)
+        except IsabelleError:
+            # The op itself fails on this goal — let the real execution
+            # surface its own error message.
+            return None
+        counts: dict[str, int] = {}
+        for per_term_vars, per_type_vars in derived:
+            for name in {v.unicode for v in (*per_term_vars, *per_type_vars)}:
+                counts[name] = counts.get(name, 0) + 1
+        shared = sorted(n for n, c in counts.items() if c >= 2)
+        if not shared:
+            return None
+        return _gate_rejection("SplitConjs", shared)
     @classmethod
     def gen_single(cls, arg: SplitConjs_ToolArg,
                    path: str = "<direct>") -> Parsed_Opr:
@@ -10079,6 +10220,47 @@ class SplitConjs(SubgoalMaker):
         raise InternalError("The target node is not my children")
 
 
+#### InstVarsInGoal
+
+class InstVarsInGoal_ToolArg(TypedDict):
+    thought: NotRequired[str]
+    instantiations: list[Instantiation]
+
+@proof_operation("InstVarsInGoal", InstVarsInGoal_ToolArg)
+class InstVarsInGoal(Leaf):
+    """Instantiate residual schematic variables of the whole goal sequent.
+    One round of (name, value) instantiations; a leading "'" in the name
+    marks a type variable. The ML side parses names/values and applies the
+    2-phase Minilang.INST_GOAL_VARS primitive (types first, then terms)."""
+    def __init__(self, config: NodeConfig, arg: InstVarsInGoal_ToolArg):
+        super().__init__(config, arg.get("thought", ""))
+        self.instantiations: list[Instantiation] = arg["instantiations"]
+
+    def the_operation(self) -> 'Minilang_Operation | FailureReason':
+        return Minilang_Operation.INST_GOAL_VARS(
+            [(i["name"], i["value"]) for i in self.instantiations])
+
+    def _insts_str(self) -> str:
+        return ", ".join(f"{i['name']} := {i['value']}" for i in self.instantiations)
+
+    def quickview_title(self) -> str:
+        return f"InstVarsInGoal ({self._insts_str()})"
+
+    def print(self, indent: int, file: MyIO, update_line: bool = False,
+              show_warnings: bool = False) -> int:
+        indent = super().print(indent, file, update_line, show_warnings=show_warnings)
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: InstVarsInGoal\n")
+        print_indent(indent, file)
+        file.write(f"instantiations: {self._insts_str()}\n")
+        self._print_evaluation_status(indent, file)
+        if show_warnings:
+            self._print_warnings(indent, file,
+                [Warning.Position.HEADER, Warning.Position.FOOTER])
+        return indent
+
+
 #### InferenceRule
 
 class InferenceRule_ToolArg(TypedDict):
@@ -10089,6 +10271,37 @@ class InferenceRule_ToolArg(TypedDict):
 
 @proof_operation("InferenceRule", InferenceRule_ToolArg)
 class InferenceRule(SubgoalMaker):
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # Allowed (S3): InferenceRule owns an instantiation mechanism — the
+        # post-rule probe in SubgoalMaker._execute_opr interacts on any
+        # variable shared by ≥2 derived subgoals. Its violating variables may
+        # be introduced by the rule itself, so they cannot be computed before
+        # execution anyway — the check necessarily runs after.
+        return None
+
+    async def _probe_residual_schematics(
+            self, from_state: 'Minilang_State', scratch: 'Minilang_State',
+            scratch_op: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
+        # S4 relaxation (§5.4, InferenceRule ONLY): interact only on variables
+        # shared by ≥2 derived subgoals — one confined to a single subgoal is
+        # that subgoal's own business. Safe here because RULE is single-frame:
+        # the per-subgoal query reads the prerun's FINAL state, which is
+        # post-instantiation, so convergence observes the baked rounds. The
+        # query preruns the op again server-side; the double execution
+        # (scratch + prerun) is deliberate — see the batch-6 record.
+        derived = await from_state.schematic_vars_of_derived_subgoals(scratch_op)
+        def shared(idx: int) -> 'dict[IsaTerm, IsaTerm]':
+            counts: dict[str, int] = {}
+            rep: 'dict[str, tuple[IsaTerm, IsaTerm]]' = {}
+            for per_subgoal in derived:
+                for name, ty in per_subgoal[idx].items():
+                    counts[name.unicode] = counts.get(name.unicode, 0) + 1
+                    rep[name.unicode] = (name, ty)
+            return {rep[n][0]: rep[n][1] for n, c in counts.items() if c >= 2}
+        return shared(0), shared(1)
+
     def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg,
                  parsed_proofs: 'list[proof] | None' = None):
         super().__init__(config, arg.get("thought", ""), [])
@@ -10400,6 +10613,19 @@ class Branch_ToolArg(TypedDict):
 
 @proof_operation("Branch", Branch_ToolArg)
 class Branch(SubgoalMaker):
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # S21: every branch receives a copy of the WHOLE goal sequent, so any
+        # schematic variable anywhere in it lands in every case body — hence
+        # `whole=True`, and any hit refuses. No prerun and no proposition
+        # parsing needed: the criterion reads only the current state.
+        term_vars, type_vars = await state.schematic_variables_of(whole=True)
+        if not term_vars and not type_vars:
+            return None
+        return _gate_rejection("Branch",
+            [v.unicode for v in (*term_vars, *type_vars)])
+
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
                  parsed_cases: 'list[proof | None] | None' = None):
         super().__init__(config, arg.get("thought", ""), [])
@@ -10496,6 +10722,30 @@ class CaseSplit_ToolArg(TypedDict):
 class CaseSplit(CaseSplit_Like):
     _case_kind = "case-split"
 
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # S16: prerun to count the derived cases. A single case is fine (the
+        # ML-side unification fallback in `powerful_MP` closes it soundly even
+        # when the case proof pins the variable); with ≥2 cases each case
+        # would instantiate the variable independently while still DISPLAYING
+        # it as free, so refuse. No variable-distribution analysis — the count
+        # alone decides. Consulted after the rule is resolved (P11 seam), so
+        # `opr` is the concrete CASE_SPLIT.
+        term_vars, type_vars = await state.schematic_variables_of()
+        if not term_vars and not type_vars:
+            return None
+        try:
+            derived = await state.schematic_vars_of_derived_subgoals(opr)
+        except IsabelleError:
+            # The op itself fails on this goal — let the real execution
+            # surface its own error message.
+            return None
+        if len(derived) <= 1:
+            return None
+        return _gate_rejection("CaseSplit",
+            [v.unicode for v in (*term_vars, *type_vars)])
+
     def __init__(self, config: NodeConfig, arg: CaseSplit_ToolArg,
                  proofs_by_case: 'dict[str, proof_with_case_vars] | None' = None):
         super().__init__(config, arg.get("thought", ""), [])
@@ -10553,6 +10803,19 @@ class Induction_ToolArg(TypedDict):
 @proof_operation("Induction", Induction_ToolArg)
 class Induction(CaseSplit_Like):
     _case_kind = "induction"
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        # S17: always refuse on a schematic goal. The `Var` guard inside
+        # CASES'/`is_case` hands every case the UNspecialized original goal,
+        # so even a single-case induction breaks — the ML-side fallback that
+        # rescues CaseSplit does not help here.
+        term_vars, type_vars = await state.schematic_variables_of()
+        if not term_vars and not type_vars:
+            return None
+        return _gate_rejection("Induction",
+            [v.unicode for v in (*term_vars, *type_vars)])
 
     def __init__(self, config: NodeConfig, arg: Induction_ToolArg,
                  proofs_by_case: 'dict[str, proof_with_case_vars] | None' = None):

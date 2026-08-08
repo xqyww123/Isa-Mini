@@ -9,10 +9,10 @@ Unfinished Proof! Call command `edit` with action `fill` and target step `1` to 
 Post-rule instantiation prompt (kind=term)
 --------------------------------------------------
 The proof goal contains schematic variables that must be instantiated before you can continue:
-  - ?d :: nat
   - ?c :: nat
+  - ?d :: nat
 Call `answer_instantiate` with `instantiations`, a list of {variable, term} objects; each `term` must be a type-correct Isabelle expression.
-[empty] rejected: This interaction requires `instantiations` for variables: ?d, ?c.
+[empty] rejected: This interaction requires `instantiations` for variables: ?c, ?d.
 [missing ?d] rejected: Missing instantiations for: ?d.
 [unknown ?zzz] rejected: Unknown schematic variable: `?zzz`. Expected one of: `?c`, `?d`.
 [duplicate ?c] rejected: Variable `?c` was instantiated twice.
@@ -30,14 +30,14 @@ proof:
     thought: apply myrule2 (validate ?c, ?d answers)
     operation: Inference Rule
     rule:
-      - myrule2: Q ?c ⟶ R ?d ⟶ P ?m
+      - myrule2: Q (?c + ?d) ⟶ R (?c + ?d) ⟶ P ?m
     derived subgoals:
       - goal id: 1.1
-        goal: Q (0 :: nat)
+        goal: Q ((0 :: nat) + (1 :: nat))
         proof: empty
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
       - goal id: 1.2
-        goal: R (1 :: nat)
+        goal: R ((0 :: nat) + (1 :: nat))
         proof: empty
         Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
 interaction kinds fired: ['term']

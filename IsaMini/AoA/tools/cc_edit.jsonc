@@ -392,6 +392,28 @@
       ],
       "type": "object"
     },
+    "InstVarsInGoal": {
+      "additionalProperties": false,
+      "description": "instantiate schematic variables (like `?x`) remaining in the proof goal with concrete terms, committing the choice for every occurrence across all subgoals",
+      "properties": {
+        "operation": {
+          "const": "InstVarsInGoal",
+          "type": "string"
+        },
+        "thought": { "$ref": "#/$defs/Thought" },
+        "instantiations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Instantiation" },
+          "minItems": 1,
+          "description": "the schematic variables to instantiate, by name; a leading ' marks a type variable (e.g. `?'a`), whose value must be a type expression, not a term"
+        }
+      },
+      "required": [
+        "operation",
+        "instantiations"
+      ],
+      "type": "object"
+    },
     "InferenceRule": {
       "additionalProperties": false,
       "description": "apply an inference rule to the current goal by backward reasoning, reducing the proof goal into subgoals (example: reducing `a = b` to the subgoals `a ≤ b` and `b ≤ a` by `antisym`).",
@@ -777,6 +799,7 @@
         { "$ref": "#/$defs/Unfold" },
         { "$ref": "#/$defs/Witness" },
         { "$ref": "#/$defs/InferenceRule" },
+        { "$ref": "#/$defs/InstVarsInGoal" },
         { "$ref": "#/$defs/Contradiction" },
         { "$ref": "#/$defs/Suffices" },
         { "$ref": "#/$defs/Intro" },

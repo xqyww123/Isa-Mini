@@ -1110,7 +1110,26 @@ async def _test_PostInstRuleTermThenType(root: Root, file: MyIO):
     await _assert_schematic_free(root, file, kinds)
 
 
-@model_test("PostInstValidation", "Test_PostInstValidation.thy", 19)
+@model_test("PostInstRuleShared", "Test_PostInstRuleShared.thy", 21)
+async def _test_PostInstRuleShared(root: Root, file: MyIO):
+    # ?c spans TWO derived subgoals (Q ?c, R ?c) — the S4-relaxed convergence
+    # (interact only on variables shared by ≥2 derived subgoals) must still
+    # fire here, keeping the interaction covered now that the confined-variable
+    # fixtures no longer trigger it.
+    print_header("Initial", file)
+    root.print(0, file)
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(file, {"?c": "0::nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [InferenceRule.gen_single({
+        "thought": "apply sharedrule (residual ?c spans both derived subgoals)",
+        "rule": {"name": "sharedrule"}})])
+    print_header("After InferenceRule (?c instantiated across both subgoals)", file)
+    root.print(0, file)
+    await _assert_schematic_free(root, file, kinds)
+
+
+@model_test("PostInstValidation", "Test_PostInstValidation.thy", 22)
 async def _test_PostInstValidation(root: Root, file: MyIO):
     # Exercise the answer validator: empty / missing / unknown / duplicate /
     # type-clash answers are each rejected with a clean BadAnswer; the final

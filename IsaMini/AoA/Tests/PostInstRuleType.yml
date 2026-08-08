@@ -6,12 +6,6 @@ goal: P k
 proof: empty
 Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
 --------------------------------------------------
-Post-rule instantiation prompt (kind=type)
---------------------------------------------------
-The proof goal contains schematic type variables that are not yet determined and must be instantiated before you can continue:
-  - ?'a :: type
-Call `answer_instantiate` with `instantiations`, a list of {variable, term} objects; each `term` must be a well-formed Isabelle type.
---------------------------------------------------
 After InferenceRule (residual ?'a instantiated to nat)
 --------------------------------------------------
 You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
@@ -23,14 +17,16 @@ proof:
     rule:
       - myTrule: (∀(x :: ?'a). x = x) ⟶ P k
     derived goal:
-      ∀(x :: nat). x = x
+      ∀(x :: ?'a). x = x
   - step id: 2
     operation: Intro
     fixing variables:
-      - x: nat
+      - x: 'a
 Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof for the following goal.
 pending proof goal:
-  x = x
-interaction kinds fired: ['type']
+  type variables:
+    - 'a: type
+  goal: x = x
+interaction kinds fired: []
 residual term schematics: []
 residual type schematics: []

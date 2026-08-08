@@ -65,7 +65,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
   - `StdBlock(NonLeaf_Node)`: `beginning_opr` / `ending_opr` (default `END`) / `_state_before_ending_`.
   - `GoalContainer` (children are independent subgoals; emits `NEXT`), `GoalNode(StdBlock)` (one subgoal's steps), `SubgoalMaker(GoalContainer, StdBlock)` (opens N child `GoalNode`s).
   - `GlobalEnv(StdBlock)` (id `"global"`, only `_is_declarative` children), `Root(GoalContainer, StdBlock)` (`sub_nodes[0]` = GlobalEnv, `sub_nodes[1..]` = top-level GoalNodes). Node ids look like `"global.1"`, `"2.1"`.
-  - Proof ops (each registered via `@proof_operation`): `Have`, `Obtain`, `Suffices`, `Intro`, `InferenceRule`, `SplitConjs`, `Branch`, `CaseSplit` / `Induction` (both `CaseSplit_Like`), `Define`, `Obvious` (→ `HAMMER`), `Witness`, `Compute`, `Unfold`, `Derive`, `Rewrite`, `SetupRewriting`, `Chaining`, `Contradiction`, `Interpret_Locale`.
+  - Proof ops (each registered via `@proof_operation`): `Have`, `Obtain`, `Suffices`, `Intro`, `InferenceRule`, `InstVarsInGoal`, `SplitConjs`, `Branch`, `CaseSplit` / `Induction` (both `CaseSplit_Like`), `Define`, `Obvious` (→ `HAMMER`), `Witness`, `Compute`, `Unfold`, `Derive`, `Rewrite`, `SetupRewriting`, `Chaining`, `Contradiction`, `Interpret_Locale`.
   - These compile to `Minilang_Operation` factory methods: `HAVE`, `OBTAIN`, `RULE`, `HAMMER`, `INTRO`, `SUFFICES`, `BRANCH`, `CASE_SPLIT`, `INDUCT`, `END`, `NEXT`, `SORRY_*`, ….
 
 ### Session / Roles / workers
