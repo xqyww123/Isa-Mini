@@ -350,11 +350,6 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops, %d ms) -> %s",
                     len(assembled), replayed_ms, replayed_state)
 
-        # No blob is built here (D41): the split script never reaches Python,
-        # and raw_AoA assembles the blob itself from the op stream returned as
-        # this tuple's first element.  The blob is internal to the
-        # raw_AoA/aoa_replay codec pair.
-
         # Write to log directory
         if actual_log_path:
             try:

@@ -56,16 +56,17 @@ val standard_tac_segment : Proof.context -> thm -> thm
 val merge_segment : Proof.context -> thm -> thm
 
 (* raw_AoA — the pure recording entry (§2.3): gate, three preprocessing
-   segments, agent RPC.  NO store or cache logic inside.  The by-product
-   future carries (xcmds, cost, replay time, proof text): the third component
+   segments, agent RPC.  NO store or cache logic inside.  Synchronous; the
+   by-products are (xcmds, cost, replay time, proof text): the third component
    is what a REPLAY of this proof will spend (entry preprocessing + the final
    op stream's summed ML time, undivided by Timeout.scale); the fourth is the
    assembled `aoa_replay "<b64>"` — the blob format is known only to this
-   assembler and the aoa_replay decoder. *)
+   assembler and the aoa_replay decoder.  Futures exist one layer up: run_AoA
+   obtains them from async_prove. *)
 val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
                budget: MiniLang_Agent.budget, invocation_id: string, task: task}
            -> Proof.context * thm
-           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) future * thm
+           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) * thm
 
 (* run_AoA — the caching wrapper around raw_AoA:
    [read_store -> level-0 two-level lookup] -> raw_AoA -> [write_store ->
@@ -588,13 +589,12 @@ fun merge_segment ctxt0 sequent =
   end
 
 
-(* raw_AoA_i — the synchronous body of raw_AoA (D34 recording entry): the gate,
-   the three preprocessing segments, then the agent RPC.  NO store or cache
-   logic anywhere in here.  Returns the four by-products
-   (xcmds, cost, replay time, proof text) unwrapped; the public raw_AoA wraps
-   them in Future.value for the §2.3 shape, and run_AoA feeds this internal
-   version to async_prove so no future is ever joined on the main path. *)
-fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
+(* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
+   segments, then the agent RPC.  NO store or cache logic anywhere in here.
+   Synchronous: returns the four by-products (xcmds, cost, replay time, proof
+   text) beside the theorem.  run_AoA feeds it to async_prove, which is where
+   futures come into existence. *)
+fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       (* THE GATE — first cell of the body (12.18). *)
       val () = if aoa_allowed () then () else gate_error (ctxt0, sequent0)
@@ -1744,14 +1744,6 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
-(* The public raw_AoA: the §2.3 shape — by-products in a Future.value (the body
-   is synchronous; the future aligns the four entries' shapes), theorem beside
-   it. *)
-fun raw_AoA args cs =
-  let val (product, th) = raw_AoA_i args cs
-   in (Future.value product, th) end
-
-
 (*** run_AoA — the caching wrapper: [read_store -> level-0 lookup] ->
      raw_AoA -> [write_store -> write-back].  No gate here (it sits in
      raw_AoA's entry). ***)
@@ -1776,8 +1768,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
       | NONE =>
           let val (_, futs, sequent') =
                 Phi_Sledgehammer_Solver.async_prove async Phi_Sledgehammer_Solver.All_At_Once
-                  (raw_AoA_i {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
-                              invocation_id = invocation_id, task = task})
+                  (raw_AoA {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
+                            invocation_id = invocation_id, task = task})
                   (ctxt, sequent)
            in case futs of
                 [fut] =>
