@@ -87,6 +87,36 @@ val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
+(* hammer_or_AoA — the phi ↔ AoA facade (§2.3): level-0 two-level lookup
+   (store_hit_replay, synchronous, outside any fork), then ONE fork wrapping
+   strictly the MISS path: all_auto (engine multi-way search) ORELSE run_AoA;
+   both inner branches run read_store = write_store = SOME false — the one
+   write-back (L2 + L1, both gated by THIS write_store) rides as a dependent
+   task on the product future at the fork's end.  The returned proof text is
+   for the store only; phi's oblg layer discards it (do not join it). *)
+val hammer_or_AoA :
+     {fact_override: Sledgehammer.fact_override,  (*fed to the engine branch only*)
+      proof_id: Phi_Proof_Store.proof_id option,  (*NONE = derive the all-goals key*)
+      hammer_timeout: Time.time option,           (*forwarded to all_auto*)
+      async: bool,
+      read_store: bool option,   (*governs level 0's BOTH levels; NONE follows
+                                   AoA_read_proof_store*)
+      write_store: bool option,  (*governs EVERY write: level 0's L1 upgrade and
+                                   the fork-end L2 + L1 writes; NONE follows
+                                   AoA_write_proof_store.  NOT forwarded to the
+                                   inner branches — they are constant SOME false*)
+      failure_msg: (exn -> string) option}
+                                 (*phi's failure-text composer (§2.2), forwarded
+                                   to all_auto and to this fork's report hook —
+                                   no second dispatch is built here*)
+  -> Proof.context -> thm
+  -> string future (*proof text; phi's oblg layer discards it*) * thm
+
+(* Body of `by hammer_or_aoa` (registered in Minilang_AoA.thy): hammer_or_AoA
+   with async = false, stores per config.  Renders every give-up reason
+   through banner_of; agent_cost goes to plain tracing (§6.2). *)
+val hammer_or_aoa_method : thm list -> context_state -> context_state Seq.result Seq.seq
+
 (* Body of the `aoa_replay` method (registered in Minilang_AoA.thy, D39): pure
    ML replay of an assembled blob — no RPC, no Python.  Fails as a method
    failure (empty sequence). *)
@@ -620,6 +650,13 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       (* THE GATE — first cell of the body (12.18). *)
       val () = if aoa_allowed () then () else gate_error (ctxt0, sequent0)
+      (* AoA owes its caller the conclusion VERBATIM (§2.5, stage 4e): the
+         round trip below beta-contracts the protected conclusion (two known
+         sources: concl_conv's iso conversions and protect_goals' rewr_conv),
+         which would fail async_prove's alpha-only implies_elim.  Captured at
+         receipt, restored at hand-back; when nothing changed, fconv_rule
+         hands back the same thm object. *)
+      val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent0)
       val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
       val cfg : cfg = (minilang_cfg, budget)
       val (task_kind, task_payload_packer) = pack_task task
@@ -1745,7 +1782,9 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                  val replay_time =
                    prep_elapsed + Time.fromMilliseconds assembled_isabelle_time_ms
               in ((xcmds, agent_cost, replay_time, prf_text),
-                  Minilang.conclude ctxt s1')
+                  Minilang.conclude ctxt s1'
+                  |> Conv.fconv_rule (Minilang_Aux.back_conv orig_concl)
+                       (*hand back the verbatim conclusion (stage 4e)*))
              end
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
@@ -1848,6 +1887,9 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^tr
             |> MessagePackBytesIO.Unpack.unpackPair
                  (MessagePackBytesIO.Unpack.unpackString,
                   MessagePackBytesIO.Unpack.unpackList MiniLang_Agent.xcmd_unpacker_bytes)
+      (* Same verbatim-conclusion contract as raw_AoA (stage 4e): replay and
+         live are symmetric consumers of the round trip below. *)
+      val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent)
       (* 1-3: replay order mirrors the recording order (D64): deterministic
          segments re-run in place, the split segment runs the recorded script. *)
       val st1 = standard_tac_segment ctxt sequent
@@ -1865,6 +1907,7 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^tr
       val s1 = fold (MiniLang_Agent.interpret config) ops s0
       (* 7 *)
       val th = Minilang.conclude ctxt' s1
+               |> Conv.fconv_rule (Minilang_Aux.back_conv orig_concl)
    in SOME (Seq.Result (ctxt, th), Seq.empty) end
   catch exn =>
     (tracing ("[aoa_replay] replay failed: " ^ Runtime.exn_message exn); NONE)\<close>)
@@ -1896,6 +1939,124 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            handle Agent_Give_Up (reason, detail, _) =>
              error (banner_of reason ^ "\n" ^ detail)
        end )
+
+
+(*** hammer_or_AoA — the phi ↔ AoA facade (§2.3): [read_store -> level-0
+     two-level lookup] -> ONE fork [ all_auto ORELSE run_AoA ] -> write-back
+     at the fork's end.  The fork wraps STRICTLY the MISS path; every lookup
+     and hit-replay is synchronous, outside the fork.  hammer_or_AoA did the
+     read, so hammer_or_AoA does the (one) write: both inner branches are
+     constant read_store = write_store = SOME false and only produce proofs. ***)
+
+fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
+                   read_store, write_store, failure_msg} ctxt sequent =
+  let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
+      val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
+      (* One call, one key (§2.3): a given id verbatim, else the all-goals key
+         of the ORIGINAL goal — the same formula run_AoA uses. *)
+      val key = case proof_id of SOME id => id | NONE => Hasher.all_goals (ctxt, sequent)
+   in case (if read
+            then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
+            else NONE) of
+        SOME (_, prf_text, sequent') =>
+          (* Level-0 hit: the stored text goes out verbatim.  An L2 hit writes
+             nothing; an L1 hit's upgrade write-back already happened inside
+             store_hit_replay (gated by the same write_store). *)
+          (Future.value prf_text, sequent')
+      | NONE =>
+          let (* The MISS path, run once inside the (single) fork: engine
+                 first, AoA on Auto_Fail.  Both branches yield the same shape
+                 — (raw un-divided time, proof text) — so the write-back below
+                 is written once (§7 stage 4 step 4).  The two Future.joins
+                 in here are NOT main-path joins: both inner calls are
+                 constant async = false, so the joined futures are fulfilled
+                 Future.values (the same class as the two sanctioned sync
+                 call sites on §2.5's whitelist — flagged for the whitelist's
+                 next revision). *)
+              fun miss_path (ctxt, sequent) =
+                let val (tp_fut, sequent') =
+                      Phi_Sledgehammer_Solver.all_auto
+                        {improved = true, async = false,
+                         fact_override = fact_override, proof_id = SOME key,
+                         timeout = hammer_timeout,
+                         read_store = SOME false, write_store = SOME false,
+                         raise_Error_instead_of_Auto_Fail = false,
+                         failure_msg = failure_msg} ctxt sequent
+                 in (Future.join tp_fut, sequent') end
+                handle Phi_Sledgehammer_Solver.Auto_Fail _ =>
+                  let val driver = Config.get ctxt aoa_driver
+                      val invocation_id = make_invocation_id ()
+                      val log_dir = Config.get ctxt AoA_log_dir
+                      val _ = tracing ("AoA (driver: " ^ driver ^ ", logs: "
+                                ^ (if log_dir = "" then "(no logging)"
+                                   else log_dir ^ "/" ^ invocation_id) ^ ")")
+                      val (agent_cfg, budget) = MiniLang_Agent.default_cfg
+                      val (fut, sequent') =
+                        run_AoA {driver = driver, minilang_cfg = agent_cfg,
+                                 budget = budget, invocation_id = invocation_id,
+                                 read_store = SOME false, write_store = SOME false,
+                                 async = false, task = Usual} (ctxt, sequent)
+                      (* run_AoA's third and fourth by-products: what a replay
+                         will spend (raw, un-divided) and the assembled
+                         `aoa_replay "<b64>"` text — the same shape the engine
+                         branch hands back. *)
+                      val (_, _, replay_time, prf_text) = Future.join fut
+                   in ((replay_time, prf_text), sequent') end
+              val (_, futs, sequent') =
+                Phi_Sledgehammer_Solver.async_prove' failure_msg async
+                  Phi_Sledgehammer_Solver.All_At_Once miss_path (ctxt, sequent)
+           in case futs of
+                [fut] =>
+                  let (* The write-back rides as a DEPENDENT task on the
+                        product future (§2.5) — sync joins a fulfilled value,
+                        async wakes after the fork; one piece of code for
+                        both.  This join is the sanctioned store-write
+                        exception to the no-join rule.  interrupts = true
+                        (stage-0 ruling): the body takes the .proof-store
+                        fcntl lock, and with_file_lock's `run` restores the
+                        attributes in effect at task entry — forked
+                        uninterruptible, the blocking setlkw wait (and the
+                        timeout-less L1 RPC) could never be cancelled. *)
+                      val _ =
+                        if write then
+                          ignore ((singleton o Future.forks)
+                            {name = "hammer_or_AoA_store_write", group = NONE,
+                             deps = [Future.task_of fut], pri = ~1, interrupts = true}
+                            (fn () =>
+                               case Exn.capture Future.join fut of
+                                 Exn.Res (time, prf_text) =>
+                                   let val thy = Proof_Context.theory_of ctxt
+                                       val std = Phi_Proof_Store.standard_time time
+                                    in Phi_Proof_Store.update_cached_proof thy (key, (std, prf_text))
+                                     ; Proof_Store_AoA.l1_write (key, std, prf_text)
+                                   end
+                               | Exn.Exn _ => () (*no proof came out: nothing to write*)))
+                        else ()
+                   in (Future.map snd fut, sequent') end
+              | _ =>
+                  (* async_prove's zero-subgoal short circuit: nothing to
+                     prove, nothing ran; the empty future list means the
+                     write-back above cannot trigger, so this "" is
+                     structurally unreachable for L2/L1 (§2.3). *)
+                  (Future.value "", sequent')
+          end
+  end
+
+(* `by hammer_or_aoa` ≈ hammer_or_AoA (§2.3); always async = false.  All five
+   give-up reasons render through the one banner_of (§6.2); the core layers
+   throw only structured exceptions; agent_cost at the method layer goes to
+   plain tracing.  The text future is deliberately dropped — the text was
+   already stored inside hammer_or_AoA; do not join it. *)
+fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
+  if is_dummy sequent then NONE
+  else (hammer_or_AoA {fact_override = Sledgehammer_Fact.no_fact_override,
+                       proof_id = NONE, hammer_timeout = NONE, async = false,
+                       read_store = NONE, write_store = NONE,
+                       failure_msg = NONE} ctxt sequent
+        |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)))
+       handle Agent_Give_Up (reason, detail, cost) =>
+         (tracing (string_of_cost cost);
+          error (banner_of reason ^ "\n" ^ detail)))
 
 
 (*** Query by name RPC — reuses the AoA query tool's Python core ***)

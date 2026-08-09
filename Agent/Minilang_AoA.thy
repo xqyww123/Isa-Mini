@@ -39,6 +39,13 @@ method_setup aoa = \<open>
   Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.method))
 \<close>
 
+method_setup hammer_or_aoa = \<open>
+  (* hammer_or_AoA facade (§2.3): store lookup, engine search, then the AoA
+     agent — always async = false at the method layer.  Same &&&-splitting
+     prelude as `aoa` (CONTEXT_METHOD). *)
+  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.hammer_or_aoa_method))
+\<close>
+
 method_setup aoa_replay = \<open>
   (* Pure-ML replay of an assembled AoA proof blob (§2.7, D39): the ONLY
      decoder of the blob format.  Store entries read `aoa_replay "<b64>"` and

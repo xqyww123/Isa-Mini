@@ -36,6 +36,13 @@ end
 
 val concl_conv : (Proof.context -> conv) -> Proof.context -> conv
 
+(* back_conv orig ct : ct ≡ orig, whenever the two differ only by beta/eta
+   (§2.5, stage 4e).  Restores the verbatim conclusion an AoA round trip owes
+   its caller.  Apply with Conv.fconv_rule: when nothing changed the equation
+   is reflexive and the same thm object comes back; a difference beyond
+   beta/eta makes Thm.transitive fail loudly, never a silently wrong result. *)
+val back_conv : cterm -> conv
+
 val simp_fact_name' : string -> string
 
 end
@@ -87,13 +94,20 @@ fun concl_conv C ctxt ctm =
   case Thm.term_of ctm
     of Const(\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
           ( Conv.arg_conv (concl_conv C ctxt) ) ctm
-     | Const(\<^const_name>\<open>Pure.all\<close>, _) $ _ $ Abs _ =>
+       (* Pure.all is UNARY: the old binary pattern `$ _ $ Abs _` could never
+          match, so a ⋀-topped term always fell to the catch-all and had C
+          applied to the WHOLE term (stage 4f, §2.5). *)
+     | Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
           ( Conv.arg_conv (Conv.abs_conv (concl_conv C o snd) ctxt) ) ctm
      | Const(\<^const_name>\<open>Pure.prop\<close>, _) $ _ =>
           ( Conv.arg_conv (C ctxt) ) ctm
      | Const(\<^const_name>\<open>GOAL\<close>, _) $ _ =>
           ( Conv.arg_conv (concl_conv C ctxt) ) ctm
      | _ => C ctxt ctm
+
+fun back_conv orig ct =
+  Thm.transitive (Drule.beta_eta_conversion ct)
+                 (Thm.symmetric (Drule.beta_eta_conversion orig))
 
 (* Lives here (not aux.ML) so that unify_diagnostic.ML can load before
    aux.ML: aux.ML's xOF needs Unify_Diagnostic for its failure messages. *)
