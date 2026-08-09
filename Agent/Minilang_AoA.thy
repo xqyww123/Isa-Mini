@@ -21,6 +21,9 @@ ML_file "agent.ML"
 (* ML_file "model_AoA.ML" *)
 ML_file "agent_packer.ML"
 ML_file "preprocess.ML"
+(* The AoA side of the proof store: L1 RPCs + the level-0 lookup brick.
+   MUST load before agent_server.ML — run_AoA calls into it. *)
+ML_file "proof_store_AoA.ML"
 ML_file "agent_server.ML"
 (* ML_file "tactic.ML.old"
 ML_file "agent_server.old.ML"
@@ -34,6 +37,14 @@ method_setup aoa = \<open>
      this, leaving the agent a `&&&` goal that its object-level conjunction
      ops (SplitConjs/conjI) cannot handle. *)
   Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.method))
+\<close>
+
+method_setup aoa_replay = \<open>
+  (* Pure-ML replay of an assembled AoA proof blob (§2.7, D39): the ONLY
+     decoder of the blob format.  Store entries read `aoa_replay "<b64>"` and
+     reach here through the generic replay channel (eval_prf_str). *)
+  Scan.lift Parse.string >> (fn blob =>
+    K (Method.CONTEXT_METHOD (MiniLang_Agent_AoA.aoa_replay_method blob)))
 \<close>
 
 (* AoA-agent-specific INDUCT/CASE_SPLIT tuning (consumes_policy,

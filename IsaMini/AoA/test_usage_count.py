@@ -93,9 +93,9 @@ def test_payload_carries_exactly_three_fields(monkeypatch):
 
 
 def test_event_names_match_the_worker_allow_list():
-    """These two strings are a contract with the Worker's EVENTS map; drift would
-    turn every report into a 400 that the client silently swallows."""
-    assert uc.EVENT_CACHE == "cache"
+    """This string is a contract with the Worker's EVENTS map; drift would turn
+    every report into a 400 that the client silently swallows.  (`cache` is no
+    longer reported at all — the Worker still accepts it, untested by design.)"""
     assert uc.EVENT_AGENT == "agent"
 
 
@@ -108,7 +108,6 @@ def test_switch_off_sends_nothing(monkeypatch, switch):
 
     async def go():
         mod.report(mod.EVENT_AGENT)
-        mod.report(mod.EVENT_CACHE)
         await _drain(mod)
 
     asyncio.run(go())
@@ -121,7 +120,7 @@ def test_switch_absent_or_zero_keeps_reporting(monkeypatch, switch):
     sent = _install_fake_httpx(monkeypatch)
 
     async def go():
-        mod.report(mod.EVENT_CACHE)
+        mod.report(mod.EVENT_AGENT)
         await _drain(mod)
 
     asyncio.run(go())
@@ -169,7 +168,7 @@ def test_report_outside_an_event_loop_is_a_no_op(monkeypatch):
     raises when someone does."""
     mod = _reload(monkeypatch, None)
     _install_fake_httpx(monkeypatch)
-    assert mod.report(mod.EVENT_CACHE) is None
+    assert mod.report(mod.EVENT_AGENT) is None
 
 
 def test_caller_is_not_delayed(monkeypatch):

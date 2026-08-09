@@ -1479,6 +1479,15 @@ class SH_PRF_Msg(Message):
         self.method = method
         self.time_ms = time_ms
 
+class Split_Script_Msg(Message):
+    """The recorded split-segment script (D41), rendered by raw_AoA's
+    preprocessing and delivered with the first operation's message batch.
+    Parked on the Runtime singleton; blob assembly puts it into the blob's
+    first component."""
+    def __init__(self, script: str):
+        super().__init__()
+        self.script = script
+
 class Hint_Notice_Msg(Message):
     """Agent Hint Registry NOTICE: the operation used a registered constant/fact
     that has a soft hint. `name` is the registered (fully-qualified) name — the
@@ -1532,6 +1541,8 @@ def unpack_message(data) -> Message:
             return Discarded_Vars_Msg([(str(i), str(e)) for (i, e) in pairs])
         case (19, n):
             return Interpret_Facts_Count_Msg(int(n))
+        case (20, script):
+            return Split_Script_Msg(str(script))
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1903,7 +1914,10 @@ class Minilang_State:
             session.on_operation_start(self.name, opr.command, opr.arg)
             now = time()
             try:
-                (msgs, flat_goal) = await self.connection.callback("IsaMini.proof_opr",
+                # Third component (D61): this op's ML execution time in ms.  Not
+                # consumed here — the replay-cost sum is taken over the final
+                # assembled stream's verification replay in toplevel.py.
+                (msgs, flat_goal, _elapsed_ms) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 session.on_operation_end(self.name, opr.command, opr.arg,
@@ -1920,6 +1934,11 @@ class Minilang_State:
             session.on_operation_end(self.name, opr.command, opr.arg,
                 EvaluationStatus.Success(time() - now))
             msgs = [unpack_message(msg) for msg in msgs]
+            # D41: the recorded split script rides in with the first op's
+            # message batch; park it where blob assembly can read it.
+            for _m in msgs:
+                if isinstance(_m, Split_Script_Msg):
+                    session.runtime.split_script = _m.script
             (assign_to.leading_goal, assign_to.display_goals_count) = \
                 Minilang_State._unpack_flat_goal(flat_goal)
             assign_to._initialized = True
@@ -11588,6 +11607,10 @@ class Runtime:
         # Read by bind_session_context to re-establish Connection.current() inside
         # MCP requests, where uvicorn has reset the context.
         self.connection: 'Connection | None' = None
+        # The recorded split-segment script (D41), delivered by a
+        # Split_Script_Msg with the first operation's messages; "" = the split
+        # segment did nothing.  Read by blob assembly (toplevel.py).
+        self.split_script: str = ""
         # Isabelle's AoA_Debug declaration, read once by the RPC entry point.
         # Diagnosing a run wants an unexpected exception to abort loudly and
         # immediately (sys.exit in the tool dispatchers); serving one wants it

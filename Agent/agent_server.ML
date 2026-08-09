@@ -33,19 +33,60 @@ exception Agent_Give_Up of string * string * agent_cost
    consumers render `error (banner_of reason ^ "\n" ^ detail)`. *)
 val banner_of : string -> string
 
-(* The extra `string * raw_packer` group is the Task: a task-kind tag plus a
-   packer that writes the task payload (empty for "usual"; the original Isar proof
-   for "learning"). Sent to Python as the 11th arg-schema element, a 2-array
-   (task_kind, payload). *)
-val AoA_RPC : driver * (MiniLang_Agent.cfg * MiniLang_Agent.budget) * string
-           -> string * MessagePackBinIO.Pack.raw_packer
-           -> Proof.context * thm
-           -> MiniLang_Agent.xcmd list * thm * agent_cost
+(* The Minilang configuration shared by live agent runs and `aoa_replay` (D35).
+   Twelve unconditional Config.puts; the conditional
+   `auto_interpret_for_embedding` put stays with the caller. *)
+val configure_for_minilang : Proof.context -> Proof.context
 
-(* The "usual" (ordinary `by aoa` / eval) Task: empty payload. *)
-val usual_task : string * MessagePackBinIO.Pack.raw_packer
+(* The Task: what the agent is asked to do.  Sent to Python as a 2-array
+   (kind, payload) — empty payload for Usual, the original Isar proof for
+   Learning. *)
+datatype task = Usual | Learning of string
+
+(* The AoA gate (D8/D16): AoA may start only under an interactive frontend, or
+   with AOA_ALLOW_NONINTERACTIVE=yes.  Checked in raw_AoA's entry (first cell),
+   so every caller hits it; replay never passes here (D29). *)
+val aoa_allowed : unit -> bool
+
+(* D34/D64: the two DETERMINISTIC preprocessing segments, shared verbatim by
+   raw_AoA (recording) and the aoa_replay method (re-run on replay).  The
+   nondeterministic split segment between them records a script instead
+   (Goal_Preprocess.preprocess_split_recorded / the recorded text on replay). *)
+val standard_tac_segment : Proof.context -> thm -> thm
+val merge_segment : Proof.context -> thm -> thm
+
+(* raw_AoA — the pure recording entry (§2.3): gate, three preprocessing
+   segments, agent RPC.  NO store or cache logic inside.  The by-product
+   future carries (xcmds, cost, replay time, proof text): the third component
+   is what a REPLAY of this proof will spend (entry preprocessing + the final
+   op stream's summed ML time, undivided by Timeout.scale); the fourth is the
+   assembled `aoa_replay "<b64>"` — the blob format is known only to this
+   assembler and the aoa_replay decoder. *)
+val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
+               budget: MiniLang_Agent.budget, invocation_id: string, task: task}
+           -> Proof.context * thm
+           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) future * thm
+
+(* run_AoA — the caching wrapper around raw_AoA:
+   [read_store -> level-0 two-level lookup] -> raw_AoA -> [write_store ->
+   write-back to L2 and L1].  bool option NONE follows the
+   AoA_read_proof_store / AoA_write_proof_store configs.  On a level-0 hit the
+   four by-products are ([], zero_cost, recorded time, stored text) in a
+   fulfilled Future.value — the agent never ran. *)
+val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
+               budget: MiniLang_Agent.budget, invocation_id: string,
+               read_store: bool option, write_store: bool option,
+               async: bool, task: task}
+           -> Proof.context * thm
+           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) future * thm
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
+
+(* Body of the `aoa_replay` method (registered in Minilang_AoA.thy, D39): pure
+   ML replay of an assembled blob — no RPC, no Python.  Fails as a method
+   failure (empty sequence). *)
+val aoa_replay_method : string (*b64 blob*)
+                     -> thm list -> context_state -> context_state Seq.result Seq.seq
 
 (* Query entity by kind and name via the AoA query tool's Python core.
    Returns (formatted_text, is_error). *)
@@ -286,6 +327,8 @@ fun minilang_message_packer ctxt =
              | Minilang.DISCARDED_VARS pairs =>
                  packPair (packInt, packList (packPair (packString, packString)))
                           (18, pairs)
+             | Goal_Preprocess.SPLIT_SCRIPT script =>
+                 packPair (packInt, packString) (20, script)
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -303,6 +346,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal (Minilang.SH_PRF _) => true
                                  | Minilang.Internal (Agent_Hint.HINT_NOTICE _) => true
                                  | Minilang.Internal (Minilang.DISCARDED_VARS _) => true
+                                 | Minilang.Internal (Goal_Preprocess.SPLIT_SCRIPT _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end
@@ -382,75 +426,196 @@ fun make_invocation_id () =
 
 end
 
-fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (ctxt0, sequent) =
+(* The Minilang configuration shared by live agent runs and replay (D35):
+   `aoa_replay` must interpret a recorded op stream under the exact same
+   Minilang semantics the recording session used, so both entries call this
+   one function.  The only conditional put (`auto_interpret_for_embedding`)
+   stays with the raw_AoA caller — replay never touches the semantic DB. *)
+fun configure_for_minilang ctxt = ctxt
+      |> Config.put Minilang.strict_end true    (*hard constraint, D32*)
+      |> Config.put Minilang.counter_mode "none"
+      |> Config.put Minilang.INTRO_mk_block true
+      (* Keep `transparent_intro` off so `CONSIDER' = CONSIDER'i ∘
+         TRANSPARENT_INTRO'` does NOT invoke INTRO' internally.  If it
+         did, INTRO'' would emit a second `Goals` for the same
+         CONSIDER op and break the Python SubgoalMaker invariant that
+         every operation emits `Goals` exactly once.  Default is
+         already `false` (library/proof.ML:389); we set it explicitly
+         as belt-and-suspenders. *)
+      |> Config.put Minilang.transparent_intro false
+      |> Config.put Minilang.auto_deconflict_bound true
+      |> Config.put Minilang.deconflict_case_fixes true
+      |> Config.put Minilang.high_auto_mode true
+      |> Config.put Minilang.auto_calculation false
+      |> Config.put Printer.show_markup false
+      |> Config.put Phi_Proof_Store.enable_proof_store false
+      (* Under `subgoals`, an induction / case-split rule with
+       * `consumes > 0` and insufficient `using` facts yields
+       * `Prem<i>` subgoals for the agent to discharge through its
+       * normal proof flow, instead of erroring out. Schematic vars
+       * in those premises trigger an instantiation prompt on the
+       * Python side before induction runs. *)
+      |> Config.put Minilang.consumes_policy "subgoals"
+      (* Auto-insert is disabled on the agent path: the Induction
+       * tool arg carries an explicit `facts_to_generalize` field,
+       * giving the LLM control over which local facts flow into
+       * the induction hypothesis. Letting auto-insert also fire
+       * would silently expand that set and mask over-selection
+       * mistakes. The ML-level mechanism in library/proof.ML
+       * stays intact for non-agent callers. *)
+      |> Config.put Minilang.induct_auto_insert_facts false
+
+
+(*** Task ***)
+
+datatype task = Usual | Learning of string
+
+(* Wire format unchanged: the 11th arg-schema element is a 2-array
+   (task_kind, payload) — empty payload for Usual, the original Isar proof for
+   Learning. *)
+fun pack_task Usual = ("usual", MessagePackBinIO.Pack.packString "")
+  | pack_task (Learning isar_proof) =
+      ("learning", MessagePackBinIO.Pack.packString isar_proof)
+
+
+(*** The AoA gate (D8/D16) ***)
+
+(* Sits in raw_AoA's entry — the point where an agent would actually start — so
+   every caller hits it, including the learning App's direct raw_AoA call.
+   Replay is NEVER gated (D29): store-hit replay and `aoa_replay` run before or
+   outside this function. *)
+fun aoa_allowed () =
+      (case #2 (Dialogue.frontend_identity ()) of SOME b => b | NONE => false)
+      orelse getenv "AOA_ALLOW_NONINTERACTIVE" = "yes"
+
+(* §6.1 finalized copy, raised at the closed gate.  Line breaks are part of the
+   finalized text — keep Pretty.str lines verbatim. *)
+fun gate_error (ctxt, sequent) =
+  let val thy = Proof_Context.theory_of ctxt
+      (* The same path cache_file.ML's store_path computes.  That function is
+         not exported, and auto_sledgehammer is a read-only dependency in this
+         stage, so the two lines are recomputed here. *)
+      val store_path =
+        Path.ext "proof-store"
+          (Path.append (Resources.master_directory thy)
+            (Path.basic (Context.theory_name {long = false} thy)))
+      val goal_pretty =
+        (case Thm.prems_of sequent of
+           x :: _ => Syntax.pretty_term ctxt x
+         | [] => Syntax.pretty_term ctxt (Thm.prop_of sequent))
+   in error (Pretty.string_of (Pretty.chunks [
+        Pretty.str "Unproved obligation, and no usable proof to replay.",
+        Pretty.str "",
+        Pretty.str ("  theory:     " ^ Context.theory_long_name thy),
+        Pretty.block [Pretty.str "  goal:       ", goal_pretty],
+        Pretty.str "",
+        Pretty.str "The proof store holds no usable proof for this obligation, and the AoA prover is",
+        Pretty.str "restricted to interactive editing.",
+        Pretty.str "",
+        Pretty.str "  If you are an author of this development",
+        Pretty.str "    Open the theory in jEdit or VSCode and evaluate it: AoA will search for a proof and",
+        Pretty.str ("    record it in " ^ Path.implode store_path ^ "."),
+        Pretty.str "    To let AoA run in batch mode instead, set AOA_ALLOW_NONINTERACTIVE=yes.",
+        Pretty.str "",
+        Pretty.str "  If you are a user of this redistributed package",
+        Pretty.str "    The package ships an incomplete or outdated proof store. Please ask the author to",
+        Pretty.str "    provide one that covers this theory."
+      ]))
+  end
+
+
+(*** D34/D64: the deterministic preprocessing segments, shared verbatim by
+     raw_AoA (recording) and the aoa_replay method (re-run on replay).  The
+     nondeterministic split segment between them is NOT here: recording uses
+     Goal_Preprocess.preprocess_split_recorded, replay executes the recorded
+     script. ***)
+
+(* Segment 1 — unfold locale/class instance goals (needs `standard`). *)
+fun standard_tac_segment ctxt sequent =
+  if Phi_Sledgehammer_Solver.need_standard_tac ctxt sequent
+  then (case SINGLE (Classical.standard_tac ctxt []) sequent of
+          SOME st' => st'
+        | NONE => sequent)
+  else sequent
+
+(* Segment 3 — S12-S14: when several top-level subgoals share a schematic
+   variable, AoA's per-subgoal proof trees would instantiate it independently
+   and the final replay fails only after the whole budget is spent.  Merge such
+   subgoals into ONE goal before anything else sees them: atomize each subgoal
+   into a HOL proposition and conjoin with HOL.conj (SplitConjs can split those
+   back; Pure `&&&` it cannot).  The state is rebuilt by kernel forward
+   construction, so it still proves the ORIGINAL conclusion and the exit path
+   is untouched.  The store key is computed by the caching layer on the goal
+   BEFORE any preprocessing (D59), so only `Minilang.INIT` must still see the
+   merged goal — a pure function of (ctxt, sequent), so replay's re-run
+   reproduces the recorded state verbatim (D64). *)
+fun merge_segment ctxt0 sequent =
+  let val prems = Thm.prems_of sequent
+      (* Sharing is keyed on indexed names (term and type variables alike),
+         matching Minilang.INIT's rejection predicate exactly — so on this
+         path every state INIT would reject gets merged (or gives up
+         cleanly) before INIT ever sees it. *)
+      fun var_names t = distinct (op =)
+            (map #1 (Term.add_vars t []) @ map #1 (Term.add_tvars t []))
+      fun shares (t1, t2) =
+        exists (member (op =) (var_names t2)) (var_names t1)
+      fun any_shared [] = false
+        | any_shared (t :: ts) =
+            exists (fn t' => shares (t, t')) ts orelse any_shared ts
+  in if length prems < 2 orelse not (any_shared prems) then sequent
+     else let
+       fun give_up () = raise Agent_Give_Up ("technical_failure",
+             "The goal has multiple subgoals sharing schematic variables \
+             \and could not be merged into one.", zero_cost)
+       val atomized =
+         case SINGLE (ALLGOALS (My_Object_Logic.full_atomize_tac {strict=true} ctxt0)) sequent of
+           SOME st => st
+         | NONE => give_up ()
+       (* Freeze schematics: Thm.assume rejects schematic hypotheses. *)
+       val ((_, [atomized']), ctxt') = Variable.import true [atomized] ctxt0
+       val props = map (fn t => HOLogic.dest_Trueprop t
+                                handle TERM _ => give_up ())
+                       (Thm.prems_of atomized')
+       val conj_ct = Thm.cterm_of ctxt'
+                       (HOLogic.mk_Trueprop (foldr1 HOLogic.mk_conj props))
+       val cj = Thm.assume conj_ct
+       fun conjuncts 1 th = [th]
+         | conjuncts k th =
+             (th RS @{thm conjunct1}) :: conjuncts (k - 1) (th RS @{thm conjunct2})
+       val merged' =
+         fold (fn th => fn st => Thm.implies_elim st th)
+              (conjuncts (length props) cj) atomized'
+         |> Thm.implies_intr conj_ct
+    in case Variable.export ctxt' ctxt0 [merged'] of
+         [th] => th
+       | _ => give_up ()
+    end
+  end
+
+
+(* raw_AoA_i — the synchronous body of raw_AoA (D34 recording entry): the gate,
+   the three preprocessing segments, then the agent RPC.  NO store or cache
+   logic anywhere in here.  Returns the four by-products
+   (xcmds, cost, replay time, proof text) unwrapped; the public raw_AoA wraps
+   them in Future.value for the §2.3 shape, and run_AoA feeds this internal
+   version to async_prove so no future is ever joined on the main path. *)
+fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
+      (* THE GATE — first cell of the body (12.18). *)
+      val () = if aoa_allowed () then () else gate_error (ctxt0, sequent0)
       val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
+      val cfg : cfg = (minilang_cfg, budget)
+      val (task_kind, task_payload_packer) = pack_task task
 
-      (* Unfold locale/class instance goals (needs `standard`) before the agent runs *)
-      val sequent =
-        if Phi_Sledgehammer_Solver.need_standard_tac ctxt0 sequent
-        then (case SINGLE (Classical.standard_tac ctxt0 []) sequent of
-                SOME st' => st'
-              | NONE => sequent)
-        else sequent
-      (* Preprocess: split large goals before handing to the agent *)
-      val sequent =
-        (case SINGLE (Goal_Preprocess.preprocess_split_tac ctxt0) sequent of
-           SOME st' => st'
-         | NONE => sequent)
-
-      (* S12-S14: when several top-level subgoals share a schematic variable,
-         AoA's per-subgoal proof trees would instantiate it independently and
-         the final replay fails only after the whole budget is spent.  Merge
-         such subgoals into ONE goal before anything else sees them: atomize
-         each subgoal into a HOL proposition and conjoin with HOL.conj
-         (SplitConjs can split those back; Pure `&&&` it cannot).  The state
-         is rebuilt by kernel forward construction, so it still proves the
-         ORIGINAL conclusion and the exit path is untouched.  Must stay before
-         `Hasher.goal` and `Minilang.INIT` — the cache key and `$init` see the
-         merged goal. *)
-      val sequent =
-        let val prems = Thm.prems_of sequent
-            (* Sharing is keyed on indexed names (term and type variables alike),
-               matching Minilang.INIT's rejection predicate exactly — so on this
-               path every state INIT would reject gets merged (or gives up
-               cleanly) before INIT ever sees it. *)
-            fun var_names t = distinct (op =)
-                  (map #1 (Term.add_vars t []) @ map #1 (Term.add_tvars t []))
-            fun shares (t1, t2) =
-              exists (member (op =) (var_names t2)) (var_names t1)
-            fun any_shared [] = false
-              | any_shared (t :: ts) =
-                  exists (fn t' => shares (t, t')) ts orelse any_shared ts
-        in if length prems < 2 orelse not (any_shared prems) then sequent
-           else let
-             fun give_up () = raise Agent_Give_Up ("technical_failure",
-                   "The goal has multiple subgoals sharing schematic variables \
-                   \and could not be merged into one.", zero_cost)
-             val atomized =
-               case SINGLE (ALLGOALS (My_Object_Logic.full_atomize_tac {strict=true} ctxt0)) sequent of
-                 SOME st => st
-               | NONE => give_up ()
-             (* Freeze schematics: Thm.assume rejects schematic hypotheses. *)
-             val ((_, [atomized']), ctxt') = Variable.import true [atomized] ctxt0
-             val props = map (fn t => HOLogic.dest_Trueprop t
-                                      handle TERM _ => give_up ())
-                             (Thm.prems_of atomized')
-             val conj_ct = Thm.cterm_of ctxt'
-                             (HOLogic.mk_Trueprop (foldr1 HOLogic.mk_conj props))
-             val cj = Thm.assume conj_ct
-             fun conjuncts 1 th = [th]
-               | conjuncts k th =
-                   (th RS @{thm conjunct1}) :: conjuncts (k - 1) (th RS @{thm conjunct2})
-             val merged' =
-               fold (fn th => fn st => Thm.implies_elim st th)
-                    (conjuncts (length props) cj) atomized'
-               |> Thm.implies_intr conj_ct
-          in case Variable.export ctxt' ctxt0 [merged'] of
-               [th] => th
-             | _ => give_up ()
-          end
-        end
+      (* The three preprocessing segments, timed as one block: prep_elapsed is
+         the entry's share of the recorded replay cost (D61 — what a replay
+         will spend, not what this search spent). *)
+      val ({elapsed = prep_elapsed, ...}, (sequent, split_script)) =
+        Timing.timing (fn () =>
+          let val st1 = standard_tac_segment ctxt0 sequent0
+              val (st2, split_script) = Goal_Preprocess.preprocess_split_recorded ctxt0 st1
+              val st3 = merge_segment ctxt0 st2
+           in (st3, split_script) end) ()
 
       (* Shared state for all callbacks *)
       val counters = {
@@ -463,40 +628,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
         let val ret = rev (!messages)
          in messages := []; ret end
 
-      (* Configure context *)
-      val ctxt = ctxt0
-            |> Config.put Minilang.strict_end true
-            |> Config.put Minilang.counter_mode "none"
-            |> Config.put Minilang.INTRO_mk_block true
-            (* Keep `transparent_intro` off so `CONSIDER' = CONSIDER'i ∘
-               TRANSPARENT_INTRO'` does NOT invoke INTRO' internally.  If it
-               did, INTRO'' would emit a second `Goals` for the same
-               CONSIDER op and break the Python SubgoalMaker invariant that
-               every operation emits `Goals` exactly once.  Default is
-               already `false` (library/proof.ML:389); we set it explicitly
-               as belt-and-suspenders. *)
-            |> Config.put Minilang.transparent_intro false
-            |> Config.put Minilang.auto_deconflict_bound true
-            |> Config.put Minilang.deconflict_case_fixes true
-            |> Config.put Minilang.high_auto_mode true
-            |> Config.put Minilang.auto_calculation false
-            |> Config.put Printer.show_markup false
-            |> Config.put Phi_Proof_Store.enable_proof_store false
-            (* Under `subgoals`, an induction / case-split rule with
-             * `consumes > 0` and insufficient `using` facts yields
-             * `Prem<i>` subgoals for the agent to discharge through its
-             * normal proof flow, instead of erroring out. Schematic vars
-             * in those premises trigger an instantiation prompt on the
-             * Python side before induction runs. *)
-            |> Config.put Minilang.consumes_policy "subgoals"
-            (* Auto-insert is disabled on the agent path: the Induction
-             * tool arg carries an explicit `facts_to_generalize` field,
-             * giving the LLM control over which local facts flow into
-             * the induction hypothesis. Letting auto-insert also fire
-             * would silently expand that set and mask over-selection
-             * mistakes. The ML-level mechanism in library/proof.ML
-             * stays intact for non-agent callers. *)
-            |> Config.put Minilang.induct_auto_insert_facts false
+      (* D41 recording pipeline: park the rendered split script in the reporter
+         buffer — the first proof_opr's drain delivers it to Python, which puts
+         it into the blob's first component at assembly time.  "" (no split)
+         sends nothing; Python's default is "". *)
+      val _ = if split_script = "" then ()
+              else listen_report (Minilang.Internal (Goal_Preprocess.SPLIT_SCRIPT split_script))
+
+      (* Configure context (D35 shared function; the 13th, conditional put
+         stays here with the caller) *)
+      val ctxt = configure_for_minilang ctxt0
       val (agent_cfg, _) = cfg
       val ctxt = case #auto_interpret_for_embedding agent_cfg of
                     SOME v => Config.put Semantic_Store.auto_interpret_for_embedding v ctxt
@@ -524,8 +665,12 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
       val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
-        ret_schema = (fn (ctxt, msgs, flat_goal) =>
-          packPair (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt) (msgs, flat_goal)),
+        (* Third component: this op's ML-side execution time in ms (D61).
+           Python records it on the node; at assembly the final stream's sum
+           becomes assembled_isabelle_time. *)
+        ret_schema = (fn (ctxt, msgs, flat_goal, elapsed_ms) =>
+          packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt, packInt)
+                     (msgs, flat_goal, elapsed_ms)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
@@ -534,11 +679,13 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                     val mode = if !replay_mode then MiniLang_Agent.REPLAY
                                else MiniLang_Agent.LIVE
                     val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
-                    val s1 = MiniLang_Agent.interpret full_config opr s0
+                    val ({elapsed, ...}, s1) =
+                      Timing.timing (fn () => MiniLang_Agent.interpret full_config opr s0) ()
                     val ctxt' = Minilang.context_of s1
                     val msgs = clean_report ()
                     val _ = state := Symtab.update (to, s1) (!state)
-                 in (ctxt', msgs, Minilang.leading_goal_data s1) end) ()
+                 in (ctxt', msgs, Minilang.leading_goal_data s1,
+                     Time.toMilliseconds elapsed) end) ()
               (* Drain reporter messages on EVERY path: the success branch already
                  drained via clean_report, but a NOTICE pushed before a failure
                  (e.g. an Agent Hint notice fired during term checking) would
@@ -1458,29 +1605,9 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
         timeout = NONE
       }
 
-      (* Build AoA command with local callbacks *)
-      val raw_goal_hash = Hasher.goal (ctxt, sequent)
-      val goal_hash = "intro-standard-v4:" ^ raw_goal_hash
-      val thy = Proof_Context.theory_of ctxt
-      (* ML L2 Phi_Cache key uses the raw hash (aoa:<hash>); the epoch-prefixed
-         goal_hash is kept only for the Python L1 SQLite key (passed below). *)
-      val aoa_cache_key = "aoa:" ^ raw_goal_hash
-      val use_cache = Config.get ctxt AoA_read_proof_store
-      val store_cache = Config.get ctxt AoA_write_proof_store
-      val cached_xcmd_json =
-            if use_cache
-            then case Phi_Proof_Store.get_cached_proof thy aoa_cache_key of
-                    SOME (_, json) => SOME json
-                  | NONE => NONE
-            else NONE
-      val _ = tracing (String.concat [
-        "[AoA-cache] L2 Phi_Proof_Store get key=", aoa_cache_key,
-        " thy=", Context.theory_name {long=true} thy,
-        " : ", (if not use_cache then "BYPASSED (AoA_read_proof_store=false)"
-                else case cached_xcmd_json
-                  of SOME json => "HIT (" ^ Int.toString (size json) ^ "B)"
-                   | NONE => "MISS")])
-
+      (* Build AoA command with local callbacks.  No hashing and no store access
+         in here (D59): the key lives in the caching layer (run_AoA /
+         hammer_or_AoA), computed on the goal BEFORE preprocessing. *)
       val s0_flat_goal = Minilang.leading_goal_data s0
       val au = agent_context_unpacker
       val {constants, theorems, types, classes, locales, named_theorems, methods,
@@ -1495,23 +1622,25 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
                 val (_, budget) = cfg
                 val enable_write_memory = Config.get ctxt AoA_enable_write_memory
-            in packTuple12 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+            in packTuple10 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
-                           packString, packTuple3 (packBool, packOption packString, packBool),
                            packPair (packString, fn () => task_payload_packer),
                            packBool)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           goal_hash, (use_cache, cached_xcmd_json, store_cache),
                            (task_kind, ()), enable_write_memory)
             end),
+        (* Stats tuple: the 10th element is assembled_isabelle_time in ms (D61) —
+           the sum of the final op stream's per-op ML execution times.  It is
+           NOT part of agent_cost; raw_AoA folds it into the replay-time
+           by-product right below. *)
         ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
-                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt), src') =
-                                      unpackTuple9 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal) src
-                                    in ({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, src') end),
+                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt,ait), src') =
+                                      unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,unpackInt) src
+                                    in (({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, ait), src') end),
                                    unpackOption unpackString,
                                    unpackOption unpackString,
                                    unpackOption unpackString),
@@ -1557,10 +1686,14 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
       }
 
       val timer = Timer.startRealTimer ()
-      val (xcmds, s1o, {input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time}, reason, detail, proof_json_opt) =
+      val (xcmds, s1o,
+           ({input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time},
+            assembled_isabelle_time_ms),
+           reason, detail, proof_blob_opt) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
-      val _ = writeln (String.concat [
+      (* tracing, per the §6.2 channel table (round-3 review PC-2, author ruling a) *)
+      val _ = tracing (String.concat [
         "[AoA] input=", Int.toString input,
         " cache_write=", Int.toString cache_write,
         " cache_read=", Int.toString cache_read,
@@ -1571,6 +1704,10 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
         " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
         " quota_wait_time=", Real.fmt (StringCvt.FIX (SOME 2)) quota_wait_time, "s",
         " time=", Time.toString elapsed, "s"])
+      val agent_cost : agent_cost =
+        {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
+         cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
+         quota_wait_time=quota_wait_time}
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
@@ -1583,37 +1720,147 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
-           ; (if not store_cache
-              then tracing "[AoA-cache] L2 Phi_Proof_Store store SKIPPED (AoA_write_proof_store=false)"
-              else case proof_json_opt of
-                SOME json => (
-                  tracing (String.concat [
-                    "[AoA-cache] L2 Phi_Proof_Store store key=", aoa_cache_key,
-                    " thy=", Context.theory_name {long=true} thy,
-                    " bytes=", Int.toString (size json)]);
-                  Phi_Proof_Store.update_cached_proof thy
-                               (aoa_cache_key, (Phi_Proof_Store.standard_time elapsed, json)))
-              | NONE => tracing "[AoA-cache] L2 Phi_Proof_Store store SKIPPED (proof_json=NONE)")
-           ; (xcmds, Minilang.conclude ctxt s1',
-              {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
-               cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
-               quota_wait_time=quota_wait_time})
+           ; let (* The Python side keeps proof state and proof blob in lock-step:
+                    every finished-proof return carries the blob, so its absence
+                    here is a protocol violation, not a storage decision. *)
+                 val prf_text =
+                   case proof_blob_opt of
+                     SOME b64 => "aoa_replay " ^ quote b64
+                   | NONE => error "Internal Error: protocol violation — the agent \
+                                   \reported a finished proof but returned no proof blob."
+                 (* D61: what a REPLAY of this proof will cost — entry
+                    preprocessing plus the final op stream's summed ML execution
+                    time.  LLM round-trips, RPC overhead and dead branches are
+                    deliberately not in it.  Raw (undivided) time: the write
+                    layer divides by Timeout.scale. *)
+                 val replay_time =
+                   prep_elapsed + Time.fromMilliseconds assembled_isabelle_time_ms
+              in ((xcmds, agent_cost, replay_time, prf_text),
+                  Minilang.conclude ctxt s1')
+             end
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
     | NONE => error "Internal Error: the state returned by the Agent is not found"
   ) | NONE =>
         (case reason
-          of SOME r => raise Agent_Give_Up (r, the_default "" detail,
-                        {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
-                         cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
-                         quota_wait_time=quota_wait_time})
+          of SOME r => raise Agent_Give_Up (r, the_default "" detail, agent_cost)
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
-(* The "usual" Task (ordinary `by aoa` / eval): empty payload. The AoA-learning
-   App supplies its own ("learning", packString isar_proof) instead. *)
-val usual_task : string * MessagePackBinIO.Pack.raw_packer =
-      ("usual", MessagePackBinIO.Pack.packString "")
+(* The public raw_AoA: the §2.3 shape — by-products in a Future.value (the body
+   is synchronous; the future aligns the four entries' shapes), theorem beside
+   it. *)
+fun raw_AoA args cs =
+  let val (product, th) = raw_AoA_i args cs
+   in (Future.value product, th) end
+
+
+(*** run_AoA — the caching wrapper: [read_store -> level-0 lookup] ->
+     raw_AoA -> [write_store -> write-back].  No gate here (it sits in
+     raw_AoA's entry). ***)
+
+fun run_AoA {driver, minilang_cfg, budget, invocation_id,
+             read_store, write_store, async, task} (ctxt, sequent) =
+  let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
+      val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
+      (* One call, one key (D59): the all-goals key of the ORIGINAL,
+         pre-preprocessing goal — the split race must not move the key. *)
+      val key = Hasher.all_goals (ctxt, sequent)
+   in case (if read
+            then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
+            else NONE) of
+        SOME (std_time, prf_text, sequent') =>
+          (* Level-0 hit: the agent never ran — [] and zero_cost are statements
+             of fact, not placeholders (§2.3).  The recorded standard-machine
+             time is scaled back to this machine's clock; the stored text goes
+             out verbatim (the blob never leaves the aoa_replay codec pair). *)
+          (Future.value ([], zero_cost, Time.scale (Timeout.scale ()) std_time, prf_text),
+           sequent')
+      | NONE =>
+          let val (_, futs, sequent') =
+                Phi_Sledgehammer_Solver.async_prove async Phi_Sledgehammer_Solver.All_At_Once
+                  (raw_AoA_i {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
+                              invocation_id = invocation_id, task = task})
+                  (ctxt, sequent)
+           in case futs of
+                [fut] =>
+                  let (* The write-back rides as a DEPENDENT task on the product
+                        future (§2.5): the sync state joins a fulfilled
+                        Future.value, the async state wakes after the fork —
+                        one piece of code for both.  This join is the
+                        sanctioned store-write exception to the no-join rule. *)
+                      val _ =
+                        if write then
+                          ignore ((singleton o Future.forks)
+                            {name = "run_AoA_store_write", group = NONE,
+                             deps = [Future.task_of fut], pri = ~1, interrupts = false}
+                            (fn () =>
+                               case Exn.capture Future.join fut of
+                                 Exn.Res (_, _, replay_time, prf_text) =>
+                                   let val thy = Proof_Context.theory_of ctxt
+                                       val std = Phi_Proof_Store.standard_time replay_time
+                                    in Phi_Proof_Store.update_cached_proof thy (key, (std, prf_text))
+                                     ; Proof_Store_AoA.l1_write (key, std, prf_text)
+                                   end
+                               | Exn.Exn _ => () (*no proof came out: nothing to write*)))
+                        else ()
+                   in (fut, sequent') end
+              | _ =>
+                  (* async_prove's zero-subgoal short circuit: nothing to prove,
+                     nothing ran, nothing is written. *)
+                  (Future.value ([], zero_cost, Time.zeroTime, ""), sequent')
+          end
+  end
+
+
+(*** aoa_replay — the pure-ML decoder half of the blob codec (§2.7).  The
+     method itself is registered in Minilang_AoA.thy (D39); this is its body.
+     Failure is METHOD failure (an empty result sequence), so eval_prf_str's
+     caller reads it as "cached proof no longer works". ***)
+
+(* Execute the recorded split script (D41): a method text applied to the whole
+   state — replaces the recording-side race, never re-runs it. *)
+fun exec_split_script ctxt script st =
+  let val kws = Keyword.no_major_keywords
+                  (Thy_Header.get_keywords (Proof_Context.theory_of ctxt))
+      val seq =
+        Method.evaluate
+          (Parse.read_embedded ctxt kws (Method.parser 0) (Input.string script)
+             |> fst |> Method.check_text ctxt)
+          ctxt [] (ctxt, st)
+   in case Position.setmp_thread_data Position.none Seq.pull seq of
+        SOME (Seq.Result (_, st'), _) => st'
+      | _ => error ("aoa_replay: the recorded split script failed: " ^ script)
+  end
+
+fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^try>\<open>
+  let (* 0: decode blob = base64(msgpack((script, xcmd list))) (D30/D31) *)
+      val ((script, ops), _) =
+        b64 |> Bytes.string |> Base64.decode |> Bytes.content
+            |> BytesIO.fromString
+            |> MessagePackBytesIO.Unpack.unpackPair
+                 (MessagePackBytesIO.Unpack.unpackString,
+                  MessagePackBytesIO.Unpack.unpackList MiniLang_Agent.xcmd_unpacker_bytes)
+      (* 1-3: replay order mirrors the recording order (D64): deterministic
+         segments re-run in place, the split segment runs the recorded script. *)
+      val st1 = standard_tac_segment ctxt sequent
+      val st2 = if script = "" then st1 else exec_split_script ctxt script st1
+      val st3 = merge_segment ctxt st2
+      (* 4-6 *)
+      val ctxt' = configure_for_minilang ctxt
+      val s0 = Minilang.INIT ctxt' st3
+      val counters = {prem_counter = Synchronized.var "prem_counter" 0}
+                       : MiniLang_Agent.counters
+      val _ = Minilang.set_reporter (K ())
+      val (dcfg, dbudget) = MiniLang_Agent.default_cfg
+      val config = (dcfg, dbudget, counters, MiniLang_Agent.REPLAY)
+                     : MiniLang_Agent.config
+      val s1 = fold (MiniLang_Agent.interpret config) ops s0
+      (* 7 *)
+      val th = Minilang.conclude ctxt' s1
+   in SOME (Seq.Result (ctxt, th), Seq.empty) end
+  catch exn =>
+    (tracing ("[aoa_replay] replay failed: " ^ Runtime.exn_message exn); NONE)\<close>)
 
 
 (*** The tactic ***)
@@ -1625,6 +1872,7 @@ fun is_dummy th =
    in Thm.is_dummy th orelse chk (Thm.prop_of th)
   end
 
+(* `by aoa` ≈ run_AoA (§2.3); always async = false. *)
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
   else let val driver = Config.get ctxt aoa_driver
@@ -1633,8 +1881,11 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val log_path = if log_dir = "" then "(no logging)"
                           else log_dir ^ "/" ^ invocation_id
            val _ = writeln ("AoA (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
-        in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) usual_task (ctxt, sequent)
-           |> (fn (_, sequent', _) => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
+           val (agent_cfg, budget) = MiniLang_Agent.default_cfg
+        in run_AoA {driver = driver, minilang_cfg = agent_cfg, budget = budget,
+                    invocation_id = invocation_id, read_store = NONE, write_store = NONE,
+                    async = false, task = Usual} (ctxt, sequent)
+           |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
            handle Agent_Give_Up (reason, detail, _) =>
              error (banner_of reason ^ "\n" ^ detail)
        end )

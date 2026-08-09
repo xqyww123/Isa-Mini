@@ -4,6 +4,11 @@ include MINILANG_AGENT
 val xcmd_packer : xcmd MessagePackBinIO.Pack.packer
 val xcmd_unpacker : xcmd MessagePackBinIO.Unpack.unpacker
 
+(*BytesIO twins, for decoding a blob held in memory (D31): BinIO's instream
+  cannot be fed from a string.*)
+val xcmd_packer_bytes : xcmd MessagePackBytesIO.Pack.packer
+val xcmd_unpacker_bytes : xcmd MessagePackBytesIO.Unpack.unpacker
+
 val pack_bindings : bindings MessagePackBinIO.Pack.packer
 val pack_raw_term : term MessagePackBinIO.Pack.packer
 val unpack_raw_term : term MessagePackBinIO.Unpack.unpacker
@@ -331,6 +336,8 @@ structure ML_Bytes = MiniLang_Agent_Pack(BytesIO)
 
 val xcmd_packer = ML_BinIO.packer
 val xcmd_unpacker = ML_BinIO.unpacker
+val xcmd_packer_bytes = ML_Bytes.packer
+val xcmd_unpacker_bytes = ML_Bytes.unpacker
 val pack_bindings = ML_BinIO.pack_bindings
 val pack_raw_term = ML_BinIO.pack_raw_term
 val unpack_raw_term = ML_BinIO.unpack_raw_term

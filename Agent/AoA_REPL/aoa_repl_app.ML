@@ -1,8 +1,14 @@
 (* The AoA REPL-server app: registers "Minilang.AoA". Moved here out of
    Agent/agent_server.ML so that the Minilang_AoA session no longer depends on
    Isa_REPL. This session (Minilang_AoA_REPL) imports Minilang_AoA + Isa_REPL;
-   the app just delegates to MiniLang_Agent_AoA.AoA_RPC (the same RPC core that
-   `by aoa` uses), so no proof logic lives here. *)
+   the app just delegates to MiniLang_Agent_AoA.run_AoA (the same caching
+   wrapper that `by aoa` uses), so no proof logic lives here.
+
+   Test bypass: when the driver is `test.…` the app passes
+   read_store = SOME false — the ~372 snapshot cases drive the model BY HAND
+   and a level-0 replay hit would return before `case.run` ever runs, a false
+   pass.  write_store stays NONE (reads blocked, writes allowed — faithful to
+   the old Python-side bypass). *)
 
 local open MessagePackBinIO.Unpack
 val unpackBudget = unpackTuple3 (unpackInt, unpackInt, unpackInt)
@@ -50,7 +56,22 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                           packTuple9 (packInt, packInt, packInt, packInt,
                                                       packReal, packInt, packReal, packReal, packReal))
                      in \<^try>\<open>
-                        let val (_, seq, aoa_cost) = MiniLang_Agent_AoA.AoA_RPC (driver, cfg, invocation_id) MiniLang_Agent_AoA.usual_task (ctxt, sequent)
+                        let val (minilang_cfg, budget) = cfg
+                            val (products, seq) = MiniLang_Agent_AoA.run_AoA
+                                  {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
+                                   invocation_id = invocation_id,
+                                   (*test bypass — see the header comment*)
+                                   read_store = if String.isPrefix "test." driver orelse driver = "test"
+                                                then SOME false else NONE,
+                                   write_store = NONE, async = false,
+                                   task = MiniLang_Agent_AoA.Usual} (ctxt, sequent)
+                            (* This join is one of the two sanctioned sync-call-site
+                               exceptions (§2.5): async is hard-wired false here, so
+                               `products` is a fulfilled Future.value and the join is
+                               free — and the cost tuple must go back to the REPL
+                               client, which reads the nine numbers by index.  On a
+                               level-0 hit all nine are zero: the agent never ran. *)
+                            val (_, aoa_cost, _, _) = Future.join products
                             val time = Timing.result start_time
                          in REPL_Server.output cout pack_result
                                  ( "success",

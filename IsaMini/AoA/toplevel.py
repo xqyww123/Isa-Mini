@@ -3,7 +3,9 @@ from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from . import usage_count
 from typing import Any
+import base64
 import json
+import msgpack
 import logging as _logging
 _logger = _logging.getLogger(__name__)
 
@@ -72,28 +74,35 @@ async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tu
     text, is_error, _uk = await _query_entity_core(connection, tag, name)
     return (text, is_error)
 
-async def _replay_cached_proof(connection: Connection, packed_ops: list[Any],
-                               cache_source: str = "") -> tuple[bool, str | None, str | None]:
-    """Replay a proof by feeding its operations through proof_opr callbacks.
+async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
+                                  source: str = "") -> tuple[bool, str | None, str | None, int]:
+    """Replay a freshly found proof by feeding its assembled operations through
+    proof_opr callbacks.
 
-    Used for BOTH a cache hit and a freshly found proof: it is the only path whose
-    resulting state the Isabelle kernel has actually derived from the proof, so it
-    is what the returned theorem must be concluded from.
+    It is the only path whose resulting state the Isabelle kernel has actually
+    derived from the proof, so it is what the returned theorem must be concluded
+    from.  (Store-hit replay no longer comes through here: level-0 lookup and
+    replay are entirely ML-side now.)
 
-    Returns (success, final_state_name, error).
+    Returns (success, final_state_name, error, replayed_ms): replayed_ms is the
+    sum of the per-op ML execution times (D61) measured over exactly this — the
+    final assembled stream, run once, in order — which is what a future replay
+    of the recorded proof will spend on its op stream.
     """
     await connection.callback("IsaMini.set_replay_mode", True)
+    replayed_ms = 0
     try:
         state_name = "$init"
         for i, packed_op in enumerate(packed_ops):
             dest_name = f"$replay_{i+1}"
-            await connection.callback("IsaMini.proof_opr",
-                (state_name, dest_name, packed_op))
+            (_msgs, _flat_goal, elapsed_ms) = await connection.callback(
+                "IsaMini.proof_opr", (state_name, dest_name, packed_op))
+            replayed_ms += elapsed_ms
             state_name = dest_name
-        return (True, state_name, None)
+        return (True, state_name, None, replayed_ms)
     except Exception as e:
-        connection.server.logger.info(f"[AoA-cache] Proof replay failed ({cache_source}): {e}")
-        return (False, None, f"{type(e).__name__}: {e}")
+        connection.server.logger.info(f"[AoA] Proof replay failed ({source}): {e}")
+        return (False, None, f"{type(e).__name__}: {e}", replayed_ms)
     finally:
         await connection.callback("IsaMini.set_replay_mode", False)
 
@@ -158,10 +167,7 @@ async def _ensure_semantic_db(connection) -> None:
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     goal_hash, cache_flags, task_info, enable_write_memory) = data
-    # ML pairs the read-cache toggle with the L2 (Phi_Proof_Store) payload and the
-    # store toggle.
-    use_cache, cached_xcmd_json, store_cache = cache_flags
+     task_info, enable_write_memory) = data
     # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
     task_kind, task_payload = task_info
     # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
@@ -182,22 +188,16 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     global_context = Context.unpack(global_context)
     ptree = Minilang_State._unpack_flat_goal(ptree)
 
-    # --- Multi-level cache check ---
-    from ..proof_store import get_proof_store
+    # The nine agent_cost numbers.  The wire's stats tuple has a tenth element —
+    # assembled_isabelle_time in ms (D61) — appended at the return points below
+    # (the final stream's verification-replay sum; zero when nothing assembled).
     zero_cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
 
     logger = connection.server.logger
-    pc = get_proof_store()
 
-    # Cache READING is gated by the AoA_read_proof_store config (passed from ML)
-    # AND skipped entirely for the test driver: snapshot tests must run the
-    # model by hand (`case.run`), never short-circuit to a replayed cached proof.
-    # Replaying would (a) bypass the by-hand path under test — a successful
-    # replay returns before `case.run` is ever reached, a false pass — and
-    # (b) after a wire-format change, a stale cached proof fails to unpack
-    # mid-callback and corrupts the connection. When disabled, both levels are
-    # bypassed for lookup; a finished proof is still WRITTEN on success (see L1
-    # SQLite store below and the ML-side L2 Phi_Proof_Store store).
+    # All proof-store logic lives on the ML side now (level-0 lookup in
+    # run_AoA/hammer_or_AoA, L1 served by IsaMini.proof_store).  The test-driver
+    # test below only gates the semantic-DB startup checks.
     is_test_driver = driver.split(".", 1)[0] == "test"
 
     # An empty layered semantic DB warns once per process and AoA runs bare
@@ -220,51 +220,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         except Exception as e:
             logger.warning(f"[AoA] semantic interpretation startup check failed: {e}")
 
-    if not use_cache or is_test_driver:
-        why = ("test driver: run by hand, never replay cache" if is_test_driver
-               else "AoA_read_proof_store=false")
-        logger.info(
-            "[AoA-cache] lookup BYPASSED (%s) goal_hash=%s; will still store on success",
-            why, goal_hash)
-    else:
-        logger.info(
-            "[AoA-cache] lookup goal_hash=%s | sqlite_db=%s | phi_cache_json=%s",
-            goal_hash, pc.db_path,
-            f"present({len(cached_xcmd_json)}B)" if cached_xcmd_json else "absent")
-
-        # Level 1: Python SQLite
-        cached_ops = pc.lookup(goal_hash)
-        logger.info("[AoA-cache] L1 SQLite: %s",
-                    "HIT" if cached_ops is not None else "MISS")
-
-        # Level 2: Phi_Proof_Store (from ML)
-        if cached_ops is None and cached_xcmd_json:
-            try:
-                cached_ops = json.loads(cached_xcmd_json)
-                logger.info("[AoA-cache] L2 Phi_Proof_Store: HIT (%d ops)", len(cached_ops))
-            except (json.JSONDecodeError, TypeError) as e:
-                cached_ops = None
-                logger.warning("[AoA-cache] L2 Phi_Proof_Store: JSON parse FAILED: %r", e)
-        elif cached_ops is None:
-            logger.info("[AoA-cache] L2 Phi_Proof_Store: MISS (no json from ML)")
-
-        if cached_ops is not None:
-            cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Proof_Store"
-            ok, final_state, _ = await _replay_cached_proof(connection, cached_ops, cache_source)
-            logger.info("[AoA-cache] replay from %s: %s (%d ops)",
-                        cache_source, "OK" if ok else "FAILED", len(cached_ops))
-            if ok:
-                proof_json = json.dumps(cached_ops)
-                # Served entirely by the cache: the agent never ran.  Reported
-                # only AFTER a successful replay -- a replay that fails falls
-                # through to the agent below and must count once, as `agent`.
-                # (Unreachable under the test driver: this whole branch sits in
-                # the `else` of the lookup-bypass test above.)
-                usage_count.report(usage_count.EVENT_CACHE)
-                return (cached_ops, final_state, zero_cost, None, None, proof_json)
-            # replay failed — fall through to agent
-
-    # --- Level 3: Full agent run ---
+    # --- Full agent run ---
     if "." in driver:
         driver_name, argument = driver.split(".", 1)
         argument = argument or None
@@ -377,15 +333,13 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         assembled = []
 
     if root.is_proof_finished():
-        proof_json = json.dumps(assembled)
-
         # ML concludes the theorem from the state named here (`Minilang.conclude`,
         # agent_server.ML), so it must be one the kernel derived from the agent's
         # proof. `root.final_ml_state` is not: its only writer runs once at
         # `Session.initialize`, while the goal is still open, and `_skip_proof` ->
         # SORRY_END_ALL closes it with a `Skip_Proof.cheat_tac` ORACLE, which nothing
         # recomputes. Return the replay of the assembled, sorry-free op list instead.
-        ok, replayed_state, replay_err = await _replay_cached_proof(
+        ok, replayed_state, replay_err, replayed_ms = await _replay_assembled_proof(
             connection, assembled, "fresh proof")
         if not ok:
             # Never fall back to `final_ml_state` -- that is the hole this closes.
@@ -394,34 +348,33 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                 f"own {len(assembled)} assembled operations from $init failed. "
                 f"Refusing to conclude the theorem from `final_ml_state`, which is "
                 f"closed by a skip_proof oracle.\n"
-                f"goal_hash={goal_hash}\nreplay failed with: {replay_err}")
-        logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops) -> %s",
-                    len(assembled), replayed_state)
+                f"invocation_id={invocation_id}\nreplay failed with: {replay_err}")
+        logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops, %d ms) -> %s",
+                    len(assembled), replayed_ms, replayed_state)
 
-        # Store only AFTER the replay succeeded: a proof that does not replay must
-        # never enter the cache.
-        if store_cache:
-            get_proof_store().store(goal_hash, assembled)
-            logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
-                        goal_hash, len(assembled), get_proof_store().db_path)
-        else:
-            logger.info("[AoA-cache] L1 SQLite STORE SKIPPED (AoA_write_proof_store=false) goal_hash=%s",
-                        goal_hash)
+        # Assemble the blob (D30): base64(msgpack((split_script, ops))).  Only
+        # handed back to ML — Python stores proof TEXT, never blobs, and the
+        # format is known only to raw_AoA (assembler) and the aoa_replay method
+        # (decoder).  b64encode, NOT encodebytes/urlsafe (§5.11).
+        split_script = getattr(root.session.runtime, "split_script", "")
+        packed = msgpack.packb((split_script, assembled))
+        assert packed is not None
+        blob = base64.b64encode(packed).decode("ascii")
+
         # Write to log directory
         if actual_log_path:
             try:
                 os.makedirs(actual_log_path, exist_ok=True)
                 with open(os.path.join(actual_log_path, "proof.json"), "w") as f:
-                    f.write(proof_json)
+                    f.write(json.dumps(assembled))
             except Exception as e:
                 _logger.warning(f"Failed to write proof.json: {e}")
-        return (assembled, replayed_state, cost, None, None, proof_json)
+        return (assembled, replayed_state, cost + (replayed_ms,), None, None, blob)
     else:
         reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
         detail = quit_obj.detail if quit_obj is not None else None
-        logger.info("[AoA-cache] NOT stored: proof not finished (reason=%s) goal_hash=%s",
-                    reason, goal_hash)
-        return (assembled, None, cost, reason, detail, None)
+        logger.info("[AoA] proof not finished (reason=%s)", reason)
+        return (assembled, None, cost + (0,), reason, detail, None)
 
 
 
