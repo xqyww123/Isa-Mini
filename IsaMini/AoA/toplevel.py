@@ -159,7 +159,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
      goal_hash, cache_flags, task_info, enable_write_memory) = data
-    # ML pairs the read-cache toggle with the L2 (Phi_Cache_DB) payload and the
+    # ML pairs the read-cache toggle with the L2 (Phi_Proof_Store) payload and the
     # store toggle.
     use_cache, cached_xcmd_json, store_cache = cache_flags
     # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
@@ -183,13 +183,13 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     ptree = Minilang_State._unpack_flat_goal(ptree)
 
     # --- Multi-level cache check ---
-    from .proof_cache import get_proof_cache
+    from ..proof_store import get_proof_store
     zero_cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
 
     logger = connection.server.logger
-    pc = get_proof_cache()
+    pc = get_proof_store()
 
-    # Cache READING is gated by the AoA_use_proof_cache config (passed from ML)
+    # Cache READING is gated by the AoA_read_proof_store config (passed from ML)
     # AND skipped entirely for the test driver: snapshot tests must run the
     # model by hand (`case.run`), never short-circuit to a replayed cached proof.
     # Replaying would (a) bypass the by-hand path under test — a successful
@@ -197,7 +197,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # (b) after a wire-format change, a stale cached proof fails to unpack
     # mid-callback and corrupts the connection. When disabled, both levels are
     # bypassed for lookup; a finished proof is still WRITTEN on success (see L1
-    # SQLite store below and the ML-side L2 Phi_Cache_DB store).
+    # SQLite store below and the ML-side L2 Phi_Proof_Store store).
     is_test_driver = driver.split(".", 1)[0] == "test"
 
     # An empty layered semantic DB warns once per process and AoA runs bare
@@ -222,7 +222,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
 
     if not use_cache or is_test_driver:
         why = ("test driver: run by hand, never replay cache" if is_test_driver
-               else "AoA_use_proof_cache=false")
+               else "AoA_read_proof_store=false")
         logger.info(
             "[AoA-cache] lookup BYPASSED (%s) goal_hash=%s; will still store on success",
             why, goal_hash)
@@ -237,19 +237,19 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         logger.info("[AoA-cache] L1 SQLite: %s",
                     "HIT" if cached_ops is not None else "MISS")
 
-        # Level 2: Phi_Cache_DB (from ML)
+        # Level 2: Phi_Proof_Store (from ML)
         if cached_ops is None and cached_xcmd_json:
             try:
                 cached_ops = json.loads(cached_xcmd_json)
-                logger.info("[AoA-cache] L2 Phi_Cache_DB: HIT (%d ops)", len(cached_ops))
+                logger.info("[AoA-cache] L2 Phi_Proof_Store: HIT (%d ops)", len(cached_ops))
             except (json.JSONDecodeError, TypeError) as e:
                 cached_ops = None
-                logger.warning("[AoA-cache] L2 Phi_Cache_DB: JSON parse FAILED: %r", e)
+                logger.warning("[AoA-cache] L2 Phi_Proof_Store: JSON parse FAILED: %r", e)
         elif cached_ops is None:
-            logger.info("[AoA-cache] L2 Phi_Cache_DB: MISS (no json from ML)")
+            logger.info("[AoA-cache] L2 Phi_Proof_Store: MISS (no json from ML)")
 
         if cached_ops is not None:
-            cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Cache_DB"
+            cache_source = "SQLite" if not cached_xcmd_json or pc.lookup(goal_hash) is not None else "Phi_Proof_Store"
             ok, final_state, _ = await _replay_cached_proof(connection, cached_ops, cache_source)
             logger.info("[AoA-cache] replay from %s: %s (%d ops)",
                         cache_source, "OK" if ok else "FAILED", len(cached_ops))
@@ -401,11 +401,11 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         # Store only AFTER the replay succeeded: a proof that does not replay must
         # never enter the cache.
         if store_cache:
-            get_proof_cache().store(goal_hash, assembled)
+            get_proof_store().store(goal_hash, assembled)
             logger.info("[AoA-cache] L1 SQLite STORE goal_hash=%s (%d ops) db=%s",
-                        goal_hash, len(assembled), get_proof_cache().db_path)
+                        goal_hash, len(assembled), get_proof_store().db_path)
         else:
-            logger.info("[AoA-cache] L1 SQLite STORE SKIPPED (AoA_store_proof_cache=false) goal_hash=%s",
+            logger.info("[AoA-cache] L1 SQLite STORE SKIPPED (AoA_write_proof_store=false) goal_hash=%s",
                         goal_hash)
         # Write to log directory
         if actual_log_path:

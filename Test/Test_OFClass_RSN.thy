@@ -42,8 +42,11 @@ ML \<open>
      del = [], only = false} : Sledgehammer_Fact.fact_override;
   val sequent = Goal.init (Thm.cterm_of ctxt @{prop "(P::nat \<Rightarrow> bool) n"});
   val _ =
-    (Phi_Sledgehammer_Solver.auto true override NONE
-        (SOME (Time.fromSeconds 8)) ctxt sequent;
+    (Phi_Sledgehammer_Solver.auto
+        {improved = true, async = false, fact_override = override,
+         proof_id = NONE, timeout = SOME (Time.fromSeconds 8),
+         read_store = NONE, write_store = NONE,
+         raise_Error_instead_of_Auto_Fail = true} ctxt sequent;
      writeln "PASS end-to-end: solver returned without raising")
     handle THM (m,i,_) =>
              error ("FAIL end-to-end: raw THM " ^ string_of_int i ^ ": " ^ m)

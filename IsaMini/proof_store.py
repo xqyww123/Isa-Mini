@@ -5,7 +5,7 @@ from typing import Any
 from platformdirs import user_cache_dir
 
 
-class ProofCache:
+class ProofStore:
     """SQLite-backed cache: goal_hash -> serialized xcmd list (JSON)."""
 
     def __init__(self, db_path: str | os.PathLike | None = None):
@@ -46,11 +46,11 @@ class ProofCache:
         self._conn.close()
 
 
-_cache: ProofCache | None = None
+_store: ProofStore | None = None
 
 
-def get_proof_cache() -> ProofCache:
-    global _cache
-    if _cache is None:
-        _cache = ProofCache()
-    return _cache
+def get_proof_store() -> ProofStore:
+    global _store
+    if _store is None:
+        _store = ProofStore()
+    return _store

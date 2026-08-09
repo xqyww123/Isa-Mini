@@ -55,7 +55,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 - User writes `by aoa` → method registered by `method_setup aoa` in `../../Agent/Minilang_AoA.thy`; method body is `MiniLang_Agent_AoA.method` in `../../Agent/agent_server.ML`. Default driver `"ClaudeCode"` (config `AoA_driver`).
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`; Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in `toplevel.py`). Inside it, **Python calls back into ML** repeatedly (`IsaMini.proof_opr`, `reset_state`, `lookup_fact`, `check_term`, …; ML callbacks defined in `agent_server.ML`).
 - Registered as the Isa-REPL app `Minilang.AoA` (`REPL_Server.register_app` in `../../Agent/AoA_REPL/aoa_repl_app.ML`). Clients connect, advance to the `by aoa` line, `run_app('Minilang.AoA')`.
-- Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full run. Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
+- Caching (in `IsaMini_AoA`): Python SQLite (`../proof_store.py`) → ML Phi_Cache JSON → full run. Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
 
 ### Core data model (`model.py`)
 - **`IsaTerm`**: dual `.unicode` (agent-facing) / `.ascii` (RPC). `str()` is **forbidden** (raises). Build via `IsaTerm.from_isabelle(ascii)` / `IsaTerm.from_agent(unicode)`.

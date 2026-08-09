@@ -3,7 +3,7 @@ theory Test_Query_BundleBareName
 begin
 
 declare [[AoA_driver="test.Query_BundleBareName"]]
-declare [[AoA_use_proof_cache=false]]
+declare [[AoA_read_proof_store=false]]
 
 (* A 2-member multi-fact bundle. Its real reference names are
    demo_bundle(1) = conjI and demo_bundle(2) = disjI1; the BARE name

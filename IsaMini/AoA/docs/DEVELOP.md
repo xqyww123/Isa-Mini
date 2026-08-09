@@ -331,7 +331,7 @@ through `print_proof_scope`; the `recall` tool reads it back.
   `success` / `remote_error` / an `Agent_Give_Up` reason (`stuck` / `false_statement` /
   `resource_exhausted` / `surrender` / `restart`) — comes from the `AoA_REPL_App` wrapper in
   `Agent/AoA_REPL/aoa_repl_app.ML`.
-- Caching (in `IsaMini_AoA`): Python SQLite (`proof_cache.py`) → ML Phi_Cache JSON → full agent run.
+- Caching (in `IsaMini_AoA`): Python SQLite (`../proof_store.py`) → ML Phi_Cache JSON → full agent run.
   Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
   The bool config `AoA_use_proof_cache` (default `true`, `Attrib.setup_config_bool` in
   `agent_server.ML`) gates only cache *reading*: set it `false` (`declare [[AoA_use_proof_cache =
@@ -508,6 +508,6 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
 | `language_model_driver.py` | Driver base, retry logic, `WorkerHandle`/worker events. |
 | `driver_claude_code.py` | Default driver (Claude Agent SDK over HTTP MCP). |
 | `driver_api.py` and `driver_{openai,anthropic,gemini,codex}.py` | Provider/driver variants. |
-| `prompts.py`, `retrieval.py`, `proof_cache.py`, `tools/*.jsonc` | Prompts, semantic retrieval, cache, tool schemas. |
+| `prompts.py`, `retrieval.py`, `../proof_store.py`, `tools/*.jsonc` | Prompts, semantic retrieval, cache, tool schemas. |
 | `test.py`, `Tests/*`, and the runner `../../test_AoA.py` | Test framework + golden YAMLs + `.thy` fixtures. |
 | `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` | ML side. |

@@ -3,7 +3,7 @@ theory Minilang_AoA_Test
 begin
  
 
-declare [[agent_driver=EchoDebugger, enable_proof_cache=false]]
+declare [[agent_driver=EchoDebugger, enable_proof_store=false]]
   
 lemma t1: "(1::nat) > 0"
 (*  by (min_script \<open>END\<close>) *)

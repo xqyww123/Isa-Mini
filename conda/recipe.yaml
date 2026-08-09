@@ -98,7 +98,7 @@ build:
       dest.mkdir(parents=True, exist_ok=True)
 
       JUNK_SUFFIX = (".swp", ".swo", ".bak", ".ll", ".old", "~",
-                     ".proof-cache", ".proof-cache.lock")
+                     ".proof-store", ".proof-store.lock")
 
       def junk(n):
           return n.endswith(JUNK_SUFFIX) or n.startswith("#") or n.startswith(".#") \
@@ -203,8 +203,8 @@ build:
                     "Agent/IsaMini_Agent_old", "Agent/Test", "Test", "doc"]:
           if (dest / never).exists():
               die(f"{never} leaked into the package")
-      if list(dest.rglob("*.proof-cache*")) or list(dest.rglob("*~")):
-          die("proof caches or editor backups leaked into the package")
+      if list(dest.rglob("*.proof-store*")) or list(dest.rglob("*~")):
+          die("proof stores or editor backups leaked into the package")
 
       # Same status: a ceiling over a fixed-cardinality whitelist cannot trip.  It bounds
       # the damage if the whitelist ever becomes a tree copy (the tracked repo is 5.0 MB
@@ -280,7 +280,7 @@ requirements:
     # The three sessions ROOT names.  Performant_Isabelle_ML is deliberately NOT listed:
     # this ROOT does not name it, it arrives through auto-sledgehammer and isabelle-rpc,
     # and declaring transitive session deps is how a version bound ends up in two places.
-    - auto-sledgehammer >=0.1.0,<0.2.0        # ROOT:1  Minilang = Auto_Sledgehammer
+    - auto-sledgehammer >=0.2.0,<0.3.0        # ROOT:1  Minilang = Auto_Sledgehammer
     - isabelle-rpc >=0.4.0                    # ROOT:7  Minilang_AoA sessions
     # ROOT:8  ditto; also a pyproject dependency.  Floor raised 2026-07-26:
     # 0.6.0's AoA imports snapshot_sync (the layered semantic DB), which first

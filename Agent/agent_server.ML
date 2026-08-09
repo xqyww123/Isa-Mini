@@ -8,8 +8,8 @@ val aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
 val AoA_interactive_retrieval: string Config.T
 val AoA_retrieval_forking: string Config.T
-val AoA_use_proof_cache: bool Config.T
-val AoA_store_proof_cache: bool Config.T
+val AoA_read_proof_store: bool Config.T
+val AoA_write_proof_store: bool Config.T
 val AoA_enable_write_memory: bool Config.T
 
 type state_id = string
@@ -329,21 +329,21 @@ val _ = Config.register_rpc_option "AoA_retrieval_forking"
 
 (* Whether the `aoa` method may READ from the proof cache.
    true (default) — consult both cache levels (L1 Python SQLite, L2 ML
-   Phi_Cache_DB) before running the agent, replaying a hit if found.
+   Phi_Proof_Store) before running the agent, replaying a hit if found.
    false           — bypass cache lookup entirely and always run the agent.
    Writing is unaffected: a finished proof is still stored into BOTH levels
    on success regardless of this option. *)
-val AoA_use_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_use_proof_cache\<close>
+val AoA_read_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_read_proof_store\<close>
       (K true);
 
 (* Whether a finished proof is STORED into the caches on success.
    true (default) — write both cache levels (L1 Python SQLite, L2 ML
-   Phi_Cache_DB) as before.
+   Phi_Proof_Store) as before.
    false           — skip BOTH stores. Used by the AoA-learning run so its
    reconstructed proofs never pollute the shared production cache (and so a
    second pass / resume does not self-hit and skip learning). Reading is a
-   separate toggle (AoA_use_proof_cache). *)
-val AoA_store_proof_cache = Attrib.setup_config_bool \<^binding>\<open>AoA_store_proof_cache\<close>
+   separate toggle (AoA_read_proof_store). *)
+val AoA_write_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_write_proof_store\<close>
       (K true);
 
 (* Whether the `write_memory` tool (save a reusable proof experience) is offered
@@ -464,7 +464,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
             |> Config.put Minilang.high_auto_mode true
             |> Config.put Minilang.auto_calculation false
             |> Config.put Printer.show_markup false
-            |> Config.put Phi_Cache_DB.enable_proof_cache false
+            |> Config.put Phi_Proof_Store.enable_proof_store false
             (* Under `subgoals`, an induction / case-split rule with
              * `consumes > 0` and insufficient `using` facts yields
              * `Prem<i>` subgoals for the agent to discharge through its
@@ -1448,18 +1448,18 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
       (* ML L2 Phi_Cache key uses the raw hash (aoa:<hash>); the epoch-prefixed
          goal_hash is kept only for the Python L1 SQLite key (passed below). *)
       val aoa_cache_key = "aoa:" ^ raw_goal_hash
-      val use_cache = Config.get ctxt AoA_use_proof_cache
-      val store_cache = Config.get ctxt AoA_store_proof_cache
+      val use_cache = Config.get ctxt AoA_read_proof_store
+      val store_cache = Config.get ctxt AoA_write_proof_store
       val cached_xcmd_json =
             if use_cache
-            then case Phi_Cache_DB.get_cached_proof thy aoa_cache_key of
+            then case Phi_Proof_Store.get_cached_proof thy aoa_cache_key of
                     SOME (_, json) => SOME json
                   | NONE => NONE
             else NONE
       val _ = tracing (String.concat [
-        "[AoA-cache] L2 Phi_Cache_DB get key=", aoa_cache_key,
+        "[AoA-cache] L2 Phi_Proof_Store get key=", aoa_cache_key,
         " thy=", Context.theory_name {long=true} thy,
-        " : ", (if not use_cache then "BYPASSED (AoA_use_proof_cache=false)"
+        " : ", (if not use_cache then "BYPASSED (AoA_read_proof_store=false)"
                 else case cached_xcmd_json
                   of SOME json => "HIT (" ^ Int.toString (size json) ^ "B)"
                    | NONE => "MISS")])
@@ -1567,16 +1567,16 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
            ; (if not store_cache
-              then tracing "[AoA-cache] L2 Phi_Cache_DB store SKIPPED (AoA_store_proof_cache=false)"
+              then tracing "[AoA-cache] L2 Phi_Proof_Store store SKIPPED (AoA_write_proof_store=false)"
               else case proof_json_opt of
                 SOME json => (
                   tracing (String.concat [
-                    "[AoA-cache] L2 Phi_Cache_DB store key=", aoa_cache_key,
+                    "[AoA-cache] L2 Phi_Proof_Store store key=", aoa_cache_key,
                     " thy=", Context.theory_name {long=true} thy,
                     " bytes=", Int.toString (size json)]);
-                  Phi_Cache_DB.update_cached_proof thy
+                  Phi_Proof_Store.update_cached_proof thy
                                (aoa_cache_key, (elapsed, json)))
-              | NONE => tracing "[AoA-cache] L2 Phi_Cache_DB store SKIPPED (proof_json=NONE)")
+              | NONE => tracing "[AoA-cache] L2 Phi_Proof_Store store SKIPPED (proof_json=NONE)")
            ; (xcmds, Minilang.conclude ctxt s1',
               {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
                cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,

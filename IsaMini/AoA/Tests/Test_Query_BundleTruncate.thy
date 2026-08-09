@@ -3,7 +3,7 @@ theory Test_Query_BundleTruncate
 begin
 
 declare [[AoA_driver="test.Query_BundleTruncate"]]
-declare [[AoA_use_proof_cache=false]]
+declare [[AoA_read_proof_store=false]]
 
 (* A 21-member fact: exercises the >20 truncation path (cap = 20 + a note). *)
 lemmas big_bundle = refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl refl

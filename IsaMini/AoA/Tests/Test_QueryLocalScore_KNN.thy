@@ -3,7 +3,7 @@ theory Test_QueryLocalScore_KNN
 begin
 
 declare [[AoA_driver="test.QueryLocalScore_KNN"]]
-declare [[AoA_use_proof_cache=false]]
+declare [[AoA_read_proof_store=false]]
 
 lemma "(x::int) * x \<ge> 0"
   by aoa

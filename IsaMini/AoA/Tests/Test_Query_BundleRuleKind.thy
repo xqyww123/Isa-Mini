@@ -3,7 +3,7 @@ theory Test_Query_BundleRuleKind
 begin
 
 declare [[AoA_driver="test.Query_BundleRuleKind"]]
-declare [[AoA_use_proof_cache=false]]
+declare [[AoA_read_proof_store=false]]
 
 (* A mutual inductive. Its COMBINED facts are qualified by the conglomerate name
    `myeven_myodd` (not `myeven`): `myeven_myodd.intros` is a 3-member introduction

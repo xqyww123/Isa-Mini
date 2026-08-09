@@ -239,7 +239,7 @@ val ctxt''' = ctxt'' |> Locale_Interpretation_Qualifiers.put
 
 ### 6.5 replay / cache【C9,已批准】
 
-- **删掉先前"qualifier 应进 cache key"的说法**(评审 C9):cache key 是 `goal_hash`(ML 算,`proof_cache.py:21` 唯一主键);
+- **删掉先前"qualifier 应进 cache key"的说法**(评审 C9):cache key 是 `goal_hash`(ML 算,`../proof_store.py:21` 唯一主键);
   qualifier 随 packed op **逐字 replay**(`set_replay_mode`+`proof_opr`),不进 key(进 key 会碎片化缓存且不可实现)。
 - 变长叶子块 replay **无需重建 model 树**:N 个叶子随 `unfold_locales` 重执行确定性重现(`INTERPRET; p1; NEXT; …; END`)。
 - qualifier 的 `Proof_Data` set 随 replay 重执行**自动重填**(§6.4),无需额外处理。

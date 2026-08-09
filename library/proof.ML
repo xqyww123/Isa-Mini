@@ -4349,7 +4349,16 @@ fun default_prover timeout_opt override ctxt =
   let val improved_SH = Config.get ctxt mini_use_improved_SH
       val override' = if improved_SH then override
                       else Sledgehammer_Fact.no_fact_override
-  in fn id => Phi_Sledgehammer_Solver.auto improved_SH override' id timeout_opt
+  in fn id => fn ctxt => fn goal =>
+       Phi_Sledgehammer_Solver.auto
+         {improved = improved_SH, async = false, fact_override = override',
+          proof_id = id, timeout = timeout_opt,
+          read_store = NONE, write_store = NONE,
+          raise_Error_instead_of_Auto_Fail = true}
+         ctxt goal
+       (*Joined here rather than widening HAMMER_i's type annotation: this call
+         is always async = false, so the future is a Future.value.*)
+       |> apfst Future.join
   end
 
 fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
@@ -5403,9 +5412,13 @@ fun dispatch_term ctxt term_rule term_goal metric_strs =
                     let
                       val (_, closed) =
                         Phi_Sledgehammer_Solver.all_auto
-                          true                                (* improved version *)
-                          Sledgehammer_Fact.no_fact_override  (* no extra facts *)
-                          NONE                                (* no cache id *)
+                          {improved = true,
+                           async = false,   (* the failure must stay observable *)
+                           fact_override = Sledgehammer_Fact.no_fact_override,
+                           proof_id = NONE, (* derive the key from the goals *)
+                           timeout = NONE,
+                           read_store = NONE, write_store = NONE,
+                           raise_Error_instead_of_Auto_Fail = true}
                           ctxt st
                     in Seq.single closed end
                     catch _ => Seq.empty\<close>

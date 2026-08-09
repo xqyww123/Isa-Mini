@@ -9,9 +9,9 @@
 \#*
 output
 .*#
-*.proof-cache
-*.proof-cache.lock
-*.proof-cache.tmp*
+*.proof-store
+*.proof-store.lock
+*.proof-store.tmp*
 *.phi-cache
 
 doc/.obsidian
