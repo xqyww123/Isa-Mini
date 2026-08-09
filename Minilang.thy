@@ -6,9 +6,8 @@ begin
 
 (* declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]] *)
 
-definition \<open>NO_SIMP (X::'a::{}) \<equiv> X\<close>
-
-lemma NO_SIMP_cong[cong]: \<open>NO_SIMP (X::'a::{}) \<equiv> NO_SIMP X\<close> .
+\<comment> \<open>\<open>NO_SIMP\<close> and its \<open>cong\<close> now come from \<^theory>\<open>Auto_Sledgehammer.Auto_Sledgehammer\<close>,
+    shared with PLPR.\<close>
 
 lemma Ball_All_comm:
   "(\<forall>x\<in>A. \<forall>y. P x y) = (\<forall>y. \<forall>x\<in>A. P x y)"

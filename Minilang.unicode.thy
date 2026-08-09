@@ -6,9 +6,8 @@ begin
 
 (* declare [[ML_debugger, ML_exception_trace, ML_exception_debugger, ML_print_depth=1000]] *)
 
-definition ‹NO_SIMP (X::'a::{}) ≡ X›
-
-lemma NO_SIMP_cong[cong]: ‹NO_SIMP (X::'a::{}) ≡ NO_SIMP X› .
+― ‹‹NO_SIMP› and its ‹cong› now come from \<^theory>‹Auto_Sledgehammer.Auto_Sledgehammer›,
+    shared with PLPR.›
 
 lemma Ball_All_comm:
   "(∀x∈A. ∀y. P x y) = (∀y. ∀x∈A. P x y)"
