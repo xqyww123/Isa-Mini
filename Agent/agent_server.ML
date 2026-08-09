@@ -24,13 +24,13 @@ val zero_cost: agent_cost
    its locally-timed " time=" field) and the phi-side give-up print. *)
 val string_of_cost : agent_cost -> string
 
-(* Raised by AoA_RPC to signal the agent gave up (surrender/refute/resource
+(* Raised by raw_AoA to signal the agent gave up (surrender/refute/resource
    exhaustion). Exposed so the REPL-app wrapper in the Minilang_AoA_REPL session
    can catch it after the app moved out of this structure.
    Also raised BEFORE any agent starts (with reason "technical_failure" and
    zero_cost) when the goal cannot be brought into an AoA-workable shape —
-   e.g. the shared-schematic subgoal merge at the head of AoA_RPC fails to
-   atomize. *)
+   e.g. merge_segment (the third preprocessing segment) fails to atomize the
+   shared-schematic subgoals. *)
 exception Agent_Give_Up of string * string * agent_cost
 
 (* Failure-dispatch banners (PHI_VC_SOLVER D51): one line per give-up reason;
@@ -1781,12 +1781,18 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
                         future (§2.5): the sync state joins a fulfilled
                         Future.value, the async state wakes after the fork —
                         one piece of code for both.  This join is the
-                        sanctioned store-write exception to the no-join rule. *)
+                        sanctioned store-write exception to the no-join rule.
+                        interrupts = true (stage-0 ruling on store-write forks):
+                        the body takes the .proof-store fcntl lock, and
+                        with_file_lock's `run` restores the attributes in effect
+                        at task entry — forked uninterruptible, the blocking
+                        setlkw wait (and the timeout-less L1 RPC) could never
+                        be cancelled. *)
                       val _ =
                         if write then
                           ignore ((singleton o Future.forks)
                             {name = "run_AoA_store_write", group = NONE,
-                             deps = [Future.task_of fut], pri = ~1, interrupts = false}
+                             deps = [Future.task_of fut], pri = ~1, interrupts = true}
                             (fn () =>
                                case Exn.capture Future.join fut of
                                  Exn.Res (_, _, replay_time, prf_text) =>
