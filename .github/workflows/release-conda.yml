@@ -113,9 +113,11 @@ jobs:
                    Agent/IsaMini_Agent_old Agent/Test Test doc; do
             [ ! -e "$comp/$n" ] || { echo "::error::$n leaked into the package"; exit 1; }
           done
-          if find "$comp" \( -name '*.proof-cache*' -o -name '*~' -o -name '*.old.ML' \) | grep -q .; then
+          # Both suffixes on purpose: the engine writes *.proof-store now, but ~157
+          # legacy *.proof-cache files still sit in the working tree and must not ship.
+          if find "$comp" \( -name '*.proof-cache*' -o -name '*.proof-store*' -o -name '*~' -o -name '*.old.ML' \) | grep -q .; then
             echo "::error::caches, backups or dead .old.ML files leaked"
-            find "$comp" \( -name '*.proof-cache*' -o -name '*~' -o -name '*.old.ML' \) ; exit 1
+            find "$comp" \( -name '*.proof-cache*' -o -name '*.proof-store*' -o -name '*~' -o -name '*.old.ML' \) ; exit 1
           fi
           # A ROOTS file is the ONE thing that would pull a sub-ROOT into what
           # `isabelle components -u` exposes.  Its absence is the real invariant --

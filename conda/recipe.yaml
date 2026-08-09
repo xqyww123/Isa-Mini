@@ -98,7 +98,9 @@ build:
       dest.mkdir(parents=True, exist_ok=True)
 
       JUNK_SUFFIX = (".swp", ".swo", ".bak", ".ll", ".old", "~",
-                     ".proof-store", ".proof-store.lock")
+                     ".proof-store", ".proof-store.lock",
+                     # legacy, still present in the working tree until the cleanup stage
+                     ".proof-cache", ".proof-cache.lock")
 
       def junk(n):
           return n.endswith(JUNK_SUFFIX) or n.startswith("#") or n.startswith(".#") \
@@ -203,7 +205,8 @@ build:
                     "Agent/IsaMini_Agent_old", "Agent/Test", "Test", "doc"]:
           if (dest / never).exists():
               die(f"{never} leaked into the package")
-      if list(dest.rglob("*.proof-store*")) or list(dest.rglob("*~")):
+      if (list(dest.rglob("*.proof-store*")) or list(dest.rglob("*.proof-cache*"))
+              or list(dest.rglob("*~"))):
           die("proof stores or editor backups leaked into the package")
 
       # Same status: a ceiling over a fixed-cardinality whitelist cannot trip.  It bounds

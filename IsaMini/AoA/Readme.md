@@ -133,13 +133,13 @@ declare [[AoA_log_dir = ""]]                 (* disabling logging *)
 
 AoA caches the proofs it finds, so re-processing a theory replays the caches instead
 of paying for the model again. The cache lives next to your theory file, as
-`<TheoryName>.proof-cache`. It records the proofs of your theory and should be
+`<TheoryName>.proof-store`. It records the proofs of your theory and should be
 committed and distributed along with it.
 
 The cache can be disabled with the following options — reading and writing are controlled separately:
 ```isabelle
-declare [[AoA_use_proof_cache = false]]      (* ignore cached proofs, always re-prove *)
-declare [[AoA_store_proof_cache = false]]    (* do not record new proofs *)
+declare [[AoA_read_proof_store = false]]     (* ignore stored proofs, always re-prove *)
+declare [[AoA_write_proof_store = false]]    (* do not record new proofs *)
 ```
 Both default to `true`.
 

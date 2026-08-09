@@ -21,7 +21,7 @@ end
 
 AoA integrates seamlessly into existing proof developments — no fine-tuned model, no local LLM infrastructure to set up, no changes to your theory files. The agent never edits/touches your Isabelle script: all of its work happens in the background, and its effects are confined to the target proof context (here, the one opened by `sqrt2_not_rational`); outside that context, anything is untouched.
 
-The proof found by `aoa` is saved to a separate file (`scratch.proof-cache` in the example above). Replaying `by aoa` reuses the
+The proof found by `aoa` is saved to a separate file (`Scratch.proof-store` in the example above). Replaying `by aoa` reuses the
 stored proof directly — the agent is not re-run and no API cost is incurred — unless the cached proof no longer holds, in which case the agent is automatically invoked again.
 
 Read [AoA User Manual](/IsaMini/AoA/Readme.md) for how to install and other details.

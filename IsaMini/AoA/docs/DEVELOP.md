@@ -333,11 +333,11 @@ through `print_proof_scope`; the `recall` tool reads it back.
   `Agent/AoA_REPL/aoa_repl_app.ML`.
 - Caching (in `IsaMini_AoA`): Python SQLite (`../proof_store.py`) → ML Phi_Cache JSON → full agent run.
   Hits replay packed ops via `set_replay_mode` + `proof_opr` (`_replay_cached_proof`).
-  The bool config `AoA_use_proof_cache` (default `true`, `Attrib.setup_config_bool` in
-  `agent_server.ML`) gates only cache *reading*: set it `false` (`declare [[AoA_use_proof_cache =
+  The bool config `AoA_read_proof_store` (default `true`, `Attrib.setup_config_bool` in
+  `agent_server.ML`) gates only store *reading*: set it `false` (`declare [[AoA_read_proof_store =
   false]]`) to bypass both levels of lookup and always run the agent. Writing is gated separately by
-  `AoA_store_proof_cache` (default `true`); when it holds, a finished proof is stored into both
-  levels (Python L1 SQLite + ML L2 Phi_Cache_DB) on success.
+  `AoA_write_proof_store` (default `true`); when it holds, a finished proof is stored into both
+  levels (Python L1 SQLite + ML L2 Phi_Proof_Store) on success.
 
 ---
 

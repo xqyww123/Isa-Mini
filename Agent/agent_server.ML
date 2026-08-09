@@ -1575,7 +1575,7 @@ fun AoA_RPC (driver, cfg:cfg, invocation_id) (task_kind, task_payload_packer) (c
                     " thy=", Context.theory_name {long=true} thy,
                     " bytes=", Int.toString (size json)]);
                   Phi_Proof_Store.update_cached_proof thy
-                               (aoa_cache_key, (elapsed, json)))
+                               (aoa_cache_key, (Phi_Proof_Store.standard_time elapsed, json)))
               | NONE => tracing "[AoA-cache] L2 Phi_Proof_Store store SKIPPED (proof_json=NONE)")
            ; (xcmds, Minilang.conclude ctxt s1',
               {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
