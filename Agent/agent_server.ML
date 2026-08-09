@@ -29,6 +29,10 @@ val zero_cost: agent_cost
    atomize. *)
 exception Agent_Give_Up of string * string * agent_cost
 
+(* Failure-dispatch banners (PHI_VC_SOLVER D51): one line per give-up reason;
+   consumers render `error (banner_of reason ^ "\n" ^ detail)`. *)
+val banner_of : string -> string
+
 (* The extra `string * raw_packer` group is the Task: a task-kind tag plus a
    packer that writes the task payload (empty for "usual"; the original Isar proof
    for "learning"). Sent to Python as the 11th arg-schema element, a 2-array
@@ -65,6 +69,19 @@ val zero_cost : agent_cost = {
 }
 
 exception Agent_Give_Up of string * string * agent_cost
+
+fun banner_of "refute" =
+      "Refuted: the proof agent found this proof obligation does not hold:"
+  | banner_of "resource_unavailable" =
+      "The proof agent could not reach the language model backend. This is an infrastructure failure."
+  | banner_of "resource_exhausted" =
+      "The proof agent exhausted its budget before finding a proof. This usually means the goal is too hard for the agent to solve."
+  | banner_of "surrender" =
+      "The proof goal is hard and the proof agent was unable to solve it."
+  | banner_of "technical_failure" =
+      "The proof agent stopped for a technical reason:"
+  | banner_of reason =
+      "The proof agent gave up for an unrecognized reason (" ^ reason ^ "):"
 
 type driver = string
 val default_driver = "ClaudeCode"
@@ -1618,13 +1635,8 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val _ = writeln ("AoA (driver: " ^ driver ^ ", logs: " ^ log_path ^ ")")
         in AoA_RPC (driver, MiniLang_Agent.default_cfg, invocation_id) usual_task (ctxt, sequent)
            |> (fn (_, sequent', _) => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
-           (* Banner ⑤ of the failure-dispatch design (PHI_VC_SOLVER D51; only
-              this branch is implemented ahead of the rest): a technical stop
-              is neither "goal too hard" nor "goal refuted" — say so and carry
-              the detail. Other give-up reasons keep propagating raw until the
-              full dispatch lands. *)
-           handle Agent_Give_Up ("technical_failure", detail, _) =>
-             error ("The proof agent stopped for a technical reason:\n" ^ detail)
+           handle Agent_Give_Up (reason, detail, _) =>
+             error (banner_of reason ^ "\n" ^ detail)
        end )
 
 
