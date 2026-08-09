@@ -29,8 +29,15 @@ class ProofStore:
         self.db_path = str(db_path)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        # Table and file names are historical (the one-off cold start wiped the
-        # old contents); the schema is the new proof-text one.
+        # Auto cold start (round-4 review): the agent-era DB used the SAME table
+        # name with a proof_json column, so CREATE IF NOT EXISTS would keep it
+        # and every query after that would fail — degraded to a permanent MISS
+        # by the RPC fallback rule.  Any schema but the current one is dropped;
+        # L1 is a cache, losing it costs one re-search per goal.
+        cols = {row[1] for row in
+                self._conn.execute("PRAGMA table_info(proof_cache)")}
+        if cols and cols != {"goal_hash", "proof_text", "std_time_ms", "timestamp"}:
+            self._conn.execute("DROP TABLE proof_cache")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS proof_cache (
                 goal_hash   TEXT    PRIMARY KEY,
