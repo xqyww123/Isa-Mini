@@ -110,15 +110,27 @@ val unpack_bindings =
 val pack_bindings =
   packPair (packList pack_var_name, packList pack_prem_name)
 
+(* Wire triple (name, stmt option, recorded proof option) — stage 3a, D37.
+   The pack side always writes the triple; the unpack side ALSO accepts the
+   pre-3a pair, lifting it with a NONE third field: the arity is part of the
+   wire format (packOption cannot express a missing field), and mlmsgpack's
+   `||` retries on the untouched instream, so the fallback is safe. *)
 fun pack_extended_fact (FactByName name) =
-      packPair (packString, packOption packString) (name, NONE)
-  | pack_extended_fact (FactInTime (assigned_name, stmt)) =
-      packPair (packString, packOption packString) (assigned_name, SOME stmt)
+      packTuple3 (packString, packOption packString,
+                  packOption (packPair (packString, packInt)))
+                 (name, NONE, NONE)
+  | pack_extended_fact (FactInTime (assigned_name, stmt, recorded)) =
+      packTuple3 (packString, packOption packString,
+                  packOption (packPair (packString, packInt)))
+                 (assigned_name, SOME stmt, recorded)
 
 val unpack_extended_fact =
-  unpackPair (unpackString, unpackOption unpackString)
-  >> (fn (name, NONE) => FactByName name
-       | (name, SOME stmt) => FactInTime (name, stmt))
+  (unpackTuple3 (unpackString, unpackOption unpackString,
+                 unpackOption (unpackPair (unpackString, unpackInt)))
+   || (unpackPair (unpackString, unpackOption unpackString)
+       >> (fn (name, stmt) => (name, stmt, NONE))))
+  >> (fn (name, NONE, _) => FactByName name
+       | (name, SOME stmt, recorded) => FactInTime (name, stmt, recorded))
 
 (* post-rule schematic instantiation: rounds of (var-name, value-string) pairs *)
 val unpack_post_insts = unpackList (unpackList (unpackPair (unpackString, unpackString)))

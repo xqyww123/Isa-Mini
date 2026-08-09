@@ -368,25 +368,34 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
                 file.write(f"  ... ({len(self.expression)} facts total)\n")
         else:
             file.write(f"- {display_name}\n")
-    def pack(self) -> tuple[str, str | None]:
+    def pack(self) -> 'tuple[str, str | None, tuple[str, int] | None]':
         suffix = _fact_suffix(self.fact, for_pack=True)
         if suffix:
             suffix = ascii_of_unicode(suffix)
-        return (self.full_name + suffix, None)
+        return (self.full_name + suffix, None, None)
 
 class IsabelleFact_ProveInTime(IsabelleFact):
-    """A fact to be proven just-in-time by Isabelle."""
-    __slots__ = ('statement', 'assigned_name')
-    def __init__(self, statement: term, assigned_name: str):
+    """A fact to be proven just-in-time by Isabelle.
+
+    `cached_proof` is the one deliberately mutable field, exempt from the
+    immutable-by-convention rule above: (rendered method text, elapsed ms)
+    pasted back from a FACT_PRF message once the ML side proves the statement
+    (stage 3a, D37), so the assembled op stream carries the proof and a replay
+    never re-searches. `refresh_facts` passes ProveInTime instances through
+    unchanged, so the record survives refreshes."""
+    __slots__ = ('statement', 'assigned_name', 'cached_proof')
+    def __init__(self, statement: term, assigned_name: str,
+                 cached_proof: 'tuple[str, int] | None' = None):
         self.statement = statement
         self.assigned_name = assigned_name
+        self.cached_proof = cached_proof
     def name(self) -> 'term':
         return self.statement
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"- {self.statement.unicode}\n")
-    def pack(self) -> tuple[str, str | None]:
-        return (self.assigned_name, self.statement.ascii)
+    def pack(self) -> 'tuple[str, str | None, tuple[str, int] | None]':
+        return (self.assigned_name, self.statement.ascii, self.cached_proof)
 
 class IsabelleFact_Unfound(IsabelleFact):
     """A fact that could not be found in the Isabelle context."""
@@ -1476,6 +1485,16 @@ class SH_PRF_Msg(Message):
     """Proof method string and wall-clock time (ms) from a successful HAMMER."""
     def __init__(self, method: str, time_ms: int):
         super().__init__()
+        self.method = method
+        self.time_ms = time_ms
+
+class FACT_PRF_Msg(Message):
+    """Proof method string and wall-clock time (ms) found for a FactInTime
+    (prove-in-time) fact, keyed by its assigned name (stage 3a, D37) — the
+    fact-level analogue of SH_PRF_Msg."""
+    def __init__(self, fact_name: str, method: str, time_ms: int):
+        super().__init__()
+        self.fact_name = fact_name
         self.method = method
         self.time_ms = time_ms
 
@@ -7787,6 +7806,21 @@ async def _filter_unprovable(
     kept = [f for i, f in enumerate(facts) if i not in drop]
     return kept, warnings
 
+def _backfill_recorded_fact_proofs(
+    facts: 'Sequence[IsabelleFact | None] | None', state: 'Minilang_State'
+) -> None:
+    """Paste each FACT_PRF message back onto the ProveInTime fact it names —
+    the fact-level mirror of the SH_PRF -> _found_tactic backfill (stage 3a,
+    D37) — so assemble() packs the found proof into the op stream and a
+    replay of the blob never re-searches. Call after a SUCCESSful evaluation
+    with the facts the node's operation carried."""
+    for m in state.messages:
+        if isinstance(m, FACT_PRF_Msg):
+            for f in facts or []:
+                if isinstance(f, IsabelleFact_ProveInTime) \
+                        and f.assigned_name == m.fact_name:
+                    f.cached_proof = (m.method, m.time_ms)
+
 def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
     ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
     """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
@@ -7952,6 +7986,7 @@ class Obvious(Leaf):
                         self._found_tactic = m.method
                         self._eval_time_ms = m.time_ms
                         break
+                _backfill_recorded_fact_proofs(self.fact_refs, self.resulting_state())
             elif self.status.status == EvaluationStatus.Status.FAILURE:
                 self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
@@ -8078,6 +8113,7 @@ class Chaining(Leaf):
                 if isinstance(m, Specialize_Result_Msg):
                     self.result_facts = m.facts
                     break
+            _backfill_recorded_fact_proofs(self.fact_refs, self.resulting_state())
 
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         if not self._raw_facts:
@@ -8775,6 +8811,8 @@ class Derive(Leaf):
                 if isinstance(m, Specialize_Result_Msg):
                     self.result_facts = m.facts
                     break
+            _backfill_recorded_fact_proofs(
+                [self.rule_ref, *(self.discharge_refs or [])], self.resulting_state())
 
     def print(self, indent: int, file: MyIO, update_line: bool = False, show_warnings: bool = False) -> int:
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
@@ -9231,6 +9269,7 @@ class Rewrite(Leaf):
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             self.running_time += 1
             messages = self.resulting_state().messages
+            _backfill_recorded_fact_proofs(self.using, self.resulting_state())
             intro_bindings_msgs = [m for m in messages if isinstance(m, Intro_Bindings_Msg)]
             match intro_bindings_msgs:
                 case [intro_bindings_msg]:

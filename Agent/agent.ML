@@ -17,6 +17,9 @@ type bindings = var_name list * prem_name list
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
   | FactInTime of string (*assigned name*) * 'term (*statement to prove on-the-fly*)
+               * (string * int) option (*recorded proof: (rendered method text,
+                              elapsed ms) — shape follows HAMMER's cached_proof
+                              (stage 3a, D37); NONE = never proven/recorded yet*)
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -114,6 +117,12 @@ val apply_post_insts : (string * string) list list -> Minilang.state -> Minilang
 val default_cfg : cfg * budget
 
 exception FACT_IN_TIME_FAIL of term
+(* Reporter message fired by pre_resolve_fact's LIVE no-record branch:
+   (assigned fact name, rendered proof text, fastforce-only elapsed) of the
+   FactInTime statement just proven, so Python can record the proof into the
+   op's fact field (stage 3a, D37).  Mirrors Minilang.SH_PRF, plus the fact
+   name — one op can carry several FactInTime facts. *)
+exception FACT_PRF of string * string * Time.time
 exception INTRO_BINDINGS of {
     missing: bindings,
     auto_introduced: bindings,
@@ -211,7 +220,7 @@ type config = cfg * budget * counters * exec_mode
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
-  | FactInTime of string * 'term
+  | FactInTime of string * 'term * (string * int) option
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -1087,12 +1096,19 @@ fun AUTO_SIMPLIFY
   end
 
 exception FACT_IN_TIME_FAIL of term
+exception FACT_PRF of string * string * Time.time
 
 (* Resolve FactInTime: prove the statement, register in context, return FactByName.
    FactByName passes through unchanged. Threads updated context via fold.
-   The assigned name comes from the FactInTime tuple (set by Python). *)
-fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
-  | pre_resolve_fact (FactInTime (assigned_name, prop)) ctxt =
+   The assigned name comes from the FactInTime tuple (set by Python).
+   Three branches on (recorded proof, exec_mode) — stage 3a, D37:
+   recorded (either mode) replays the recorded text; LIVE without a record
+   searches via run_mepo_and_render and reports the found text through
+   FACT_PRF; REPLAY without a record searches the same way — graceful
+   degradation, never an error (author ruling; deliberately UNLIKE HAMMER's
+   REPLAY branch). *)
+fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
+  | pre_resolve_fact exec_mode (FactInTime (assigned_name, prop, recorded)) ctxt =
       let
           (* `prop` may contain schematic vars (parsed via read_prop_schematic).
              import_terms fixes them (term Vars -> Frees, type Vars -> TFrees)
@@ -1102,10 +1118,35 @@ fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
           val (props', inner) = Variable.import_terms true [prop] ctxt
           val prop' = hd props'
           val goal = Goal.init (Thm.cterm_of inner prop')
+          (* The search half of fast_mepo_tac (same pool, same max_facts
+             config), but keeping the rendered proof text fast_mepo_tac keeps
+             internal — the recorder has to report that text (fast_mepo_tac in
+             agent context, enable_proof_store = false, would drop it). *)
+          fun search report =
+            let val max_facts = Config.get inner Phi_Sledgehammer_Solver.fast_mepo_max_facts
+                val lazy_facts = Phi_Sledgehammer_Solver.facts_as_mepo_lazy_facts true inner
+                val (st', prf_str, elapsed) =
+                      Phi_Sledgehammer_Solver.run_mepo_and_render (Time.fromSeconds 10)
+                        max_facts lazy_facts [] [] inner 1 goal
+                val _ = if report
+                        then Minilang.get_reporter ()
+                               (Minilang.Internal (FACT_PRF (assigned_name, prf_str, elapsed)))
+                        else ()
+             in st' end
+             handle Phi_Sledgehammer_Solver.Auto_Fail _ => raise FACT_IN_TIME_FAIL prop
+                  | Timeout.TIMEOUT _ => raise FACT_IN_TIME_FAIL prop
           val proved =
-            (case Seq.pull (Phi_Sledgehammer_Solver.fast_mepo_tac (Time.fromSeconds 10) inner 1 goal)
-               of SOME (st', _) => st'
-                | NONE => raise FACT_IN_TIME_FAIL prop)
+            (case (recorded, exec_mode) of
+                (SOME _, _) =>
+                  (* ⚠️ HOLDING STATE: the replay-the-record branch awaits the
+                     author's replay-budget ruling (plan §9 item 2).  Until it
+                     lands, a recorded proof is ignored and we search exactly as
+                     if no record existed — today's behaviour, no new semantics.
+                     The ruled branch will be:
+                     replay_mepo_proof kws <ruled budget> 1 prf (inner, goal). *)
+                  search (exec_mode = LIVE)
+              | (NONE, LIVE) => search true
+              | (NONE, REPLAY) => search false)
             handle ERROR _ => raise FACT_IN_TIME_FAIL prop
           val thm0 = Goal.finish inner proved
           val thm = singleton (Variable.export inner ctxt) thm0
@@ -1113,32 +1154,32 @@ fun pre_resolve_fact (FactByName fref) ctxt = (fref, ctxt)
                 ((Binding.name assigned_name, []), [([thm], [])]) ctxt
       in ((Facts.Named ((assigned_name, Position.none), NONE), []), ctxt') end
 
-fun pre_resolve_facts ctxt facts =
-  fold_map pre_resolve_fact facts ctxt
+fun pre_resolve_facts exec_mode ctxt facts =
+  fold_map (pre_resolve_fact exec_mode) facts ctxt
 
 (* Resolve extended facts to a flat thm list (for SIMPLIFY, UNFOLD) *)
-fun resolve_to_thms ctxt facts =
-  let val (refs, ctxt') = pre_resolve_facts ctxt facts
+fun resolve_to_thms exec_mode ctxt facts =
+  let val (refs, ctxt') = pre_resolve_facts exec_mode ctxt facts
   in maps (Attrib.eval_thms ctxt' o single) refs
   end
 
 (* Resolve extended facts to fact refs, threading context (for RULE, HAMMER, END, NXT) *)
-fun resolve_to_refs ctxt facts = pre_resolve_facts ctxt facts
+fun resolve_to_refs exec_mode ctxt facts = pre_resolve_facts exec_mode ctxt facts
 
-fun resolve_to_override ctxt facts =
-  let val (refs, ctxt') = resolve_to_refs ctxt facts
+fun resolve_to_override exec_mode ctxt facts =
+  let val (refs, ctxt') = resolve_to_refs exec_mode ctxt facts
   in (ctxt', {add = refs, del = [], only = false}) end
 
 (* Resolve extended facts and update Minilang state's context *)
-fun with_resolved_refs s facts f =
+fun with_resolved_refs exec_mode s facts f =
   let val ctxt = Minilang.context_of s
-      val (refs, ctxt') = resolve_to_refs ctxt facts
+      val (refs, ctxt') = resolve_to_refs exec_mode ctxt facts
       val s' = Minilang.map_context (K ctxt') s
   in f s' refs end
 
-fun with_resolved_override s facts f =
+fun with_resolved_override exec_mode s facts f =
   let val ctxt = Minilang.context_of s
-      val (ctxt', ovr) = resolve_to_override ctxt facts
+      val (ctxt', ovr) = resolve_to_override exec_mode ctxt facts
       val s' = Minilang.map_context (K ctxt') s
   in f s' ovr end
 
@@ -1443,11 +1484,11 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               fold_rev (fn (fact, SOME targets) => apfst (cons (fact, targets))
                          | (fact, NONE) => apsnd (cons fact))
                 simp_facts_with_targets ([], [])
-            val simp_thms = resolve_to_thms ctxt normal_facts
+            val simp_thms = resolve_to_thms exec_mode ctxt normal_facts
             val targeted_thms =
               maps (fn (fact, targets) =>
                 map (fn thm => (thm, targets))
-                    (resolve_to_thms ctxt [fact])
+                    (resolve_to_thms exec_mode ctxt [fact])
               ) targeted_entries
          in AUTO_SIMPLIFY counters simp_thms targeted_thms use_system_simps premise_names
                           simplify_goal user_bindings_opt s
@@ -1457,13 +1498,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                     then error "You must specify at least one theorem to unfold"
                     else ()
             val ctxt = Minilang.context_of s
-            val defs = resolve_to_thms ctxt facts
+            val defs = resolve_to_thms exec_mode ctxt facts
         in Minilang.UNFOLD defs s
         end
     | WITNESS terms =>
         Minilang.CHOOSE terms s
     | RULE (facts, insts) =>
-        with_resolved_refs s facts (fn s' => fn refs =>
+        with_resolved_refs exec_mode s facts (fn s' => fn refs =>
           apply_post_insts insts (Minilang.RULE refs [] s'))
     | CASE_SPLIT (target, vars, rule, no_simp, insts) =>
         apply_post_insts insts
@@ -1496,13 +1537,13 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                     {using = [], insertion = named_insertion} s)
         end
     | NEXT_OR_END (lemmas, vars) =>
-        with_resolved_override s lemmas (fn s' => fn ovr =>
+        with_resolved_override exec_mode s lemmas (fn s' => fn ovr =>
           Minilang.END_or_NXT vars ovr s')
     | NEXT (lemmas, vars) =>
-        with_resolved_override s lemmas (fn s' => fn ovr =>
+        with_resolved_override exec_mode s lemmas (fn s' => fn ovr =>
           Minilang.NXT vars ovr s')
     | END lemmas =>
-        with_resolved_override s lemmas (fn s' => fn ovr =>
+        with_resolved_override exec_mode s lemmas (fn s' => fn ovr =>
           Minilang.END ovr s')
     | BRANCH branches =>
         let val brs = map (fn (SOME name, br) =>
@@ -1589,7 +1630,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
     | HAMMER (facts, timeout, cached_proof) =>
         let
           val ctxt0 = Minilang.context_of s
-          val (ctxt_r, ovr) = resolve_to_override ctxt0 facts
+          val (ctxt_r, ovr) = resolve_to_override exec_mode ctxt0 facts
           val s_resolved = Minilang.map_context (K ctxt_r) s
 
           fun hammer_live () = (
@@ -1682,8 +1723,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
     | INST_GOAL_VARS pairs => apply_post_insts [pairs] s
     | SPECIALIZE (name, rule_fact, insts, discharge_facts) =>
         let val ctxt = Minilang.context_of s
-            val rule_thms = resolve_to_thms ctxt [rule_fact]
-            val discharge_thms = resolve_to_thms ctxt discharge_facts
+            val rule_thms = resolve_to_thms exec_mode ctxt [rule_fact]
+            val discharge_thms = resolve_to_thms exec_mode ctxt discharge_facts
             val insts' = map (fn (n, tm) =>
               if String.isPrefix "?" n then
                 case Lexicon.read_variable n of
@@ -1706,7 +1747,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
         in s'
         end
     | CHAINING (name_opt, facts) =>
-        with_resolved_refs s facts (fn s' => fn refs =>
+        with_resolved_refs exec_mode s facts (fn s' => fn refs =>
           let val ctxt' = Minilang.context_of s'
               val thms = maps (Attrib.eval_thms ctxt' o single) refs
               val facts_before = Minilang.get_local_facts s'
@@ -1972,7 +2013,7 @@ fun check_extended_fact _ ctxt (FactByName name) =
       let val fact = read_fact name
           val _ = Agent_Hint.check_fact_refs ctxt [fact]
       in FactByName fact end
-  | check_extended_fact s ctxt (FactInTime (assigned_name, stmt)) =
+  | check_extended_fact s ctxt (FactInTime (assigned_name, stmt, recorded)) =
       let val t = read_prop_schematic ctxt stmt
           val _ = Agent_Hint.check_term ctxt t
           (* Guard (as Witness/Induction/Instantiation do): reject undeclared
@@ -1981,7 +2022,7 @@ fun check_extended_fact _ ctxt (FactByName name) =
              schematic ?a onto a same-named undeclared free, silently registering
              a different (often vacuous) lemma than the agent authored. *)
           val _ = reject_undeclared_frees "Prove-in-time" "fact statement" s [t]
-      in FactInTime (assigned_name, t) end
+      in FactInTime (assigned_name, t, recorded) end
 
 in
 
