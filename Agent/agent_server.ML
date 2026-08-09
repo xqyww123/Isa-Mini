@@ -342,6 +342,13 @@ fun minilang_message_packer ctxt =
              | Minilang.SH_PRF (prf, time) =>
                  packPair (packInt, packPair (packString, packInt))
                           (15, (prf, Time.toMilliseconds time))
+             (* (assigned fact name, rendered proof text, elapsed ms) of a
+                FactInTime just proven live — Python pastes it back into the
+                op's fact field (stage 3a, D37; tag 20 author-approved
+                2026-08-10). *)
+             | MiniLang_Agent.FACT_PRF (name, prf, time) =>
+                 packPair (packInt, packTuple3 (packString, packString, packInt))
+                          (20, (name, prf, Time.toMilliseconds time))
              | Agent_Hint.HINT_NOTICE {name, text} =>
                  packPair (packInt, packPair (packString, packString))
                           (17, (name, text))
@@ -363,6 +370,7 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
                                  | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
                                  | Minilang.Internal (Minilang.SH_PRF _) => true
+                                 | Minilang.Internal (MiniLang_Agent.FACT_PRF _) => true
                                  | Minilang.Internal (Agent_Hint.HINT_NOTICE _) => true
                                  | Minilang.Internal (Minilang.DISCARDED_VARS _) => true
                                  | Minilang.Internal _ => false

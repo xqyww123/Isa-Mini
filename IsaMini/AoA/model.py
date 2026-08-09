@@ -1551,6 +1551,8 @@ def unpack_message(data) -> Message:
             return Discarded_Vars_Msg([(str(i), str(e)) for (i, e) in pairs])
         case (19, n):
             return Interpret_Facts_Count_Msg(int(n))
+        case (20, (fact_name, method, time_ms)):
+            return FACT_PRF_Msg(fact_name, method, time_ms)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 

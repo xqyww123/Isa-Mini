@@ -1135,16 +1135,24 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
              in st' end
              handle Phi_Sledgehammer_Solver.Auto_Fail _ => raise FACT_IN_TIME_FAIL prop
                   | Timeout.TIMEOUT _ => raise FACT_IN_TIME_FAIL prop
+          (* Replay a recorded proof text under the author-ruled budget
+             (2026-08-10, HAMMER's paradigm): 1.5 x recorded ms + 3000 ms.
+             On any failure of the recorded text, fall back to the search of
+             the current mode — bounded (10s), so acceptable even on replay,
+             matching the REPLAY-no-record graceful-degradation ruling; in
+             LIVE the fallback also re-reports a fresh FACT_PRF, refreshing
+             the stale record (HAMMER's live fallback, likewise). *)
+          fun replay_recorded (prf, ms) =
+            let val kws = Keyword.no_major_keywords
+                            (Thy_Header.get_keywords (Proof_Context.theory_of inner))
+                val budget = Time.fromMilliseconds (Real.round (1.5 * Real.fromInt ms) + 3000)
+             in snd (Phi_Sledgehammer_Solver.replay_mepo_proof kws budget 1 prf (inner, goal))
+            end
           val proved =
             (case (recorded, exec_mode) of
-                (SOME _, _) =>
-                  (* ⚠️ HOLDING STATE: the replay-the-record branch awaits the
-                     author's replay-budget ruling (plan §9 item 2).  Until it
-                     lands, a recorded proof is ignored and we search exactly as
-                     if no record existed — today's behaviour, no new semantics.
-                     The ruled branch will be:
-                     replay_mepo_proof kws <ruled budget> 1 prf (inner, goal). *)
-                  search (exec_mode = LIVE)
+                (SOME record, _) =>
+                  (\<^try>\<open>replay_recorded record
+                    catch _ => (fn () => search (exec_mode = LIVE)) ()\<close>)
               | (NONE, LIVE) => search true
               | (NONE, REPLAY) => search false)
             handle ERROR _ => raise FACT_IN_TIME_FAIL prop
