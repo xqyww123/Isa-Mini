@@ -327,8 +327,6 @@ fun minilang_message_packer ctxt =
              | Minilang.DISCARDED_VARS pairs =>
                  packPair (packInt, packList (packPair (packString, packString)))
                           (18, pairs)
-             | Goal_Preprocess.SPLIT_SCRIPT script =>
-                 packPair (packInt, packString) (20, script)
              | _ => error "BUG #adli: unexpected Internal message")
    in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
                                  | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
@@ -346,7 +344,6 @@ fun minilang_message_packer ctxt =
                                  | Minilang.Internal (Minilang.SH_PRF _) => true
                                  | Minilang.Internal (Agent_Hint.HINT_NOTICE _) => true
                                  | Minilang.Internal (Minilang.DISCARDED_VARS _) => true
-                                 | Minilang.Internal (Goal_Preprocess.SPLIT_SCRIPT _) => true
                                  | Minilang.Internal _ => false
                                  | _ => true)
   end
@@ -627,13 +624,6 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
       fun clean_report () =
         let val ret = rev (!messages)
          in messages := []; ret end
-
-      (* D41 recording pipeline: park the rendered split script in the reporter
-         buffer — the first proof_opr's drain delivers it to Python, which puts
-         it into the blob's first component at assembly time.  "" (no split)
-         sends nothing; Python's default is "". *)
-      val _ = if split_script = "" then ()
-              else listen_report (Minilang.Internal (Goal_Preprocess.SPLIT_SCRIPT split_script))
 
       (* Configure context (D35 shared function; the 13th, conditional put
          stays here with the caller) *)
@@ -1633,15 +1623,17 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
                            (task_kind, ()), enable_write_memory)
             end),
         (* Stats tuple: the 10th element is assembled_isabelle_time in ms (D61) —
-           the sum of the final op stream's per-op ML execution times.  It is
-           NOT part of agent_cost; raw_AoA folds it into the replay-time
-           by-product right below. *)
-        ret_schema = unpackTuple6 (unpackList MiniLang_Agent.xcmd_unpacker,
+           the per-op ML execution times summed over the assembly verification
+           replay of the final op stream.  It is NOT part of agent_cost; raw_AoA
+           folds it into the replay-time by-product right below.  No blob comes
+           back over this wire: raw_AoA assembles the blob itself from the
+           returned op stream (D41 — the blob never leaves the
+           raw_AoA/aoa_replay codec pair). *)
+        ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
                                    (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt,ait), src') =
                                       unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,unpackInt) src
                                     in (({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, ait), src') end),
-                                   unpackOption unpackString,
                                    unpackOption unpackString,
                                    unpackOption unpackString),
         timeout = NONE,
@@ -1689,7 +1681,7 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
       val (xcmds, s1o,
            ({input, cache_write, cache_read, output, cost, tool_calls, isabelle_time, model_time, quota_wait_time},
             assembled_isabelle_time_ms),
-           reason, detail, proof_blob_opt) =
+           reason, detail) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
       (* tracing, per the §6.2 channel table (round-3 review PC-2, author ruling a) *)
@@ -1720,19 +1712,26 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
-           ; let (* The Python side keeps proof state and proof blob in lock-step:
-                    every finished-proof return carries the blob, so its absence
-                    here is a protocol violation, not a storage decision. *)
+           ; let (* D41: raw_AoA itself assembles the blob — the split script
+                    never left this function, and Python already handed the
+                    final op stream back in the return value.  The blob is the
+                    internal secret of exactly this assembler and the
+                    aoa_replay decoder. *)
                  val prf_text =
-                   case proof_blob_opt of
-                     SOME b64 => "aoa_replay " ^ quote b64
-                   | NONE => error "Internal Error: protocol violation — the agent \
-                                   \reported a finished proof but returned no proof blob."
+                   let val buf = BytesIO.mkOutstream ()
+                       val () = MessagePackBytesIO.Pack.packPair
+                                  (MessagePackBytesIO.Pack.packString,
+                                   MessagePackBytesIO.Pack.packList MiniLang_Agent.xcmd_packer_bytes)
+                                  (split_script, xcmds) buf
+                       val b64 = BytesIO.toString buf |> Bytes.string
+                                 |> Base64.encode |> Bytes.content
+                    in "aoa_replay " ^ quote b64 end
                  (* D61: what a REPLAY of this proof will cost — entry
                     preprocessing plus the final op stream's summed ML execution
-                    time.  LLM round-trips, RPC overhead and dead branches are
-                    deliberately not in it.  Raw (undivided) time: the write
-                    layer divides by Timeout.scale. *)
+                    time (measured over the assembly verification replay).  LLM
+                    round-trips, RPC overhead and dead branches are deliberately
+                    not in it.  Raw (undivided) time: the write layer divides
+                    by Timeout.scale. *)
                  val replay_time =
                    prep_elapsed + Time.fromMilliseconds assembled_isabelle_time_ms
               in ((xcmds, agent_cost, replay_time, prf_text),

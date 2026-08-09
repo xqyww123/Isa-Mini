@@ -3,9 +3,7 @@ from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from . import usage_count
 from typing import Any
-import base64
 import json
-import msgpack
 import logging as _logging
 _logger = _logging.getLogger(__name__)
 
@@ -352,14 +350,10 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops, %d ms) -> %s",
                     len(assembled), replayed_ms, replayed_state)
 
-        # Assemble the blob (D30): base64(msgpack((split_script, ops))).  Only
-        # handed back to ML — Python stores proof TEXT, never blobs, and the
-        # format is known only to raw_AoA (assembler) and the aoa_replay method
-        # (decoder).  b64encode, NOT encodebytes/urlsafe (§5.11).
-        split_script = getattr(root.session.runtime, "split_script", "")
-        packed = msgpack.packb((split_script, assembled))
-        assert packed is not None
-        blob = base64.b64encode(packed).decode("ascii")
+        # No blob is built here (D41): the split script never reaches Python,
+        # and raw_AoA assembles the blob itself from the op stream returned as
+        # this tuple's first element.  The blob is internal to the
+        # raw_AoA/aoa_replay codec pair.
 
         # Write to log directory
         if actual_log_path:
@@ -369,12 +363,12 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                     f.write(json.dumps(assembled))
             except Exception as e:
                 _logger.warning(f"Failed to write proof.json: {e}")
-        return (assembled, replayed_state, cost + (replayed_ms,), None, None, blob)
+        return (assembled, replayed_state, cost + (replayed_ms,), None, None)
     else:
         reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
         detail = quit_obj.detail if quit_obj is not None else None
         logger.info("[AoA] proof not finished (reason=%s)", reason)
-        return (assembled, None, cost + (0,), reason, detail, None)
+        return (assembled, None, cost + (0,), reason, detail)
 
 
 

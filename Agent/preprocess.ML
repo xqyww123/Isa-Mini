@@ -30,17 +30,13 @@ signature GOAL_PREPROCESS = sig
      state TOGETHER with a method text describing the transformation actually
      performed (D41); replay executes that text instead of re-racing.  "" means
      the segment did nothing.  The texts are compositions of the three
-     aoa_split_* methods registered below. *)
+     aoa_split_* methods registered below.  The script stays ML-side: raw_AoA
+     packs it into the blob itself (the blob never leaves the
+     raw_AoA/aoa_replay codec pair). *)
   val preprocess_split_recorded : Proof.context -> thm -> thm * string
-
-  (* Reporter message carrying the recorded split script to Python, which puts
-     it into the blob's first component (D30/D41). *)
-  exception SPLIT_SCRIPT of string
 end
 
 structure Goal_Preprocess : GOAL_PREPROCESS = struct
-
-exception SPLIT_SCRIPT of string
 
 (* Progress chatter, gated on AoA_Debug *)
 fun dbg ctxt msg = if Config.get ctxt AoA_Debug then writeln msg else ()
