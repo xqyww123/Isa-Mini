@@ -395,12 +395,10 @@ val AoA_read_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_read_p
       (K true);
 
 (* Whether a finished proof is STORED into the caches on success.
-   true (default) — write both cache levels (L1 Python SQLite, L2 ML
-   Phi_Proof_Store) as before.
-   false           — skip BOTH stores. Used by the AoA-learning run so its
-   reconstructed proofs never pollute the shared production cache (and so a
-   second pass / resume does not self-hit and skip learning). Reading is a
-   separate toggle (AoA_read_proof_store). *)
+   true (default) — write both store levels (L2 ML Phi_Proof_Store, L1 Python
+   SQLite).
+   false           — skip BOTH writes.  Reading is a separate toggle
+   (AoA_read_proof_store). *)
 val AoA_write_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_write_proof_store\<close>
       (K true);
 
@@ -467,7 +465,7 @@ fun configure_for_minilang ctxt = ctxt
 
 datatype task = Usual | Learning of string
 
-(* Wire format unchanged: the 11th arg-schema element is a 2-array
+(* Wire format: the task rides the agent-start arg schema as a 2-array
    (task_kind, payload) — empty payload for Usual, the original Isar proof for
    Learning. *)
 fun pack_task Usual = ("usual", MessagePackBinIO.Pack.packString "")
@@ -656,8 +654,8 @@ fun raw_AoA_i {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequen
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
         (* Third component: this op's ML-side execution time in ms (D61).
-           Python records it on the node; at assembly the final stream's sum
-           becomes assembled_isabelle_time. *)
+           The assembly verification replay sums it over the final op stream
+           into assembled_isabelle_time. *)
         ret_schema = (fn (ctxt, msgs, flat_goal, elapsed_ms) =>
           packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt, packInt)
                      (msgs, flat_goal, elapsed_ms)),
