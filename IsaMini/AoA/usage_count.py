@@ -30,13 +30,8 @@ ENDPOINT = "https://aoa.qiyuan.me/usage_counter"
 # sits in `_in_flight`.
 _TIMEOUT = 3.0
 
-# The one reported event kind: a `by aoa` that entered the agent.  Store hits
-# are no longer reported: they increasingly happen on machines with no Python
-# at all (the level-0 replay is pure ML), so any `cache` count would be
-# systematically low and uncorrectable — a wrong number is worse than none.
-# The Worker's allow-list still accepts `cache` (server untouched); its two
-# columns show the same number from here on, and historical data has a break
-# at this change (known and accepted).
+# The single event kind, mirroring the Worker's allow-list.  `agent` is a `by aoa`
+# that entered the proof agent.  Replays are not reported.
 EVENT_AGENT = "agent"
 
 
