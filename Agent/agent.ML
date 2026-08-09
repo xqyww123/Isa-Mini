@@ -1608,7 +1608,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                            fact_override = override', proof_id = id,
                            timeout = SOME (Time.fromSeconds timeout),
                            read_store = NONE, write_store = NONE,
-                           raise_Error_instead_of_Auto_Fail = false}
+                           raise_Error_instead_of_Auto_Fail = false,
+                           failure_msg = NONE}
                           ctxt goal
                         |> apfst Future.join
               in Minilang.HAMMER prover s_resolved

@@ -4354,7 +4354,8 @@ fun default_prover timeout_opt override ctxt =
          {improved = improved_SH, async = false, fact_override = override',
           proof_id = id, timeout = timeout_opt,
           read_store = NONE, write_store = NONE,
-          raise_Error_instead_of_Auto_Fail = true}
+          raise_Error_instead_of_Auto_Fail = true,
+          failure_msg = NONE}
          ctxt goal
        (*Joined here rather than widening HAMMER_i's type annotation: this call
          is always async = false, so the future is a Future.value.*)
@@ -5418,7 +5419,8 @@ fun dispatch_term ctxt term_rule term_goal metric_strs =
                            proof_id = NONE, (* derive the key from the goals *)
                            timeout = NONE,
                            read_store = NONE, write_store = NONE,
-                           raise_Error_instead_of_Auto_Fail = true}
+                           raise_Error_instead_of_Auto_Fail = true,
+                           failure_msg = NONE}
                           ctxt st
                     in Seq.single closed end
                     catch _ => Seq.empty\<close>
