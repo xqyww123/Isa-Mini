@@ -20,6 +20,10 @@ type agent_cost = {input: int, cache_write: int, cache_read: int, output: int,
                    quota_wait_time: real}
 val zero_cost: agent_cost
 
+(* The nine-field cost line, shared by the AoA-side tracing print (which appends
+   its locally-timed " time=" field) and the phi-side give-up print. *)
+val string_of_cost : agent_cost -> string
+
 (* Raised by AoA_RPC to signal the agent gave up (surrender/refute/resource
    exhaustion). Exposed so the REPL-app wrapper in the Minilang_AoA_REPL session
    can catch it after the app moved out of this structure.
@@ -109,6 +113,22 @@ val zero_cost : agent_cost = {
   cost = 0.0, tool_calls = 0, isabelle_time = 0.0, model_time = 0.0,
   quota_wait_time = 0.0
 }
+
+(* One definition for every cost print (author-finalized format, 2026-08-10):
+   phi's give-up path prints exactly this line; the AoA-side tracing line
+   appends its locally-timed " time=" field. *)
+fun string_of_cost ({input, cache_write, cache_read, output, cost, tool_calls,
+                     isabelle_time, model_time, quota_wait_time} : agent_cost) =
+  String.concat [
+    "[AoA] input=", Int.toString input,
+    " cache_write=", Int.toString cache_write,
+    " cache_read=", Int.toString cache_read,
+    " output=", Int.toString output,
+    " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost,
+    " tool_calls=", Int.toString tool_calls,
+    " isabelle_time=", Real.fmt (StringCvt.FIX (SOME 2)) isabelle_time, "s",
+    " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
+    " quota_wait_time=", Real.fmt (StringCvt.FIX (SOME 2)) quota_wait_time, "s"]
 
 exception Agent_Give_Up of string * string * agent_cost
 
@@ -1676,22 +1696,12 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
            reason, detail) =
             call_command aoa_cmd (global_context, driver, invocation_id)
       val elapsed = Timer.checkRealTimer timer
-      (* tracing, per the §6.2 channel table (round-3 review PC-2, author ruling a) *)
-      val _ = tracing (String.concat [
-        "[AoA] input=", Int.toString input,
-        " cache_write=", Int.toString cache_write,
-        " cache_read=", Int.toString cache_read,
-        " output=", Int.toString output,
-        " cost=$", Real.fmt (StringCvt.FIX (SOME 4)) cost,
-        " tool_calls=", Int.toString tool_calls,
-        " isabelle_time=", Real.fmt (StringCvt.FIX (SOME 2)) isabelle_time, "s",
-        " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
-        " quota_wait_time=", Real.fmt (StringCvt.FIX (SOME 2)) quota_wait_time, "s",
-        " time=", Time.toString elapsed, "s"])
       val agent_cost : agent_cost =
         {input=input, cache_write=cache_write, cache_read=cache_read, output=output,
          cost=cost, tool_calls=tool_calls, isabelle_time=isabelle_time, model_time=model_time,
          quota_wait_time=quota_wait_time}
+      (* tracing, per the §6.2 channel table (round-3 review PC-2, author ruling a) *)
+      val _ = tracing (string_of_cost agent_cost ^ " time=" ^ Time.toString elapsed ^ "s")
    in case s1o
    of SOME s1 => (
    case Symtab.lookup (!state) s1
