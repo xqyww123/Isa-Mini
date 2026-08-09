@@ -488,13 +488,7 @@ fun aoa_allowed () =
    finalized text — keep Pretty.str lines verbatim. *)
 fun gate_error (ctxt, sequent) =
   let val thy = Proof_Context.theory_of ctxt
-      (* The same path cache_file.ML's store_path computes.  That function is
-         not exported, and auto_sledgehammer is a read-only dependency in this
-         stage, so the two lines are recomputed here. *)
-      val store_path =
-        Path.ext "proof-store"
-          (Path.append (Resources.master_directory thy)
-            (Path.basic (Context.theory_name {long = false} thy)))
+      val store_path = Phi_Proof_Store.store_path thy
       val goal_pretty =
         (case Thm.prems_of sequent of
            x :: _ => Syntax.pretty_term ctxt x
