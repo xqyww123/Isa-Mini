@@ -1618,7 +1618,16 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                 "Automatic proof timed out (20 min). The goal is non-trivial and a step-by-step proof is required.")
                  | Phi_Sledgehammer_Solver.Auto_Fail reason =>
               let val msg = case reason
-                    of Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
+                    (*This one says the opposite of the other two: the prover broke, the
+                      goal is fine.  Without it the payload the constructor exists to
+                      carry is dropped and a misconfiguration reads as a hard goal.*)
+                    of Phi_Sledgehammer_Solver.Internal_Failure m =>
+                         "The automatic prover failed internally; this is not a property of the goal:\n  " ^
+                         m ^
+                         "\nDecomposing the goal will not help -- every part will fail the same way. \
+                         \This is more likely a bug than a hard goal: report it to the user rather \
+                         \than working around it."
+                     | Phi_Sledgehammer_Solver.Subgoal_Fail sub =>
                          "Automatic proof fails on the subgoal:\n  " ^
                          string_of_term ctxt_r sub ^
                          "\nThe goal is non-trivial and a step-by-step proof is required."
