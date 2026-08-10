@@ -7823,23 +7823,6 @@ def _backfill_recorded_fact_proofs(
                         and f.assigned_name == m.fact_name:
                     f.cached_proof = (m.method, m.time_ms)
 
-def _split_fetched(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]'
-    ) -> 'tuple[list[IsabelleFact], list[Interaction], list[int]]':
-    """Split fetch_facts results into resolved facts, interactions, and placeholder indices.
-    IsabelleFact (including Unfound) goes to resolved; Interaction goes to interactions."""
-    resolved: list[IsabelleFact] = []
-    interactions: list[Interaction] = []
-    resolve_indices: list[int] = []
-    for item in fetched:
-        if isinstance(item, IsabelleFact):
-            resolved.append(item)
-        else:
-            resolve_indices.append(len(resolved))
-            resolved.append(None)  # type: ignore — placeholder for interaction result
-            interactions.append(item)
-    return resolved, interactions, resolve_indices
-
-
 def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]') -> list[IsabelleFact]:
     """Convert fetch_facts results to a pure IsabelleFact list for callers
     that don't support interactive resolution (Obvious, Chaining, Derive,
@@ -10393,12 +10376,15 @@ class InferenceRule(SubgoalMaker):
         # FactByDescription answered with a formalized statement), making this
         # node the fifth FACT_PRF producer: without the paste-back its RULE op
         # packs recorded = None and every replay re-searches (stage 3a, D37).
-        # The state to scan is the AFTER-BEGINNING one, not resulting_state():
-        # execute() stores the messages on the op's DESTINATION state, and a
-        # block's beginning op is executed into _state_after_beginning(), while
-        # resulting_state() lies past the block's ending op.  Regenerating the
-        # subgoals rebinds that call to sub_nodes[0].ml_state, but clone()
-        # carries `messages` over, so the FACT_PRF is there either way.
+        # The state to scan is the AFTER-BEGINNING one: execute() stores the
+        # messages on the op's DESTINATION state, and a block's beginning op is
+        # executed into _state_after_beginning().  Regenerating the subgoals
+        # rebinds that call to sub_nodes[0].ml_state, but clone() carries
+        # `messages` over, so the FACT_PRF is there either way.
+        # resulting_state() is no substitute: from two subgoals on it holds the
+        # last child's last op's messages instead.  (It does carry the FACT_PRF
+        # when the block opened a single subgoal — there the footer clones
+        # _state_before_ending_, which is the after-beginning state, into it.)
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             _backfill_recorded_fact_proofs([self.rule_ref], self._state_after_beginning())
         # Fresh-fill InferenceRule that failed its RULE op but whose rule works as
