@@ -10973,9 +10973,8 @@ class Induction(CaseSplit_Like):
         self.fact_refs_to_generalize = []
         if not self._raw_facts_to_generalize:
             return
-        fetched = cast(list[IsabelleFact],
-                       await self.ml_state.fetch_facts(self._raw_facts_to_generalize))
-        for f in fetched:
+        fetched = await self.ml_state.fetch_facts(self._raw_facts_to_generalize)
+        for i, f in enumerate(fetched, 1):
             if isinstance(f, IsabelleFact_Unfound):
                 self.warnings.append(Warning(
                     Warning.Position.HEADER,
@@ -10989,6 +10988,18 @@ class Induction(CaseSplit_Like):
                         f"induction — skipped."))
                 else:
                     self.fact_refs_to_generalize.append(f)
+            else:
+                # fetch_facts also yields prove-in-time facts and
+                # Interaction_RetrieveForProof, neither of which induction can
+                # carry. Unreachable today — IH_facts is list[FactByName] and
+                # _validate_fact_by_name rejects proposition-shaped names — so
+                # this arm exists to make a later widening of the schema
+                # degrade into a VISIBLE skip rather than a silent one. Named
+                # by position: neither type can be named safely.
+                self.warnings.append(Warning(
+                    Warning.Position.HEADER,
+                    f"Entry {i} of `IH_facts` could not be resolved to a fact "
+                    f"reference; skipped."))
     async def _classify_unclassified_vars(self, frees: Vars) -> None:
         """Pre-flight: when the agent left in-scope variables unclassified
         (neither fixed nor generalized), ask which to generalize via
