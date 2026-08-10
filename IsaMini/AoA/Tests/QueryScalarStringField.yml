@@ -13,7 +13,7 @@ Result (is_error=False):
 - imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
 - Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
 - eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
-- Not_eq_iff: ((¬ ?P) = (¬ ?Q)) = (?P = ?Q)
+- pred_iffI [manual]: (∀(x :: ?'a). pred.eval ?A x ⟶ pred.eval ?B x) ⟶ (∀(x :: ?'a). pred.eval ?B x ⟶ pred.eval ?A x) ⟶ ?A = ?B
 - bool.expand [manual]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'
   free_constructors (discs_sels) case_bool for True | False
 - verit_connective_def(1) [manual]: (?A = ?B) = ((?A ⟶ ?B) ∧ (?B ⟶ ?A))
