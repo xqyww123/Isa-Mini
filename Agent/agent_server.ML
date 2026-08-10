@@ -641,6 +641,25 @@ fun merge_segment ctxt0 sequent =
   end
 
 
+(* The AoA boundary's verbatim-conclusion restore (stage 4e).  The round trip
+   below beta-contracts the protected conclusion (two sources: concl_conv's iso
+   conversions and protect_goals' rewr_conv), which would fail async_prove's
+   alpha-only implies_elim; back_conv undoes exactly that.
+
+   TOLERANT BY DESIGN: a difference beyond beta/eta is NOT always a defect.  A
+   sync-path run may legitimately instantiate a schematic that occurs in the
+   conclusion (INST_GOAL_VARS, ordinary rule resolution), and merge_segment's
+   Variable.import/export round trip re-generalises conclusion Vars at a fresh
+   index.  In both cases the concluded theorem is the right answer and simply
+   is not the captured term, so we hand it back unrestored — exactly the
+   pre-4e behaviour.  Nothing is lost: schematic goals never reach the async
+   path (async_prove's guard sends them back to sync), and if an async run
+   ever does diverge beyond beta/eta, fork_state's aconv assertion still
+   reports it loudly. *)
+fun restore_concl orig th =
+  Conv.fconv_rule (Minilang_Aux.back_conv orig) th
+  handle THM _ => th
+
 (* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
    segments, then the agent RPC.  NO store or cache logic anywhere in here.
    Synchronous: returns the four by-products (xcmds, cost, replay time, proof
@@ -650,12 +669,8 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       (* THE GATE — first cell of the body (12.18). *)
       val () = if aoa_allowed () then () else gate_error (ctxt0, sequent0)
-      (* AoA owes its caller the conclusion VERBATIM (§2.5, stage 4e): the
-         round trip below beta-contracts the protected conclusion (two known
-         sources: concl_conv's iso conversions and protect_goals' rewr_conv),
-         which would fail async_prove's alpha-only implies_elim.  Captured at
-         receipt, restored at hand-back; when nothing changed, fconv_rule
-         hands back the same thm object. *)
+      (* Captured at receipt, restored (tolerantly) at hand-back — see
+         restore_concl above for why the restore may legitimately not apply. *)
       val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent0)
       val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
       val cfg : cfg = (minilang_cfg, budget)
@@ -1783,8 +1798,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                    prep_elapsed + Time.fromMilliseconds assembled_isabelle_time_ms
               in ((xcmds, agent_cost, replay_time, prf_text),
                   Minilang.conclude ctxt s1'
-                  |> Conv.fconv_rule (Minilang_Aux.back_conv orig_concl)
-                       (*hand back the verbatim conclusion (stage 4e)*))
+                  |> restore_concl orig_concl (*verbatim conclusion, stage 4e*))
              end
          end
         else error "Internal Error: the proof state returned by the Agent is not finished"
@@ -1907,7 +1921,7 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^tr
       val s1 = fold (MiniLang_Agent.interpret config) ops s0
       (* 7 *)
       val th = Minilang.conclude ctxt' s1
-               |> Conv.fconv_rule (Minilang_Aux.back_conv orig_concl)
+               |> restore_concl orig_concl
    in SOME (Seq.Result (ctxt, th), Seq.empty) end
   catch exn =>
     (tracing ("[aoa_replay] replay failed: " ^ Runtime.exn_message exn); NONE)\<close>)
@@ -1983,7 +1997,16 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
                          raise_Error_instead_of_Auto_Fail = false,
                          failure_msg = failure_msg} ctxt sequent
                  in (Future.join tp_fut, sequent') end
-                handle Phi_Sledgehammer_Solver.Auto_Fail _ =>
+                (* §2.9's consumption rule: Internal_Failure means the ENGINE
+                   is broken, not that the goal is hard — it goes straight up
+                   with its payload.  Falling back to AoA here would burn an
+                   LLM call per obligation and, with the gate closed, replace
+                   the real diagnostic (say, a typo in
+                   auto_sledgehammer_params) with the gate's message. *)
+                handle e as Phi_Sledgehammer_Solver.Auto_Fail
+                              (Phi_Sledgehammer_Solver.Internal_Failure _) =>
+                         Exn.reraise e
+                     | Phi_Sledgehammer_Solver.Auto_Fail _ =>
                   let val driver = Config.get ctxt aoa_driver
                       val invocation_id = make_invocation_id ()
                       val log_dir = Config.get ctxt AoA_log_dir
