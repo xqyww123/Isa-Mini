@@ -1896,7 +1896,21 @@ fun exec_split_script ctxt script st =
       | _ => error ("aoa_replay: the recorded split script failed: " ^ script)
   end
 
-fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^try>\<open>
+fun is_dummy th =
+  let fun chk (Const(\<^const_name>\<open>Pure.term\<close>, _) $ _) = true
+        | chk (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X) = chk X
+        | chk _ = false
+   in Thm.is_dummy th orelse chk (Thm.prop_of th)
+  end
+
+fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
+  (* The dummy guard all three methods share.  Isar's method machinery has a
+     closure phase that evaluates the method once on a premise-less dummy
+     state; without this guard the pipeline below crashes on that dummy
+     (major_prem_of: rule with no premises), the whole replay is reported
+     failed, and the REAL state is never tried — which tombstones a healthy
+     store record (the D29 breaker caught by stage 5's first live replay). *)
+  if is_dummy sequent then NONE else \<^try>\<open>
   let (* 0: decode blob = base64(msgpack((script, xcmd list))) (D30/D31) *)
       val ((script, ops), _) =
         b64 |> Bytes.string |> Base64.decode |> Bytes.content
@@ -1931,13 +1945,6 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () => \<^tr
 
 
 (*** The tactic ***)
-
-fun is_dummy th =
-  let fun chk (Const(\<^const_name>\<open>Pure.term\<close>, _) $ _) = true
-        | chk (Const(\<^const_name>\<open>Pure.prop\<close>, _) $ X) = chk X
-        | chk _ = false
-   in Thm.is_dummy th orelse chk (Thm.prop_of th)
-  end
 
 (* `by aoa` ≈ run_AoA (§2.3); always async = false. *)
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
@@ -2081,8 +2088,16 @@ fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
                        failure_msg = NONE} ctxt sequent
         |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)))
        handle Agent_Give_Up (reason, detail, cost) =>
-         (tracing (string_of_cost cost);
-          error (banner_of reason ^ "\n" ^ detail)))
+              (tracing (string_of_cost cost);
+               error (banner_of reason ^ "\n" ^ detail))
+            (* The engine's Internal_Failure says the PROVER broke, not that the
+               goal is hard; hammer_or_AoA reraises it on purpose (§2.9) and
+               nothing between here and Isar renders it, so without this arm the
+               method leaks a bare structured exception.  The payload IS the
+               message — the same rendering the engine's own guard_errors arm
+               gives it.  No agent ran, so no cost line. *)
+            | Phi_Sledgehammer_Solver.Auto_Fail
+                (Phi_Sledgehammer_Solver.Internal_Failure msg) => error msg)
 
 
 (*** Query by name RPC — reuses the AoA query tool's Python core ***)
