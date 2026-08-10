@@ -4,6 +4,10 @@ signature MINILANG_AGENT_AoA = sig
 
 type driver = string
 val default_driver: driver
+(* True on the snapshot-test driver ("test" / "test.<case>") — deterministic
+   scripted runs with no language model; the AoA gate exempts them and the
+   REPL app's store bypass keys on the same predicate. *)
+val is_test_driver: driver -> bool
 val aoa_driver: string Config.T
 val AoA_log_dir: string Config.T
 val AoA_interactive_retrieval: string Config.T
@@ -177,6 +181,14 @@ fun banner_of "refute" =
 
 type driver = string
 val default_driver = "ClaudeCode"
+
+(* The snapshot-test driver ("test" / "test.<case>"): a deterministic scripted
+   run, no language model behind it.  The AoA gate exempts it (author ruling
+   2026-08-10) — the gate guards against unintended batch LM spend, which a
+   test driver cannot incur; the REPL app's store bypass keys on the same
+   predicate. *)
+fun is_test_driver driver =
+      String.isPrefix "test." driver orelse driver = "test"
 
 (* Config for driver selection *)
 val aoa_driver = Attrib.setup_config_string \<^binding>\<open>AoA_driver\<close> (K default_driver)
@@ -670,8 +682,10 @@ fun restore_concl orig th =
    futures come into existence. *)
 fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
-      (* THE GATE — first cell of the body (12.18). *)
-      val () = if aoa_allowed () then () else gate_error (ctxt0, sequent0)
+      (* THE GATE — first cell of the body (12.18).  Test drivers pass: no LM
+         behind them (author ruling 2026-08-10). *)
+      val () = if aoa_allowed () orelse is_test_driver driver then ()
+               else gate_error (ctxt0, sequent0)
       (* Captured at receipt, restored (tolerantly) at hand-back — see
          restore_concl above for why the restore may legitimately not apply. *)
       val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent0)

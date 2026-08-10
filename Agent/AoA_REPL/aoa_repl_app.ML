@@ -61,7 +61,7 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                   {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
                                    invocation_id = invocation_id,
                                    (*test bypass — see the header comment*)
-                                   read_store = if String.isPrefix "test." driver orelse driver = "test"
+                                   read_store = if MiniLang_Agent_AoA.is_test_driver driver
                                                 then SOME false else NONE,
                                    write_store = NONE, async = false,
                                    task = MiniLang_Agent_AoA.Usual} (ctxt, sequent)
