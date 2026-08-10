@@ -10389,19 +10389,18 @@ class InferenceRule(SubgoalMaker):
         elif not isinstance(self.rule_ref, (type(None), IsabelleFact_Unfound)) and self.ml_state.initialized():
             [self.rule_ref] = await self.ml_state.refresh_facts([self.rule_ref])
         await super()._refresh_me_alone(auto_intro)
-        # The rule itself can be prove-in-time (a proposition the agent wrote out,
-        # or a formalized statement from retrieval), so its FACT_PRF needs pasting
-        # back like any other node's (stage 3a, D37).  A block's beginning op
-        # writes its messages into the AFTER-BEGINNING state — resulting_state()
-        # is the state past the whole block and carries none of them.
+        # The rule itself can be prove-in-time (a FactByProposition rule, or a
+        # FactByDescription answered with a formalized statement), making this
+        # node the fifth FACT_PRF producer: without the paste-back its RULE op
+        # packs recorded = None and every replay re-searches (stage 3a, D37).
+        # The state to scan is the AFTER-BEGINNING one, not resulting_state():
+        # execute() stores the messages on the op's DESTINATION state, and a
+        # block's beginning op is executed into _state_after_beginning(), while
+        # resulting_state() lies past the block's ending op.  Regenerating the
+        # subgoals rebinds that call to sub_nodes[0].ml_state, but clone()
+        # carries `messages` over, so the FACT_PRF is there either way.
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             _backfill_recorded_fact_proofs([self.rule_ref], self._state_after_beginning())
-        if self.status.status == EvaluationStatus.Status.SUCCESS:
-            # The rule itself can be prove-in-time (a FactByProposition rule, or
-            # a FactByDescription answered with a formalized statement), so this
-            # node is the fifth FACT_PRF producer — without the paste-back its
-            # RULE op would pack recorded = None and every replay would re-search.
-            _backfill_recorded_fact_proofs([self.rule_ref], self.resulting_state())
         # Fresh-fill InferenceRule that failed its RULE op but whose rule works as
         # a goal rewrite → self-replace with a genuine Rewrite. Only when the parent
         # refresh is replace-aware (flag set by `_refresh_child_replace_aware`, the
