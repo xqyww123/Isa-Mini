@@ -1,3 +1,51 @@
+(* The base of Phi_Conv, a general conversion toolbox.  It is seeded HERE, at
+   the lowest Minilang layer, rather than in phi-system, because its consumers
+   sit below phi: phi-system's Phi_Logic_Programming_Reasoner already imports
+   Minilang_AoA, so its library files extend this structure by the usual
+   `include PHI_CONV` / `open Phi_Conv` pattern. *)
+signature PHI_CONV = sig
+
+(* alpha_beta_eta_conv target ct : ct ≡ target, whenever the two differ only
+   by alpha/beta/eta (alpha is free — Thm.transitive's middle-term test is
+   aconv).  Apply with Conv.fconv_rule: when nothing changed the equation is
+   reflexive and the same thm object comes back.  A difference beyond
+   alpha/beta/eta makes Thm.transitive raise THM; it can never yield a wrong
+   equation, because the kernel checks both halves. *)
+val alpha_beta_eta_conv : cterm -> conv
+
+(* alpha_beta_eta_inst_conv orig ct : the same, but the target is `orig` under
+   the instantiation this proof actually made — ct ≡ orig σ, where σ matches
+   orig against ct.  Undoing an instantiation would be unsound (a proof of
+   `P t` is not a proof of `P ?v`), so legitimate instantiations are KEPT and
+   only the incidental alpha/beta/eta churn and Var re-indexing are undone.
+   Matching runs on the beta-eta normal forms (Pattern.match refuses a pattern
+   whose head is an Abs, which a conclusion carrying a beta-redex would have),
+   while the target is built from the UN-normalised orig so its verbatim shape
+   comes back.  Soundness never depends on the match: a bogus σ merely makes
+   Thm.transitive raise. *)
+val alpha_beta_eta_inst_conv : cterm -> conv
+
+end
+
+structure Phi_Conv : PHI_CONV = struct
+
+fun alpha_beta_eta_conv target ct =
+  Thm.transitive (Drule.beta_eta_conversion ct)
+                 (Thm.symmetric (Drule.beta_eta_conversion target))
+
+fun alpha_beta_eta_inst_conv orig ct =
+  let val nf = Thm.rhs_of o Drule.beta_eta_conversion
+      val target =
+        (* Only Pattern.MATCH means "not an instance"; it already falls back to
+           first-order matching internally (Pure/pattern.ML), so no second
+           attempt is needed here. *)
+        (Thm.instantiate_cterm (Thm.match (nf orig, nf ct)) orig
+         handle Pattern.MATCH => orig)
+   in alpha_beta_eta_conv target ct
+  end
+
+end
+
 signature MINILANG_AUX = sig
 
 structure Thms : sig
@@ -35,13 +83,6 @@ structure Thms : sig
 end
 
 val concl_conv : (Proof.context -> conv) -> Proof.context -> conv
-
-(* back_conv orig ct : ct ≡ orig, whenever the two differ only by beta/eta
-   (§2.5, stage 4e).  Restores the verbatim conclusion an AoA round trip owes
-   its caller.  Apply with Conv.fconv_rule: when nothing changed the equation
-   is reflexive and the same thm object comes back; a difference beyond
-   beta/eta makes Thm.transitive fail loudly, never a silently wrong result. *)
-val back_conv : cterm -> conv
 
 val simp_fact_name' : string -> string
 
@@ -104,10 +145,6 @@ fun concl_conv C ctxt ctm =
      | Const(\<^const_name>\<open>GOAL\<close>, _) $ _ =>
           ( Conv.arg_conv (concl_conv C ctxt) ) ctm
      | _ => C ctxt ctm
-
-fun back_conv orig ct =
-  Thm.transitive (Drule.beta_eta_conversion ct)
-                 (Thm.symmetric (Drule.beta_eta_conversion orig))
 
 (* Lives here (not aux.ML) so that unify_diagnostic.ML can load before
    aux.ML: aux.ML's xOF needs Unify_Diagnostic for its failure messages. *)

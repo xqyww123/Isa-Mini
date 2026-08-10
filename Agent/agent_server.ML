@@ -641,23 +641,26 @@ fun merge_segment ctxt0 sequent =
   end
 
 
-(* The AoA boundary's verbatim-conclusion restore (stage 4e).  The round trip
-   below beta-contracts the protected conclusion (two sources: concl_conv's iso
+(* The AoA boundary's conclusion restore (stage 4e).  The round trip below
+   beta-contracts the protected conclusion (two sources: concl_conv's iso
    conversions and protect_goals' rewr_conv), which would fail async_prove's
-   alpha-only implies_elim; back_conv undoes exactly that.
+   alpha-only implies_elim; the conversion undoes exactly that.
 
-   TOLERANT BY DESIGN: a difference beyond beta/eta is NOT always a defect.  A
-   sync-path run may legitimately instantiate a schematic that occurs in the
-   conclusion (INST_GOAL_VARS, ordinary rule resolution), and merge_segment's
-   Variable.import/export round trip re-generalises conclusion Vars at a fresh
-   index.  In both cases the concluded theorem is the right answer and simply
-   is not the captured term, so we hand it back unrestored — exactly the
-   pre-4e behaviour.  Nothing is lost: schematic goals never reach the async
-   path (async_prove's guard sends them back to sync), and if an async run
-   ever does diverge beyond beta/eta, fork_state's aconv assertion still
-   reports it loudly. *)
+   Instantiation is KEPT, not undone: a sync-path run may legitimately
+   instantiate a schematic occurring in the conclusion (INST_GOAL_VARS,
+   ordinary rule resolution), and merge_segment re-generalises conclusion Vars
+   at a fresh index (its kernel forward construction raises the maxidx, so
+   Variable.export lands at maxidx+1).  alpha_beta_eta_inst_conv restores the
+   captured shape UNDER that instantiation, so both cases now restore instead
+   of being dropped.
+
+   Still tolerant: an unforeseen divergence hands the theorem back unrestored
+   (the pre-4e behaviour) rather than failing a proof that already cost a full
+   agent budget.  Nothing is lost — schematic goals never reach the async path
+   (async_prove's guard sends them back to sync), and an async divergence is
+   still reported loudly by fork_state's aconv assertion. *)
 fun restore_concl orig th =
-  Conv.fconv_rule (Minilang_Aux.back_conv orig) th
+  Conv.fconv_rule (Phi_Conv.alpha_beta_eta_inst_conv orig) th
   handle THM _ => th
 
 (* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
