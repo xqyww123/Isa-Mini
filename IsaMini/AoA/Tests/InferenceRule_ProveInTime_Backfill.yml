@@ -1,0 +1,26 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (2 :: nat)
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+After InferenceRule with a prove-in-time rule
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < (2 :: nat)
+proof:
+  - step id: 1
+    thought: reduce the goal by a rule stated on the spot
+    operation: Inference Rule
+    rule:
+      - (0::nat) < 1 \<Longrightarrow> (0::nat) < 2
+    derived goal:
+      (0 :: nat) < (1 :: nat)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: nat) < (1 :: nat)
+rule is prove-in-time: True
+recorded proof pasted back: True
+assembled RULE op carries the record: True

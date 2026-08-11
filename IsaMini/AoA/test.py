@@ -18403,3 +18403,68 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
             else:
                 print(f"\033[91mTest {test_case.name} failed (status={status}{detail_suffix}), elapsed: {elapsed}ms, cpu_time: {cpu_time}ms\033[0m")
         print(f"\n{passed}/{case_num} tests passed")
+
+
+@model_test("InferenceRule_ProveInTime_Backfill",
+            "Test_InferenceRule_ProveInTime_Backfill.thy", 14)
+async def _test_InferenceRule_ProveInTime_Backfill(root: Root, file: MyIO):
+    """Regression for the round-6 finding: the stage-3a FACT_PRF paste-back
+    (D37) must cover InferenceRule, whose rule can itself be a prove-in-time
+    fact — so the assembled RULE op carries the proof ML found and a replay
+    never re-searches for it.
+
+    The rule reaches prove-in-time shape the only way the edit tool permits:
+    the InferenceRule schema accepts a rule by NAME or by DESCRIPTION (never a
+    bare proposition), and a described rule goes through
+    Interaction_RetrieveForProof, whose answer may be a formalized statement —
+    that answer is what becomes an IsabelleFact_ProveInTime. The interaction is
+    stubbed here so the case runs without a language model.
+
+    Also pins the backfill's SOURCE state: a block's beginning op (RULE) writes
+    its messages into the after-beginning state, not the state past the block,
+    so a paste-back reading `resulting_state()` would silently record nothing.
+    """
+    session = root.session
+    statement = r"(0::nat) < 1 \<Longrightarrow> (0::nat) < 2"
+
+    async def answer_with_a_statement(interaction):
+        if isinstance(interaction, Interaction_RetrieveForProof):
+            return await interaction.answer(
+                AnswerIndexesOrSpec(indexes=[], statement=statement))
+        raise InternalError(
+            "Unstubbed interaction in this test: " + type(interaction).__name__)
+    session.launch_interaction = answer_with_a_statement
+
+    print_header("Initial", file)
+    root.print(0, file)
+
+    session.age += 1
+    [rule_node] = (await root.fill("1", [InferenceRule.gen_single({
+        "thought": "reduce the goal by a rule stated on the spot",
+        "rule": {"english": "0 < 2 follows from 0 < 1"},
+    })])).committed
+    print_header("After InferenceRule with a prove-in-time rule", file)
+    root.print(0, file)
+
+    # What the node ended up holding.
+    rule_ref = getattr(rule_node, "rule_ref", None)
+    is_pit = isinstance(rule_ref, IsabelleFact_ProveInTime)
+    file.write(f"rule is prove-in-time: {is_pit}\n")
+    if not is_pit:
+        raise TestFailed(
+            f"expected a prove-in-time rule, got {type(rule_ref).__name__}")
+
+    # The paste-back itself: the proof ML found for the rule must be recorded.
+    recorded = rule_ref.cached_proof
+    file.write(f"recorded proof pasted back: {recorded is not None}\n")
+    if recorded is None:
+        raise TestFailed(
+            "FACT_PRF was never pasted back onto the rule: the RULE op would "
+            "pack recorded = None and every replay would re-search")
+
+    # ... and it must reach the wire, which is what a replay reads.
+    packed_rule = rule_node.beginning_opr().arg[0]
+    carried = bool(packed_rule) and packed_rule[0][2] is not None
+    file.write(f"assembled RULE op carries the record: {carried}\n")
+    if not carried:
+        raise TestFailed(f"the packed RULE op lost the record: {packed_rule}")
