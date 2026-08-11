@@ -1646,19 +1646,17 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               let val improved_SH = Config.get ctxt_r Minilang.mini_use_improved_SH
                   val override' = if improved_SH then ovr
                                   else Sledgehammer_Fact.no_fact_override
-                  (*raise_Error_instead_of_Auto_Fail = FALSE is load-bearing: this
-                    is where auto_raw's semantics lived, and the handler below
-                    reads Auto_Fail to build the agent-facing message.  Passing
-                    true would silently turn every failed HAMMER into a fatal
-                    ERROR and change what the agent sees.*)
+                  (*Sync is load-bearing: this is where auto_raw's semantics
+                    lived, and the handler below reads the raw Auto_Fail to build
+                    the agent-facing message.  An Async mode would compose the
+                    failure into an ERROR and change what the agent sees.*)
                   val prover = fn id => fn ctxt => fn goal =>
                         Phi_Sledgehammer_Solver.auto
-                          {improved = improved_SH, async = false,
+                          {improved = improved_SH,
+                           async_mode = Phi_Sledgehammer_Solver.Sync,
                            fact_override = override', proof_id = id,
                            timeout = SOME (Time.fromSeconds timeout),
-                           read_store = NONE, write_store = NONE,
-                           raise_Error_instead_of_Auto_Fail = false,
-                           failure_msg = NONE}
+                           read_store = NONE, write_store = NONE}
                           ctxt goal
                         |> apfst Future.join
               in Minilang.HAMMER prover s_resolved

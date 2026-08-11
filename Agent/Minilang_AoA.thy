@@ -41,7 +41,7 @@ method_setup aoa = \<open>
 
 method_setup hammer_or_aoa = \<open>
   (* hammer_or_AoA facade (§2.3): store lookup, engine search, then the AoA
-     agent — always async = false at the method layer.  Same &&&-splitting
+     agent — always async_mode = Sync at the method layer.  Same &&&-splitting
      prelude as `aoa` (CONTEXT_METHOD). *)
   Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.hammer_or_aoa_method))
 \<close>

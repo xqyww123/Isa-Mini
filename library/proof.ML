@@ -4350,16 +4350,23 @@ fun default_prover timeout_opt override ctxt =
       val override' = if improved_SH then override
                       else Sledgehammer_Fact.no_fact_override
   in fn id => fn ctxt => fn goal =>
-       Phi_Sledgehammer_Solver.auto
-         {improved = improved_SH, async = false, fact_override = override',
-          proof_id = id, timeout = timeout_opt,
-          read_store = NONE, write_store = NONE,
-          raise_Error_instead_of_Auto_Fail = true,
-          failure_msg = NONE}
-         ctxt goal
-       (*Joined here rather than widening HAMMER_i's type annotation: this call
-         is always async = false, so the future is a Future.value.*)
-       |> apfst Future.join
+       (Phi_Sledgehammer_Solver.auto
+          {improved = improved_SH, async_mode = Phi_Sledgehammer_Solver.Sync,
+           fact_override = override',
+           proof_id = id, timeout = timeout_opt,
+           read_store = NONE, write_store = NONE}
+          ctxt goal
+        (*Joined here rather than widening HAMMER_i's type annotation: this call
+          is always Sync, so the future is a Future.value.*)
+        |> apfst Future.join)
+       (*The conversion MUST sit inside this closure: HAMMER_i below catches only
+         ERROR, so a raw Auto_Fail escaping from here would crash the Minilang
+         HAMMER command instead of reporting a failed proof.  Internal_Failure
+         keeps its own payload -- that payload is why the constructor exists.*)
+       handle Phi_Sledgehammer_Solver.Auto_Fail
+                (Phi_Sledgehammer_Solver.Internal_Failure msg) => error msg
+            | Phi_Sledgehammer_Solver.Auto_Fail _ =>
+                error (Phi_Sledgehammer_Solver.error_message ctxt goal)
   end
 
 fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
@@ -5414,13 +5421,14 @@ fun dispatch_term ctxt term_rule term_goal metric_strs =
                       val (_, closed) =
                         Phi_Sledgehammer_Solver.all_auto
                           {improved = true,
-                           async = false,   (* the failure must stay observable *)
+                           (* the failure must stay observable; and the enclosing
+                              \<^try>…catch turns every shape into Seq.empty
+                              alike, so no conversion is written here *)
+                           async_mode = Phi_Sledgehammer_Solver.Sync,
                            fact_override = Sledgehammer_Fact.no_fact_override,
                            proof_id = NONE, (* derive the key from the goals *)
                            timeout = NONE,
-                           read_store = NONE, write_store = NONE,
-                           raise_Error_instead_of_Auto_Fail = true,
-                           failure_msg = NONE}
+                           read_store = NONE, write_store = NONE}
                           ctxt st
                     in Seq.single closed end
                     catch _ => Seq.empty\<close>

@@ -63,10 +63,11 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                    (*test bypass — see the header comment*)
                                    read_store = if MiniLang_Agent_AoA.is_test_driver driver
                                                 then SOME false else NONE,
-                                   write_store = NONE, async = false,
+                                   write_store = NONE,
+                                   async_mode = Phi_Sledgehammer_Solver.Sync,
                                    task = MiniLang_Agent_AoA.Usual} (ctxt, sequent)
                             (* This join is one of the two sanctioned sync-call-site
-                               exceptions (§2.5): async is hard-wired false here, so
+                               exceptions (§2.5): the mode is hard-wired Sync here, so
                                `products` is a fulfilled Future.value and the join is
                                free — and the cost tuple must go back to the REPL
                                client, which reads the nine numbers by index.  On a

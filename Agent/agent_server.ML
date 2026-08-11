@@ -85,7 +85,7 @@ val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
 val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
                budget: MiniLang_Agent.budget, invocation_id: string,
                read_store: bool option, write_store: bool option,
-               async: bool, task: task}
+               async_mode: Phi_Sledgehammer_Solver.async_mode, task: task}
            -> Proof.context * thm
            -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) future * thm
 
@@ -102,22 +102,21 @@ val hammer_or_AoA :
      {fact_override: Sledgehammer.fact_override,  (*fed to the engine branch only*)
       proof_id: Phi_Proof_Store.proof_id option,  (*NONE = derive the all-goals key*)
       hammer_timeout: Time.time option,           (*forwarded to all_auto*)
-      async: bool,
+      async_mode: Phi_Sledgehammer_Solver.async_mode,
+                                 (*THE one fork of the whole chain: every inner
+                                   call is Sync.  Async carries phi's failure-text
+                                   composer (§2.2) as its failure_msg*)
       read_store: bool option,   (*governs level 0's BOTH levels; NONE follows
                                    AoA_read_proof_store*)
-      write_store: bool option,  (*governs EVERY write: level 0's L1 upgrade and
+      write_store: bool option}  (*governs EVERY write: level 0's L1 upgrade and
                                    the fork-end L2 + L1 writes; NONE follows
                                    AoA_write_proof_store.  NOT forwarded to the
                                    inner branches — they are constant SOME false*)
-      failure_msg: (exn -> string) option}
-                                 (*phi's failure-text composer (§2.2), forwarded
-                                   to all_auto and to this fork's report hook —
-                                   no second dispatch is built here*)
   -> Proof.context -> thm
   -> string future (*proof text; phi's oblg layer discards it*) * thm
 
 (* Body of `by hammer_or_aoa` (registered in Minilang_AoA.thy): hammer_or_AoA
-   with async = false, stores per config.  Renders every give-up reason
+   with async_mode = Sync, stores per config.  Renders every give-up reason
    through banner_of; agent_cost goes to plain tracing (§6.2). *)
 val hammer_or_aoa_method : thm list -> context_state -> context_state Seq.result Seq.seq
 
@@ -1831,7 +1830,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
      raw_AoA's entry). ***)
 
 fun run_AoA {driver, minilang_cfg, budget, invocation_id,
-             read_store, write_store, async, task} (ctxt, sequent) =
+             read_store, write_store, async_mode, task} (ctxt, sequent) =
   let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (D59): the all-goals key of the ORIGINAL,
@@ -1849,7 +1848,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
            sequent')
       | NONE =>
           let val (_, futs, sequent') =
-                Phi_Sledgehammer_Solver.async_prove async Phi_Sledgehammer_Solver.All_At_Once
+                Phi_Sledgehammer_Solver.async_prove async_mode
+                  Phi_Sledgehammer_Solver.All_At_Once
                   (raw_AoA {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
                             invocation_id = invocation_id, task = task})
                   (ctxt, sequent)
@@ -1960,7 +1960,7 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
 
 (*** The tactic ***)
 
-(* `by aoa` ≈ run_AoA (§2.3); always async = false. *)
+(* `by aoa` ≈ run_AoA (§2.3); always async_mode = Sync. *)
 fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
   else let val driver = Config.get ctxt aoa_driver
@@ -1972,7 +1972,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val (agent_cfg, budget) = MiniLang_Agent.default_cfg
         in run_AoA {driver = driver, minilang_cfg = agent_cfg, budget = budget,
                     invocation_id = invocation_id, read_store = NONE, write_store = NONE,
-                    async = false, task = Usual} (ctxt, sequent)
+                    async_mode = Phi_Sledgehammer_Solver.Sync, task = Usual} (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
            handle Agent_Give_Up (reason, detail, _) =>
              error (banner_of reason ^ "\n" ^ detail)
@@ -1986,8 +1986,8 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
      read, so hammer_or_AoA does the (one) write: both inner branches are
      constant read_store = write_store = SOME false and only produce proofs. ***)
 
-fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
-                   read_store, write_store, failure_msg} ctxt sequent =
+fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
+                   read_store, write_store} ctxt sequent =
   let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (§2.3): a given id verbatim, else the all-goals key
@@ -2007,19 +2007,20 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
                  — (raw un-divided time, proof text) — so the write-back below
                  is written once (§7 stage 4 step 4).  The two Future.joins
                  in here are NOT main-path joins: both inner calls are
-                 constant async = false, so the joined futures are fulfilled
-                 Future.values (the same class as the two sanctioned sync
-                 call sites on §2.5's whitelist — flagged for the whitelist's
-                 next revision). *)
+                 constant async_mode = Sync, so the joined futures are
+                 fulfilled Future.values (the same class as the two sanctioned
+                 sync call sites on §2.5's whitelist — flagged for the
+                 whitelist's next revision). *)
               fun miss_path (ctxt, sequent) =
                 let val (tp_fut, sequent') =
                       Phi_Sledgehammer_Solver.all_auto
-                        {improved = true, async = false,
+                        (*Sync is load-bearing twice over: the handler below has
+                          to SEE the Auto_Fail to fall back to AoA, and this whole
+                          function is already the body of the one fork.*)
+                        {improved = true, async_mode = Phi_Sledgehammer_Solver.Sync,
                          fact_override = fact_override, proof_id = SOME key,
                          timeout = hammer_timeout,
-                         read_store = SOME false, write_store = SOME false,
-                         raise_Error_instead_of_Auto_Fail = false,
-                         failure_msg = failure_msg} ctxt sequent
+                         read_store = SOME false, write_store = SOME false} ctxt sequent
                  in (Future.join tp_fut, sequent') end
                 (* §2.9's consumption rule: Internal_Failure means the ENGINE
                    is broken, not that the goal is hard — it goes straight up
@@ -2042,7 +2043,8 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
                         run_AoA {driver = driver, minilang_cfg = agent_cfg,
                                  budget = budget, invocation_id = invocation_id,
                                  read_store = SOME false, write_store = SOME false,
-                                 async = false, task = Usual} (ctxt, sequent)
+                                 async_mode = Phi_Sledgehammer_Solver.Sync,
+                                 task = Usual} (ctxt, sequent)
                       (* run_AoA's third and fourth by-products: what a replay
                          will spend (raw, un-divided) and the assembled
                          `aoa_replay "<b64>"` text — the same shape the engine
@@ -2050,7 +2052,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
                       val (_, _, replay_time, prf_text) = Future.join fut
                    in ((replay_time, prf_text), sequent') end
               val (_, futs, sequent') =
-                Phi_Sledgehammer_Solver.async_prove' failure_msg async
+                Phi_Sledgehammer_Solver.async_prove async_mode
                   Phi_Sledgehammer_Solver.All_At_Once miss_path (ctxt, sequent)
            in case futs of
                 [fut] =>
@@ -2089,7 +2091,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
           end
   end
 
-(* `by hammer_or_aoa` ≈ hammer_or_AoA (§2.3); always async = false.  All five
+(* `by hammer_or_aoa` ≈ hammer_or_AoA (§2.3); always async_mode = Sync.  All five
    give-up reasons render through the one banner_of (§6.2); the core layers
    throw only structured exceptions; agent_cost at the method layer goes to
    plain tracing.  The text future is deliberately dropped — the text was
@@ -2097,9 +2099,9 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async,
 fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
   else (hammer_or_AoA {fact_override = Sledgehammer_Fact.no_fact_override,
-                       proof_id = NONE, hammer_timeout = NONE, async = false,
-                       read_store = NONE, write_store = NONE,
-                       failure_msg = NONE} ctxt sequent
+                       proof_id = NONE, hammer_timeout = NONE,
+                       async_mode = Phi_Sledgehammer_Solver.Sync,
+                       read_store = NONE, write_store = NONE} ctxt sequent
         |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)))
        handle Agent_Give_Up (reason, detail, cost) =>
               (tracing (string_of_cost cost);
@@ -2108,8 +2110,8 @@ fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
                goal is hard; hammer_or_AoA reraises it on purpose (§2.9) and
                nothing between here and Isar renders it, so without this arm the
                method leaks a bare structured exception.  The payload IS the
-               message — the same rendering the engine's own guard_errors arm
-               gives it.  No agent ran, so no cost line. *)
+               message — the same rendering the engine's own Isar method faces
+               give it.  No agent ran, so no cost line. *)
             | Phi_Sledgehammer_Solver.Auto_Fail
                 (Phi_Sledgehammer_Solver.Internal_Failure msg) => error msg)
 
