@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Coroutine, NamedTuple, Sequence, TypedDict, C
 from . import model
 from . import prompts as _P
 from .model import *
-from .model import _filter_unprovable
+from .model import _filter_unprovable, _filter_unfound
 from abc import ABC, abstractmethod
 import io
 import tempfile
@@ -8922,17 +8922,16 @@ async def _test_Obtain_Rewrite_Scope(root: Root, file: MyIO):
 async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     """_is_trivial lifecycle around failed Obvious attempts.
 
-    Since the _is_trivial reset on TERMINATE_AND_REVERT (923e624), a failed
-    single-op Obvious fill reverts AND clears the parent's flag, so retries
-    are no longer blocked — the flag only persists while a failed Obvious
-    is actually in the tree.  This test pins both halves:
+    A failed Obvious leaving the tree does not retract its verdict on the
+    goal: the auto-revert of a single-op fill used to clear the parent's
+    flag, which made that one route the only way a bare identical retry got
+    through.  What DOES clear the flag is an upstream change, because the
+    goal's situation genuinely changed.  This test pins both halves:
 
-    1. single-op fill fails → node reverted, _is_trivial=None, an identical
-       retry is allowed (fails the same way, not GoalIsNontrivial);
-    2. with a stale _is_trivial=False (white-boxed, as an in-tree failed
-       Obvious would leave it), the GoalIsNontrivial gate blocks a new
-       Obvious, and amend / insert_before of an upstream step reset the
-       flag via _on_upstream_change so Obvious can be attempted again."""
+    1. single-op fill fails → node reverted, _is_trivial stays False, and an
+       identical retry is blocked by GoalIsNontrivial;
+    2. amend / insert_before of an upstream step reset the flag via
+       _on_upstream_change, so Obvious can be attempted again."""
     print_header("Initial YAML", file)
     root.print(0, file)
 
@@ -8958,42 +8957,29 @@ async def _test_UpstreamChangeResetsObvious(root: Root, file: MyIO):
     print_header("After step 2 (Have False, open proof)", file)
     root.print(0, file)
 
-    # Step 2.1: Obvious — fails (can't prove False), single-op fill is
-    # auto-reverted and the revert clears _is_trivial back to None.
+    # Step 2.1: Obvious — fails (can't prove False).  The single-op fill is
+    # auto-reverted, but the verdict survives the revert: a fair attempt did
+    # happen (no fact was requested, so none could go missing).
     root.session.age += 1
     _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     step2 = root.locate_node("2")
     assert isinstance(_outcome.failure, CannotEdit_EvaluationFailed), \
         f"Expected CannotEdit_EvaluationFailed but got {_outcome.failure!r}"
-    assert step2._is_trivial is None, \
-        f"Expected _is_trivial=None after single-op fill revert, got {step2._is_trivial}"
-    file.write("Single-op Obvious failure reverted; _is_trivial cleared to None\n")
+    assert step2._is_trivial is False, \
+        f"Expected _is_trivial=False after single-op fill revert, got {step2._is_trivial}"
+    file.write("Single-op Obvious failure reverted; _is_trivial kept at False\n")
     print_header("After step 2.1 (Obvious fails on False, reverted)", file)
     root.print(0, file)
 
-    # Retry Obvious on step 2.1 — must NOT be blocked: it fails on the
-    # hammer again (CannotEdit_EvaluationFailed), not GoalIsNontrivial.
-    root.session.age += 1
-    _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
-    assert isinstance(_outcome.failure, CannotEdit_EvaluationFailed), \
-        f"Expected CannotEdit_EvaluationFailed on retry but got {_outcome.failure!r}"
-    assert step2._is_trivial is None, \
-        f"Expected _is_trivial=None after retried revert, got {step2._is_trivial}"
-    file.write("Obvious retry allowed (fails on the hammer, not GoalIsNontrivial)\n")
-
-    # --- GoalIsNontrivial gate + _on_upstream_change reset ---
-    # White-box a stale _is_trivial=False: an in-tree failed Obvious (kept
-    # by a multi-op batch, or re-failed during a refresh cascade) leaves
-    # the parent in exactly this state; a reverted single-op fill no
-    # longer does, and keeping a failed Obvious in the tree here would let
-    # the post-amend refresh cascade re-set the flag and mask the reset
-    # under test.
-    step2._is_trivial = False
+    # Retry the identical Obvious — blocked at construction, the same as every
+    # other route to a bare retry (empty slot, amend, delete-then-fill).
     root.session.age += 1
     _outcome = await root.fill("2.1", [Obvious.gen_single({"facts": []})])
     assert isinstance(_outcome.failure, GoalIsNontrivial), \
-        f"Expected GoalIsNontrivial failure but got {_outcome.failure!r}"
-    file.write("Obvious correctly blocked by GoalIsNontrivial while flag is False\n")
+        f"Expected GoalIsNontrivial on retry but got {_outcome.failure!r}"
+    assert step2._is_trivial is False, \
+        f"Expected _is_trivial=False after the blocked retry, got {step2._is_trivial}"
+    file.write("Obvious retry blocked by GoalIsNontrivial\n")
 
     # amend step 1 → _on_upstream_change should reset step2._is_trivial
     root.session.age += 1
@@ -18468,3 +18454,59 @@ async def _test_InferenceRule_ProveInTime_Backfill(root: Root, file: MyIO):
     file.write(f"assembled RULE op carries the record: {carried}\n")
     if not carried:
         raise TestFailed(f"the packed RULE op lost the record: {packed_rule}")
+
+
+@model_test("SymbolicFactName", "Test_SymbolicFactName.thy", 21)
+async def _test_SymbolicFactName(root: Root, file: MyIO):
+    """Fact names carrying Isabelle symbols must reach Isabelle in ASCII
+    notation, and the three ways a theorem reference can fail must be told
+    apart.
+
+    The model writes `the_φ`; the fact is really `the_\\<phi>`, seven ASCII
+    characters. Before this was fixed the UTF-8 bytes went out as-is, nothing
+    interned, and the fact was dropped from the operation with a "not found"
+    that said nothing about why."""
+    ml_state = root.ml_state
+    print_header("Resolve a symbol-bearing name written the way the model writes it", file)
+    facts = cast(list[IsabelleFact], await ml_state.fetch_facts([
+        FactByName(name="the_φ"),
+        FactByName(name="sym_pair⇩R(1)"),
+        FactByName(name="sym_pair⇩R(9)"),
+        FactByName(name="empty_coll⇩R"),
+        FactByName(name="no_such_φ_fact"),
+    ]))
+    for f in facts:
+        kind = type(f).__name__.removeprefix("IsabelleFact_")
+        if isinstance(f, IsabelleFact_Presented):
+            file.write(f"- {f.name().unicode}: {kind}, full_name={f.full_name!r}, "
+                       f"{len(f.expression)} theorem(s), packed={f.pack()[0]!r}\n")
+        else:
+            file.write(f"- {f.name().unicode}: {kind}\n")
+
+    print_header("What the model is told about the ones that did not arrive", file)
+    kept, warnings = _filter_unfound(facts)
+    for w in warnings:
+        file.write(f"{w}\n")
+    file.write(f"kept: {len(kept)} of {len(facts)}\n")
+
+    # The name that goes out must be the ASCII notation, byte for byte — pack()
+    # feeds it straight back to the Isabelle parser.
+    presented = {f.name().unicode: f for f in facts
+                 if isinstance(f, IsabelleFact_Presented)}
+    assert "the_φ" in presented, "the_φ did not resolve"
+    assert presented["the_φ"].full_name == r"the_\<phi>", \
+        f"full_name is not ASCII notation: {presented['the_φ'].full_name!r}"
+    assert presented["the_φ"].pack()[0] == r"the_\<phi>", \
+        f"packed name is not ASCII notation: {presented['the_φ'].pack()[0]!r}"
+
+    # An empty collection resolves; an index past its end does not.
+    assert "empty_coll⇩R" in presented and not presented["empty_coll⇩R"].expression, \
+        "an empty collection must resolve, with zero theorems"
+    assert any("out of range" in w for w in warnings), \
+        f"expected an out-of-range diagnostic among {warnings}"
+    assert any(w.endswith('"no_such_φ_fact" not found, skipped.') for w in warnings), \
+        f"expected a plain not-found for the absent name among {warnings}"
+
+    print_header("The name as it reaches the operation", file)
+    packed = Minilang_Operation.HAMMER(kept)
+    file.write(f"{packed}\n")

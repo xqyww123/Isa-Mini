@@ -1340,6 +1340,10 @@ class Consider_Case_Msg(Message):
     @classmethod
     def unpack(cls, data) -> 'Consider_Case_Msg':
         (case, items_data) = data
+        # `case` becomes the child node's step number — shown to the model and
+        # echoed back by it verbatim, never re-sent to Isabelle. Decode it here,
+        # the same RPC-unpacking boundary as IsaTerm.from_isabelle.
+        case = pretty_unicode(case)
         context = Context.unpack(items_data)
         vars = list(context.vars.items())
         tvars = list(context.tvars.items())
@@ -1659,6 +1663,20 @@ def _pack_post_insts(insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> li
             for rnd in insts]
 
 class Minilang_Operation(NamedTuple):
+    """One packed Minilang command, ready to send to Isabelle.
+
+    Every string inside `arg` is in Isabelle's ASCII notation, and reaches that
+    state one of exactly three ways: it is an `IsaTerm.ascii`; it is model input
+    put through `ascii_of_unicode` (that conversion belongs INSIDE the factory
+    below, next to the term conversions, so no caller has to remember it); or it
+    came back from Isabelle already in ASCII notation and is being handed
+    straight back (`HAMMER`'s `cached_proof`, from `SH_PRF_Msg.method`).
+
+    This applies to names and terms only — never to free English. The reverse
+    table behind `ascii_of_unicode` maps 28 codepoints below U+0100 (×, ÷, ±, ¬,
+    °, §, ½, «, …), so applying it wholesale at the RPC serialisation layer would
+    rewrite an English semantic-search query too ("a 90° rotation" would go out
+    as "a 90\\<degree> rotation")."""
     command: str
     arg: Any
 
@@ -1705,40 +1723,45 @@ class Minilang_Operation(NamedTuple):
     def END() -> 'Minilang_Operation':
         return Minilang_Operation("END", [])
     @staticmethod
-    def HAVE(name: str, fixes: 'list[tuple[str, str | None]]',
-             assumes: 'list[tuple[str | None, str]]',
+    def HAVE(name: xname, fixes: 'list[tuple[xname, xtyp | None]]',
+             assumes: 'list[tuple[xname | None, xterm]]',
              conclusion: xterm, auto_apply: bool) -> 'Minilang_Operation':
         return Minilang_Operation("HAVE", (
-            name,
-            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
-            [(n, ascii_of_unicode(t)) for n, t in assumes],
+            ascii_of_unicode(name),
+            [(ascii_of_unicode(n), ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(ascii_of_unicode(n) if n is not None else None,
+              ascii_of_unicode(t)) for n, t in assumes],
             ascii_of_unicode(conclusion),
             auto_apply
         ))
     @staticmethod
-    def SETUP_REWRITING(name: str, fixes: 'list[tuple[str, str | None]]',
-                        conditions: 'list[tuple[str | None, xterm]]',
+    def SETUP_REWRITING(name: str, fixes: 'list[tuple[xname, xtyp | None]]',
+                        conditions: 'list[tuple[xname | None, xterm]]',
                         redex: xterm, residue: xterm) -> 'Minilang_Operation':
         return Minilang_Operation("SETUP_REWRITING", (
-            name,
-            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
-            [(n, ascii_of_unicode(t)) for n, t in conditions],
+            name,   # machine-generated (`setup_rewriting__<n>`), never model input
+            [(ascii_of_unicode(n), ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(ascii_of_unicode(n) if n is not None else None,
+              ascii_of_unicode(t)) for n, t in conditions],
             ascii_of_unicode(redex),
             ascii_of_unicode(residue)
         ))
     @staticmethod
-    def SUFFICES(fixes: 'list[tuple[str, str | None]]',
-                 assumes: 'list[tuple[str | None, str]]',
+    def SUFFICES(fixes: 'list[tuple[xname, xtyp | None]]',
+                 assumes: 'list[tuple[xname | None, xterm]]',
                  conclusion: xterm) -> 'Minilang_Operation':
         return Minilang_Operation("SUFFICES", (
-            [(n, ascii_of_unicode(t) if t else None) for n, t in fixes],
-            [(n, ascii_of_unicode(t)) for n, t in assumes],
+            [(ascii_of_unicode(n), ascii_of_unicode(t) if t else None) for n, t in fixes],
+            [(ascii_of_unicode(n) if n is not None else None,
+              ascii_of_unicode(t)) for n, t in assumes],
             ascii_of_unicode(conclusion)
         ))
     @staticmethod
-    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[str, xterm]]) -> 'Minilang_Operation':
-        vars = [(v["name"], ascii_of_unicode(t) if (t := v.get("type")) else None) for v in variables]
-        return Minilang_Operation("OBTAIN", (vars, [(n, ascii_of_unicode(c)) for n, c in constraints]))
+    def OBTAIN(variables: list[Explicit_Var], constraints: list[tuple[xname, xterm]]) -> 'Minilang_Operation':
+        vars = [(ascii_of_unicode(v["name"]),
+                 ascii_of_unicode(t) if (t := v.get("type")) else None) for v in variables]
+        return Minilang_Operation("OBTAIN",
+            (vars, [(ascii_of_unicode(n), ascii_of_unicode(c)) for n, c in constraints]))
     @staticmethod
     def RULE(rule_ref: 'IsabelleFact | None',
              insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None) -> 'Minilang_Operation':
@@ -1750,8 +1773,11 @@ class Minilang_Operation(NamedTuple):
                cached_proof: 'tuple[str, int] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout, cached_proof))
     @staticmethod
-    def CHAINING(name: str, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
-        return Minilang_Operation("CHAINING", (name, [r.pack() for r in fact_refs]))
+    def CHAINING(name: xname, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
+        # The ML side turns `name` into a real binding (Binding.name), so an
+        # unconverted one would register a fact the model can never refer to.
+        return Minilang_Operation("CHAINING",
+            (ascii_of_unicode(name), [r.pack() for r in fact_refs]))
     @staticmethod
     def INTRO(bindings: Bindings | None, allow_standard_fallback: bool) -> 'Minilang_Operation':
         if bindings is not None:
@@ -1784,16 +1810,17 @@ class Minilang_Operation(NamedTuple):
         return Minilang_Operation("INST_GOAL_VARS",
             [(ascii_of_unicode(name), ascii_of_unicode(value)) for name, value in insts])
     @staticmethod
-    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[str], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
+    def SIMPLIFY(facts_with_targets: 'list[tuple[IsabelleFact, list[lambda_term] | None]]', use_system_simps: bool, premise_names: list[xname], simplify_goal: bool, bindings: tuple[list[tuple[str, str, str]], list[tuple[lambda_term, str, str]]] | None) -> 'Minilang_Operation':
         packed_facts = [(r.pack(), targets) for r, targets in facts_with_targets]
-        return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps, premise_names, simplify_goal, bindings))
+        return Minilang_Operation("SIMPLIFY", (packed_facts, use_system_simps,
+            [ascii_of_unicode(n) for n in premise_names], simplify_goal, bindings))
     @staticmethod
     def UNFOLD(fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         return Minilang_Operation("UNFOLD", [r.pack() for r in fact_refs])
     @staticmethod
-    def DEFINE(name: str, ty: xtyp | None, equations: list[xterm], metric: list[xterm]) -> 'Minilang_Operation':
+    def DEFINE(name: xname, ty: xtyp | None, equations: list[xterm], metric: list[xterm]) -> 'Minilang_Operation':
         return Minilang_Operation("DEFINE", (
-            name,
+            ascii_of_unicode(name),
             ascii_of_unicode(ty) if ty is not None else None,
             [ascii_of_unicode(eq) for eq in equations],
             [ascii_of_unicode(m) for m in metric],
@@ -1802,8 +1829,11 @@ class Minilang_Operation(NamedTuple):
     def WITNESS(terms: list[xterm]) -> 'Minilang_Operation':
         return Minilang_Operation("WITNESS", [ascii_of_unicode(t) for t in terms])
     @staticmethod
-    def BRANCH(cases: list[tuple[str, xterm]]) -> 'Minilang_Operation':
-        return Minilang_Operation("BRANCH", [(n, ascii_of_unicode(t)) for n, t in cases])
+    def BRANCH(cases: list[tuple[xname, xterm]]) -> 'Minilang_Operation':
+        # The branch name comes back as the child's step number, so its decoding
+        # in Consider_Case_Msg.unpack is the other half of this conversion.
+        return Minilang_Operation("BRANCH",
+            [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in cases])
     @staticmethod
     def CASE_SPLIT(target: xterm, vars: list[varname_spec] | None, rule: 'IsaTerm | None', no_simp: bool,
                    insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None) -> 'Minilang_Operation':
@@ -1823,36 +1853,41 @@ class Minilang_Operation(NamedTuple):
              no_simp, _pack_post_insts(insts)))
     @staticmethod
     def SPECIALIZE(
-        name: str,
+        name: xname,
         rule_ref: 'IsabelleFact',
-        instantiations: list[tuple[str, xterm]],  # (var_name, term_string)
+        instantiations: list[tuple[xname, xterm]],  # (var_name, term_string)
         fact_refs: 'list[IsabelleFact]'
     ) -> 'Minilang_Operation':
         return Minilang_Operation("SPECIALIZE", (
-            name,
+            ascii_of_unicode(name),
             rule_ref.pack(),
-            [(n, ascii_of_unicode(t)) for n, t in instantiations],
+            [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in instantiations],
             [r.pack() for r in fact_refs]
         ))
     @staticmethod
     def SKIP() -> 'Minilang_Operation':
         return Minilang_Operation("SKIP", None)
     @staticmethod
-    def CONTRADICTION(hypothesis_name: str) -> 'Minilang_Operation':
-        return Minilang_Operation("CONTRADICTION", hypothesis_name)
+    def CONTRADICTION(hypothesis_name: xname) -> 'Minilang_Operation':
+        return Minilang_Operation("CONTRADICTION", ascii_of_unicode(hypothesis_name))
     @staticmethod
-    def INTERPRET(qualifier: str, locale: str,
-                  instantiations: 'list[tuple[str, str]]') -> 'Minilang_Operation':
+    def INTERPRET(qualifier: xname, locale: xname,
+                  instantiations: 'list[tuple[xname, xterm]]') -> 'Minilang_Operation':
         """Interpret a locale. The ML side assembles the locale expression
         `<qualifier>: <locale> where p = <v> and ...` (each value cartouche-wrapped,
         since a `where` value is read by `Parse.term`, which takes exactly one outer
         token), parses it, and runs OPEN_MODULE with `auto_unfold_locale=true` --
         so the opaque locale predicate is eagerly split into the locale's real leaf
         assumptions, each an independently provable subgoal."""
-        return Minilang_Operation("INTERPRET", (qualifier, locale, instantiations))
+        # Each instantiation value is read by `Parse.term` on the ML side, so it
+        # is a term, not just a name.
+        return Minilang_Operation("INTERPRET", (
+            ascii_of_unicode(qualifier), ascii_of_unicode(locale),
+            [(ascii_of_unicode(n), ascii_of_unicode(v)) for n, v in instantiations]))
     @staticmethod
-    def COMPUTE(name: str, term: 'xterm') -> 'Minilang_Operation':
-        return Minilang_Operation("COMPUTE", (name, ascii_of_unicode(term)))
+    def COMPUTE(name: xname, term: 'xterm') -> 'Minilang_Operation':
+        return Minilang_Operation("COMPUTE",
+            (ascii_of_unicode(name), ascii_of_unicode(term)))
 
 type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 
@@ -2407,7 +2442,7 @@ class Minilang_State:
         if kind in _THEOREM_KINDS:
             entity: IsabelleEntity = IsabelleFact_Presented(
                 full_name=full_name, short_name=sname,
-                fact=FactByName(name=sname.ascii),
+                fact=FactByName(name=sname.unicode),   # display form, as the model writes it
                 expression=exprs, kind=kind, roles=roles,
                 abbreviation_names=abbrev_names, is_local=is_local)
         else:
@@ -2597,9 +2632,11 @@ class Minilang_State:
         """
         result = await self.connection.callback("IsaMini.potential_defs_of",
             (self.name, [n.ascii for n in constant_names]))
+        # `Fact["name"]` is always the Unicode display form — the same form the
+        # model writes.  `full_name` stays as Isabelle gave it (ASCII notation).
         return [IsabelleFact_Presented(full_name=full_name,
                         short_name=IsaTerm.from_isabelle(sname),
-                        fact=FactByName(name=sname),
+                        fact=FactByName(name=pretty_unicode(sname)),
                         expression=[IsaTerm.from_isabelle(prop)],
                         is_conditional=is_cond)
                 for full_name, sname, prop, is_cond in result]
@@ -2623,9 +2660,12 @@ class Minilang_State:
         for each looping rule with matching subterms in the rewrite targets."""
         if not fact_names:
             return []
+        # fact_names is derived from pack()[0], already ASCII notation; only
+        # premise_names comes straight from the model.
         result = await self.connection.callback(
             "IsaMini.check_looping_rules",
-            (self.name, fact_names, simplify_goal, premise_names))
+            (self.name, fact_names, simplify_goal,
+             [ascii_of_unicode(n) for n in premise_names]))
         # Decode the agent-facing display strings (rule_pretty / match_pretty) at
         # the boundary; match_raw stays ascii — it is re-sent to Isabelle.
         return [(idx, pretty_unicode(rule_pretty),
@@ -2660,7 +2700,7 @@ class Minilang_State:
         """Assemble for_any + premises + conclusion into a single Isabelle term string."""
         result = await self.connection.callback("IsaMini.concat_statement",
             (self.name,
-             [(n, ascii_of_unicode(t)) for n, t in fixes],
+             [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in fixes],
              [ascii_of_unicode(a) for a in assumes],
              ascii_of_unicode(concl)))
         return pretty_unicode(result)
@@ -3891,9 +3931,12 @@ class Interaction_InstantiateSchematics(Interaction):
 
     async def answer(self, answer: AnswerInstantiate) -> IsaTerm:
         insts = _validate_instantiation_answer(answer, self.schematic_vars)
+        # Convert in the argument only: `insts` is reused three lines down to
+        # build `rule_src`, which IsaTerm.from_agent expects in display form.
         err: str | None = await self.state.connection.callback(
             "IsaMini.validate_instantiation",
-            (self.state.name, self.rule_name.ascii, insts))
+            (self.state.name, self.rule_name.ascii,
+             [(ascii_of_unicode(n), ascii_of_unicode(t)) for n, t in insts]))
         if err is not None:
             raise Interaction_BadAnswer(
                 f"Instantiation rejected by Isabelle:\n{pretty_unicode(err)}")
@@ -4136,11 +4179,16 @@ class EditOutcome:
             parent = node.parent
             rp = node._delete_me()
             # The reverted node's refresh may have set _is_trivial on its
-            # parent (e.g. a failed Obvious sets _is_trivial=False).  Now
-            # that the node is gone, clear the flag so the slot is usable
-            # again — otherwise GoalIsNontrivial blocks all future Obvious
-            # attempts on that parent.
-            if parent is not None:
+            # parent.  Clearing it here used to make an auto-reverted single-op
+            # fill the one route by which an identical bare Obvious retry got
+            # through, while every other route (empty slot, amend, delete-then-
+            # fill) was blocked.  A failed Obvious leaving the tree is not news
+            # about the goal, so keep the verdict; anything else that leaves is.
+            # (FAILURE, not "not SUCCESS": a CANCELLED node never reached the
+            # point where the verdict is written.)
+            if parent is not None and not (
+                    isinstance(node, Obvious)
+                    and node.status.status is EvaluationStatus.Status.FAILURE):
                 parent._is_trivial = None
             await rp._refresh_me_alone(auto_intro=False)
             if rp.parent is not None:
@@ -4815,12 +4863,18 @@ class Node(ABC):
                 # sub-agents before unlinking, or a worker parked on one of
                 # these failed goals orphans — under nesting no live dispatcher
                 # could ever resume or close it.
-                for d in node.sub_nodes[i:]:
+                doomed = node.sub_nodes[i:]   # a copy: the slice, before deletion
+                for d in doomed:
                     await d.discard()
                 rp = child._delete_me()
                 while i < len(node.sub_nodes):
                     node._delete_child(node.sub_nodes[i])
-                node._is_trivial = None
+                # Same rule as the auto-revert path above: a failed Obvious
+                # leaving the tree does not retract its verdict on the goal.
+                if not any(isinstance(d, Obvious)
+                           and d.status.status is EvaluationStatus.Status.FAILURE
+                           for d in doomed):
+                    node._is_trivial = None
                 break
         if rp is not None and _status_can_continue(rp.status.status):
             await rp._refresh_me_alone(auto_intro=False)
@@ -5638,6 +5692,12 @@ class NonLeaf_Node(Node):
                 config = NodeConfig(child.local_step, await child.ml_state.clone(None), self)
                 new_node = gn.factory(config)
                 self.sub_nodes[i] = new_node
+                # No guard here, unlike the two removal paths: amending an
+                # Obvious into another Obvious never reaches this line (the
+                # constructor above raises GoalIsNontrivial first), and amending
+                # it into anything else genuinely changes the context — the
+                # model is doing exactly what the block was pushing it towards,
+                # and the Obvious it appends next must not be blocked.
                 self._is_trivial = None
                 for sibling in self.sub_nodes[i+1:]:
                     sibling._on_upstream_change()
@@ -7219,7 +7279,10 @@ class CaseSplit_Like(SubgoalMaker):
         if rule_spec == "default":
             rule_name: str | None = None
         elif "name" in rule_spec:
-            rule_name = rule_spec["name"]
+            # Normalise at the source: rule_name is mixed-provenance (model input
+            # here, an Isabelle ASCII string in the description branch below), and
+            # every consumer downstream assumes a single one.
+            rule_name = ascii_of_unicode(rule_spec["name"])
         elif "english" in rule_spec:
             desc = rule_spec["english"]
             entity_kind = (EntityKind.INDUCTION_RULE if kind == "induction"
@@ -7814,6 +7877,36 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
             kept.append(f)
     return kept, warnings
 
+def _binds_no_theorem(facts: 'list[IsabelleFact]') -> bool:
+    """True iff every fact here resolved but binds zero theorems.
+
+    An empty theorem collection resolves successfully with nothing behind it, so
+    the count that matters is theorems, not references. Only
+    IsabelleFact_Presented has an `expression`; anything else (ProveInTime,
+    Unfound) is treated as carrying content, since its emptiness is not this
+    question. Undefined on an empty list -- callers check that first."""
+    return all(isinstance(f, IsabelleFact_Presented) and not f.expression
+               for f in facts)
+
+def _failure_blob(node: 'Node') -> FailureReason:
+    """Agent-facing text for a failed single-op edit: the failure reason, then
+    this node's warnings.
+
+    In one place because five operation classes assemble it identically — and
+    because the blank line between the two halves is easy to lose. A
+    FailureReason never ends in a newline (checked: none of the 72 in this file
+    do), so without one the agent reads
+    "...step-by-step proof is required.notice:".
+    """
+    file = MyIO(StringIO())
+    if node.status.reason:
+        file.write(node.status.reason.reason)
+        if node.warnings:
+            file.write("\n")
+    if node.warnings:
+        node._print_warnings(0, file, list(Warning.Position))
+    return FailureReason(file.getvalue())
+
 async def _filter_unprovable(
     facts: list[IsabelleFact], ml_state: 'Minilang_State'
 ) -> tuple[list[IsabelleFact], list[str]]:
@@ -7911,6 +8004,12 @@ class Obvious(Leaf):
         self.fact_refs: list[IsabelleFact] | None = None
         self._found_tactic: str | None = None
         self._eval_time_ms: int | None = None
+        # Latch: set once any requested fact fails to reach the hammer, never
+        # cleared. "This goal is not trivial" is only a fair conclusion when
+        # everything the model asked for actually got there, and the refresh
+        # path that would notice a drop runs on an already-pruned list, so the
+        # observation has to be kept from the one refresh that can see it.
+        self._facts_dropped: bool = False
 
     def _subtree_stats_live(self) -> 'tuple[int, int]':
         # A SUCCESS Obvious is a goal closed by the hammer — proved work.
@@ -7992,11 +8091,13 @@ class Obvious(Leaf):
                 facts = []
                 unfound_warnings = []
             self.fact_refs, pit_warnings = await _filter_unprovable(facts, self.ml_state)
+            self._facts_dropped |= bool(unfound_warnings) or bool(pit_warnings)
             for w in unfound_warnings + pit_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         elif self.ml_state.initialized():
             refreshed = await self.ml_state.refresh_facts(self.fact_refs)
             self.fact_refs, unfound_warnings = _filter_unfound(refreshed)
+            self._facts_dropped |= bool(unfound_warnings)
             for w in unfound_warnings:
                 self.warnings.append(Warning(Warning.Position.FOOTER, w))
         await super()._refresh_me_alone(auto_intro)
@@ -8010,7 +8111,11 @@ class Obvious(Leaf):
                         break
                 _backfill_recorded_fact_proofs(self.fact_refs, self.resulting_state())
             elif self.status.status == EvaluationStatus.Status.FAILURE:
-                self.parent._is_trivial = False
+                # Only record "not trivial" when a fair attempt actually
+                # happened: if a requested fact never reached the hammer, this
+                # run does not license blocking the next one.
+                if not self._facts_dropped:
+                    self.parent._is_trivial = False
     def the_operation(self) -> 'Minilang_Operation | FailureReason':
         # Always run a real sledgehammer, at any depth: failures surface
         # immediately at edit time, and the main agent delegates hard sub-goals
@@ -8036,13 +8141,8 @@ class Obvious(Leaf):
             # are projected to the caller's namespace at render time (the single
             # id-translation boundary, CannotEdit.render). Relativizing here too
             # would double-project a worker's ids.
-            file = MyIO(StringIO())
-            if self.status.reason:
-                file.write(self.status.reason.reason)
-            if self.warnings:
-                self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
-                FailureReason(file.getvalue()),
+                _failure_blob(self),
                 self.id,
                 operation=outcome.operation,
                 unapplied_oprs=[],
@@ -8156,13 +8256,8 @@ class Chaining(Leaf):
             # are projected to the caller's namespace at render time (the single
             # id-translation boundary, CannotEdit.render). Relativizing here too
             # would double-project a worker's ids.
-            file = MyIO(StringIO())
-            if self.status.reason:
-                file.write(self.status.reason.reason)
-            if self.warnings:
-                self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
-                FailureReason(file.getvalue()),
+                _failure_blob(self),
                 self.id,
                 operation=outcome.operation,
                 unapplied_oprs=[],
@@ -8505,7 +8600,10 @@ class Interaction_ChooseDef(Interaction):
             file.write(f"Multiple definitions found for constants {', '.join(self.constants)}:\n")
         for i, ref in enumerate(self.candidate_defs):
             print_indent(indent+1, file)
-            file.write(f"{i}. {ref.full_name}: {', '.join(e.unicode for e in ref.expression)}\n")
+            # Decode only — keep the qualification, which is what distinguishes
+            # same-named definitions from different theories.
+            file.write(f"{i}. {pretty_unicode(ref.full_name)}: "
+                       f"{', '.join(e.unicode for e in ref.expression)}\n")
         if len(self.candidate_defs) > 1:
             file.write(f"Select definitions to use in unfolding. Call `{tn(TOOL_ANSWER_INDEXES_OR_NAME)}` with `indexes`, or the `name` of a definition, or leave empty to skip.\n")
         else:
@@ -8513,7 +8611,12 @@ class Interaction_ChooseDef(Interaction):
     async def answer(self, answer: AnswerIndexesOrName) -> list[IsabelleFact]:
         if answer.name is not None:
             for d in self.candidate_defs:
-                if d.short_name.unicode == answer.name or d.full_name == answer.name:
+                # Second disjunct matches the form `prompt` displayed. Leaving it
+                # as the raw full_name would miss every symbol-bearing name the
+                # model copies back, and the fallback path below cannot recover
+                # the ML `is_conditional` flag.
+                if (d.short_name.unicode == answer.name
+                        or pretty_unicode(d.full_name) == answer.name):
                     return [d]
             if self.state is not None:
                 presented = await _try_resolve_as_named_fact(self.state, answer.name)
@@ -8749,13 +8852,8 @@ class Unfold(Leaf):
             # are projected to the caller's namespace at render time (the single
             # id-translation boundary, CannotEdit.render). Relativizing here too
             # would double-project a worker's ids.
-            file = MyIO(StringIO())
-            if self.status.reason:
-                file.write(self.status.reason.reason)
-            if self.warnings:
-                self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
-                FailureReason(file.getvalue()),
+                _failure_blob(self),
                 self.id,
                 operation=outcome.operation,
                 unapplied_oprs=[],
@@ -8771,6 +8869,10 @@ class Unfold(Leaf):
         unfound = [f for f in self.fact_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        if _binds_no_theorem(self.fact_refs):
+            # Names resolved, but every one binds zero theorems: UNFOLD would be
+            # a silent no-op, so reuse the same message as having no refs at all.
+            return FailureReason(f"No definitions found for: {', '.join(self.targets)}")
         return Minilang_Operation.UNFOLD(self.fact_refs)
 
 
@@ -8884,13 +8986,8 @@ class Derive(Leaf):
             # are projected to the caller's namespace at render time (the single
             # id-translation boundary, CannotEdit.render). Relativizing here too
             # would double-project a worker's ids.
-            file = MyIO(StringIO())
-            if self.status.reason:
-                file.write(self.status.reason.reason)
-            if self.warnings:
-                self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
-                FailureReason(file.getvalue()),
+                _failure_blob(self),
                 self.id,
                 operation=outcome.operation,
                 unapplied_oprs=[],
@@ -8912,6 +9009,9 @@ class Derive(Leaf):
             "Derive.the_operation called before first refresh resolved refs"
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Rule fact \"{self.rule_ref.name().unicode}\" not found")
+        if _binds_no_theorem([self.rule_ref]):
+            return FailureReason(
+                f"Rule \"{self.rule_ref.name().unicode}\" binds no theorem here. It's empty.")
         unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
         if unfound:
             return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
@@ -9251,15 +9351,21 @@ class Rewrite(Leaf):
             # Check for looping rules and fork interaction if needed
             # Send full fact references (including [xwhere ...] attributes) so
             # the ML side resolves the same instantiated theorems that SIMPLIFY uses.
-            fact_names = [f.pack()[0] for f in self.using
-                          if isinstance(f, IsabelleFact_Presented)]
+            presented = [f for f in self.using
+                         if isinstance(f, IsabelleFact_Presented)]
+            fact_names = [f.pack()[0] for f in presented]
+            # A second list for display only. `fact_idx` indexes the list SENT, so
+            # both must come from the same filtered sequence. pack()[0] is the
+            # qualified name plus internal `xwhere` spelling — right for Isabelle,
+            # wrong to show the model.
+            display_names = [f.name().unicode for f in presented]
             if fact_names:
                 looping_info = await self.ml_state.check_looping_rules(
                     fact_names, self.rewrite_goal, self.rewrite_premises)
                 if looping_info:
                     selections: list[tuple[int, list[lambda_term]]] = \
                         await the_session().launch_interaction(
-                            Interaction_SelectRewriteTargets(looping_info, fact_names))
+                            Interaction_SelectRewriteTargets(looping_info, display_names))
                     fact_targets: list[list[lambda_term] | None] = [None] * len(self.using)
                     for fact_idx, selected_terms in selections:
                         if fact_idx < len(fact_targets):
@@ -9417,13 +9523,8 @@ class Rewrite(Leaf):
             # are projected to the caller's namespace at render time (the single
             # id-translation boundary, CannotEdit.render). Relativizing here too
             # would double-project a worker's ids.
-            file = MyIO(StringIO())
-            if self.status.reason:
-                file.write(self.status.reason.reason)
-            if self.warnings:
-                self._print_warnings(0, file, list(Warning.Position))
             outcome.failure = CannotEdit_EvaluationFailed(
-                FailureReason(file.getvalue()),
+                _failure_blob(self),
                 self.id,
                 operation=outcome.operation,
                 unapplied_oprs=[],
@@ -10503,6 +10604,11 @@ class InferenceRule(SubgoalMaker):
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
+        if self.rule_ref is not None and _binds_no_theorem([self.rule_ref]):
+            # RULE with zero theorems fails hard, with a message that never
+            # mentions the empty fact.
+            return FailureReason(
+                f"Inference rule \"{self.rule_ref.name().unicode}\" binds no theorem here. It's empty.")
         return Minilang_Operation.RULE(self.rule_ref, self._post_insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         # The ML RULE operator already emits its own "Fail to apply the rules."
@@ -10595,7 +10701,8 @@ class InferenceRule(SubgoalMaker):
             if rule is not None and "name" in rule:
                 using_ref: 'FactByName' = cast('FactByName', rule)
             else:
-                using_ref = FactByName(name=self.rule_ref.pack()[0])
+                # `Fact["name"]` is always the Unicode display form.
+                using_ref = FactByName(name=pretty_unicode(self.rule_ref.pack()[0]))
             rw = Rewrite.gen_single({
                 "thought": self.thought,
                 "using": [using_ref],
@@ -11057,8 +11164,9 @@ class Induction(CaseSplit_Like):
         listed = [IsaTerm.from_agent(var["name"]) for var in self.variables]
         goal_var_names = set(await self.ml_state.connection.callback(
             "IsaMini.goal_variables", self.ml_state.name))
+        # goal_var_names are Variable.revert_fixed names, i.e. ASCII notation.
         unclassified = [(name, typ) for name, typ in vars.items()
-                        if name not in listed and name.unicode in goal_var_names]
+                        if name not in listed and name.ascii in goal_var_names]
         if not unclassified:
             return
         to_generalize = await the_session().launch_interaction(
@@ -11096,7 +11204,10 @@ class Induction(CaseSplit_Like):
             n = _norm(name)
             return n in supplied_exact or _split(n)[0] in supplied_bare
         # Display the prop via IsaTerm so the picker renders unicode, not ascii.
-        offered = [(n, IsaTerm.from_isabelle(p))
+        # The NAME is decoded here and nowhere else: `answer` echoes back the very
+        # string that was displayed, so decoding once keeps the prompt, the
+        # answer, the `_already` comparison and what gets stored all in one form.
+        offered = [(pretty_unicode(n), IsaTerm.from_isabelle(p))
                    for (n, p) in candidates if not _already(n)]
         if not offered:
             return
@@ -13600,9 +13711,9 @@ class Session:
         then reuses the ``query`` tool's entity renderer
         (``retrieval._render_fetched_entities``) so a suggested lemma reads
         exactly as it would in a ``query`` result — statement, ``[manual]`` tag,
-        declaring definition. Names that do not resolve are listed bare (the same
-        shape ``_format_fetched_entity`` uses for an entity with no expression).
-        Returns "" when there are no lemmas or this is not a worker."""
+        declaring definition. Names that do not resolve, or that resolve to zero
+        theorems, are dropped entirely. Returns "" when nothing is left to show,
+        when there are no lemmas, or when this is not a worker."""
         role = self.role
         if not isinstance(role, Role_Worker) or not role.useful_lemmas:
             return ""
@@ -13619,14 +13730,15 @@ class Session:
                     else target.ml_state)
         names = list(role.useful_lemmas)
         entities = await ml_state.retrieve_entities_by_name(names)
-        found = [e for e in entities if e is not None]
-        unfound = [n for n, e in zip(names, entities) if e is None]
+        # Under the heading "Useful lemmas:", a name with nothing behind it reads
+        # as "this lemma exists, go use it" — so drop both the ones that did not
+        # resolve and the ones that resolved to zero theorems (an empty
+        # collection), rather than listing them bare.
+        found = [e for e in entities
+                 if e is not None and e.entity.expression]
         buf = StringIO()
         if found:
             await _render_fetched_entities(self, ml_state, found, buf, indent=1)
-        for name in unfound:
-            print_indent(1, buf)
-            buf.write(f"- {name}\n")
         body = buf.getvalue().rstrip("\n")
         if not body:
             return ""

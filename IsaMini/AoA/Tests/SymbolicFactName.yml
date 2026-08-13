@@ -1,0 +1,18 @@
+--------------------------------------------------
+Resolve a symbol-bearing name written the way the model writes it
+--------------------------------------------------
+- the_φ: Presented, full_name='the_\\<phi>', 1 theorem(s), packed='the_\\<phi>'
+- sym_pair⇩R(1): Presented, full_name='sym_pair\\<^sub>R(1)', 1 theorem(s), packed='sym_pair\\<^sub>R(1)'
+- sym_pair⇩R(9): Unfound
+- empty_coll⇩R: Presented, full_name='empty_coll\\<^sub>R', 0 theorem(s), packed='empty_coll\\<^sub>R'
+- no_such_φ_fact: Unfound
+--------------------------------------------------
+What the model is told about the ones that did not arrive
+--------------------------------------------------
+Fact "sym_pair⇩R(9)" skipped: Theorem index 9 out of range for sym_pair⇩R (has 2 theorems here).
+Fact "no_such_φ_fact" not found, skipped.
+kept: 3 of 5
+--------------------------------------------------
+The name as it reaches the operation
+--------------------------------------------------
+HAMMER(([('the_\\<phi>', None, None), ('sym_pair\\<^sub>R(1)', None, None), ('empty_coll\\<^sub>R', None, None)], 20, None))

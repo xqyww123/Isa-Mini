@@ -13,7 +13,7 @@ Unfinished Proof! Call command `edit` with action `fill` and target step `1` to 
 --------------------------------------------------
 Interaction Prompt
 --------------------------------------------------
-Rule 'my_looping[xwhere ?x = \<open>a::nat\<close>]' (f a = g (f a)) would cause infinite rewriting.
+Rule 'my_looping[where ?x = ‹a::nat›]' (f a = g (f a)) would cause infinite rewriting.
 To use this rule safely, select which specific subterm to rewrite:
   0. f a
 Call `answer_indexes` with the `indexes` of the subterm to rewrite, or with empty `indexes` to drop this rule.
