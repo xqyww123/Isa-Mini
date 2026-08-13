@@ -398,10 +398,16 @@ class IsabelleFact_ProveInTime(IsabelleFact):
         return (self.assigned_name, self.statement.ascii, self.cached_proof)
 
 class IsabelleFact_Unfound(IsabelleFact):
-    """A fact that could not be found in the Isabelle context."""
-    __slots__ = ('fact',)
-    def __init__(self, fact: Fact):
+    """A fact that could not be found in the Isabelle context.
+
+    `diagnostic` is the middle of a sentence produced by Isabelle explaining WHY
+    (currently only "the index is past the end"), already decoded to the Unicode
+    display form. None means there is nothing to say beyond "not found"; the
+    prefix and the full stop are added by `_filter_unfound`."""
+    __slots__ = ('fact', 'diagnostic')
+    def __init__(self, fact: Fact, diagnostic: 'str | None' = None):
         self.fact = fact
+        self.diagnostic = diagnostic
     def name(self) -> 'short_name | term':
         match fact_kind(self.fact):
             case "name": return IsaTerm.from_agent(cast(FactByName, self.fact)["name"] + _fact_suffix(self.fact))
@@ -2020,16 +2026,19 @@ class Minilang_State:
         # Batch resolve all FactByName
         if name_queries:
             entities = [(EntityKind.THEOREM, name) for name in name_queries]
-            results = await self._retrieve_entity(entities)
-            for idx, (query_name, result) in zip(name_indices,
+            results = await self._retrieve_entity_with_diagnostics(entities)
+            for idx, (query_name, (result, diag)) in zip(name_indices,
                                                   zip(name_queries, results)):
                 fact = facts[idx]
+                # full_name must hold the same string we sent to Isabelle: pack()
+                # feeds it straight back to the Isabelle parser.
+                q = ascii_of_unicode(query_name)
                 if result is None:
-                    out[idx] = IsabelleFact_Unfound(fact)
+                    out[idx] = IsabelleFact_Unfound(fact, diag)
                 else:
                     short_name, exprs, roles, _, is_local = result
                     out[idx] = IsabelleFact_Presented(
-                        full_name=query_name, short_name=short_name,
+                        full_name=q, short_name=short_name,
                         fact=fact, expression=exprs, roles=roles,
                         is_local=is_local)
         return out
@@ -2055,11 +2064,12 @@ class Minilang_State:
             original_facts.append(f.fact)
         if not queries:
             return out
-        results = await self._retrieve_entity(queries)
-        for idx, (kind, query_name), result, original_fact in zip(
+        results = await self._retrieve_entity_with_diagnostics(queries)
+        for idx, (kind, query_name), (result, diag), original_fact in zip(
                 query_indices, queries, results, original_facts):
+            q = ascii_of_unicode(query_name)   # full_name is always ASCII notation
             if result is None:
-                out[idx] = IsabelleFact_Unfound(original_fact)
+                out[idx] = IsabelleFact_Unfound(original_fact, diag)
             else:
                 short_name, exprs, roles, _, is_local = result
                 # Preserve is_conditional across refresh: _retrieve_entity does not
@@ -2068,7 +2078,7 @@ class Minilang_State:
                 prev_cond = (in_fact.is_conditional
                              if isinstance(in_fact, IsabelleFact_Presented) else False)
                 out[idx] = IsabelleFact_Presented(
-                    full_name=query_name, short_name=short_name,
+                    full_name=q, short_name=short_name,
                     fact=original_fact, expression=exprs,
                     kind=kind, roles=roles, is_local=is_local,
                     is_conditional=prev_cond)
@@ -2341,6 +2351,29 @@ class Minilang_State:
         """
         result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
         return result
+    async def _retrieve_entity_with_diagnostics(self, entities: list[tuple[EntityKind, str]]
+        ) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
+        """Retrieve entity info by kind and name (short or full), with a per-entity
+        diagnostic sentence (None when there is nothing to say beyond "not found").
+        Returns list of (info, diagnostic); see `_retrieve_entity` for the info tuple.
+
+        Names are converted to Isabelle's ASCII notation HERE — this is the one and
+        only conversion point for retrieval by name, and everything that resolves a
+        name against Isabelle goes through it. `ascii_of_unicode` is idempotent, so
+        callers already holding an ASCII name are unaffected."""
+        args = [(int(kind), ascii_of_unicode(name)) for kind, name in entities]
+        results = await self.connection.callback(
+            "IsaMini.retrieve_entity", (self.name, args))
+        out = []
+        for info, diag in results:
+            parsed = ((IsaTerm.from_isabelle(info[0]),
+                       [IsaTerm.from_isabelle(e) for e in info[1]],
+                       list(info[2]), list(info[3]), bool(info[4]))
+                      if info is not None else None)
+            # The diagnostic is an ordinary return value, not an IsabelleError, so
+            # nothing else would decode it.
+            out.append((parsed, pretty_unicode(diag) if diag is not None else None))
+        return out
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
         ) -> list[tuple[short_name, list[term], list[str], list[full_name], bool] | None]:
         """Retrieve entity info by kind and name (short or full).
@@ -2350,12 +2383,7 @@ class Minilang_State:
         abbreviation_names: full names of abbreviation constants involved in the entity.
         is_local: True iff the entity is a theorem visible only in the current proof context
                   (not in the global theory namespace); always False for non-theorem kinds."""
-        args = [(int(kind), name) for kind, name in entities]
-        results = await self.connection.callback(
-            "IsaMini.retrieve_entity", (self.name, args))
-        return [(IsaTerm.from_isabelle(r[0]), [IsaTerm.from_isabelle(e) for e in r[1]], list(r[2]),
-                 list(r[3]), bool(r[4]))
-                if r is not None else None for r in results]
+        return [r[0] for r in await self._retrieve_entity_with_diagnostics(entities)]
     def _make_retrieved_entity(
         self, kind: EntityKind, full_name: str,
         info: 'tuple[short_name, list[term], list[str], list[full_name], bool] | None',
@@ -2402,7 +2430,9 @@ class Minilang_State:
         if not names:
             return []
         infos = await self._retrieve_entity([(kind, n) for n in names])
-        return [self._make_retrieved_entity(kind, n, info, 1.0, None)
+        # full_name is always ASCII notation (ascii_of_unicode is idempotent, so a
+        # name that already came from Isabelle passes through untouched).
+        return [self._make_retrieved_entity(kind, ascii_of_unicode(n), info, 1.0, None)
                 if info is not None else None
                 for n, info in zip(names, infos)]
     async def check_term(self, term_str: xterm) -> tuple[typ, Vars, Vars]:
@@ -3507,7 +3537,9 @@ async def _try_resolve_as_named_fact(
         # implication, rendered as Pure ⟹ (U+27F9) or object ⟶ (U+27F6).
         is_conditional = any(('⟹' in e.unicode) or ('⟶' in e.unicode) for e in exprs)
         return IsabelleFact_Presented(
-            full_name=name, short_name=short_name,
+            # full_name is always ASCII notation; `fact["name"]` stays the model's
+            # own answer string, which is already the Unicode display form.
+            full_name=ascii_of_unicode(name), short_name=short_name,
             fact=FactByName(name=name),
             expression=exprs, roles=roles, abbreviation_names=abbrev,
             is_local=is_local, is_conditional=is_conditional)
@@ -7772,7 +7804,12 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
     warnings: list[str] = []
     for f in facts:
         if isinstance(f, IsabelleFact_Unfound):
-            warnings.append(f"Fact \"{f.name().unicode}\" not found, skipped.")
+            # Isabelle only supplies the middle of the sentence; the prefix and
+            # the full stop are added here.
+            if f.diagnostic:
+                warnings.append(f"Fact \"{f.name().unicode}\" skipped: {f.diagnostic}.")
+            else:
+                warnings.append(f"Fact \"{f.name().unicode}\" not found, skipped.")
         else:
             kept.append(f)
     return kept, warnings

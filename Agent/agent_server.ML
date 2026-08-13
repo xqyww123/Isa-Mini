@@ -891,7 +891,10 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
         name = "IsaMini.retrieve_entity",
         arg_schema = unpackPair (unpackString,
           unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-        ret_schema = packList (packOption (packTuple5 (packString, packList packString, packList packString, packList packString, packBool))),
+        ret_schema = packList (packPair
+            (packOption (packTuple5 (packString, packList packString,
+                                     packList packString, packList packString, packBool)),
+             packOption packString)),
         function = (fn (state_id, entities) =>
           let val s0 = get_state state_id
               val ctxt = Minilang.context_of s0
@@ -912,35 +915,45 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
               val type_space = Proof_Context.type_space ctxt
               val class_space = Proof_Context.class_space ctxt
               val locale_space = Locale.locale_space thy
-              fun select_thms thms idx_opt = case idx_opt of
-                    NONE => thms
-                  | SOME i => if i >= 1 andalso i <= length thms
-                              then [nth thms (i - 1)]
-                              else []
+              (* Returns (entity, diagnostic).  The three ways a theorem
+               * reference can fail to yield an entity are kept apart: an
+               * unknown name gets no diagnostic (Python words it), an
+               * out-of-range index gets one, and a name bound to zero
+               * theorems is a legitimate empty answer, not a failure.
+               * Branch on the index FIRST — `null thms` cannot tell an empty
+               * collection apart from an out-of-range index into one. *)
               fun retrieve_thm name =
                 let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
                     val full_name = Facts.intern facts base_name
                 in case Facts.lookup (Context.Proof ctxt) facts full_name of
-                     SOME {thms, ...} =>
-                       let val thms' = map (Thm.transfer thy) (select_thms thms idx_opt)
-                           val base_extern = Facts.extern ctxt facts full_name
-                           val short_name = case idx_opt of
-                                 SOME i => Thm_Name.print (base_extern, i)
-                               | NONE => base_extern
-                           val abbrevs = distinct (op =) (maps
-                                (abbreviations_in_term ctxt consts
-                                  o Thm.prop_of) thms')
-                           val is_local =
-                              not (is_some (Facts.lookup (Context.Theory thy)
-                                              global_facts full_name))
-                       in if null thms' then NONE
-                          else SOME (short_name,
-                                     map (SOT o Thm.prop_of) thms',
-                                     thm_roles thms',
-                                     abbrevs,
-                                     is_local)
-                       end
-                   | NONE => NONE
+                     NONE => (NONE, NONE)
+                   | SOME {thms, ...} =>
+                     let
+                       val base_extern = Facts.extern ctxt facts full_name
+                       fun found sel short_name =
+                         let val thms' = map (Thm.transfer thy) sel
+                             val abbrevs = distinct (op =) (maps
+                                  (abbreviations_in_term ctxt consts
+                                    o Thm.prop_of) thms')
+                             val is_local =
+                                not (is_some (Facts.lookup (Context.Theory thy)
+                                                global_facts full_name))
+                          in (SOME (short_name,
+                                    map (SOT o Thm.prop_of) thms',
+                                    thm_roles thms',
+                                    abbrevs,
+                                    is_local),
+                              NONE)
+                         end
+                      in case idx_opt of
+                           NONE => found thms base_extern
+                         | SOME i =>
+                             if i >= 1 andalso i <= length thms
+                             then found [nth thms (i - 1)]
+                                        (Thm_Name.print (base_extern, i))
+                             else (NONE, SOME (Universal_Key.out_of_range_msg
+                                                 base_extern i (length thms) " here"))
+                     end
                 end
               fun retrieve (Universal_Key.TheoremK, name) = retrieve_thm name
                 | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
@@ -954,22 +967,22 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                           val T = Consts.the_constraint consts cname
                           val abbrevs = if is_some (try (Consts.the_abbreviation consts) cname)
                                         then [cname] else []
-                      in SOME (short, [SOTy T], [], abbrevs, false) end
+                      in (SOME (short, [SOTy T], [], abbrevs, false), NONE) end
                     else
                       (case Variable.lookup_fixed ctxt name of
                         SOME fq_name =>
-                          SOME (Variable.revert_fixed ctxt fq_name,
+                          (SOME (Variable.revert_fixed ctxt fq_name,
                             (case Variable.default_type ctxt fq_name of
                                SOME T => [SOTy T]
                              | NONE => []),
-                            [], [], true)
-                      | NONE => NONE)
+                            [], [], true), NONE)
+                      | NONE => (NONE, NONE))
                 | retrieve (Universal_Key.TypeK, name) =
-                    SOME (Name_Space.extern ctxt type_space name, [], [], [], false)
+                    (SOME (Name_Space.extern ctxt type_space name, [], [], [], false), NONE)
                 | retrieve (Universal_Key.ClassK, name) =
-                    SOME (Name_Space.extern ctxt class_space name, [], [], [], false)
+                    (SOME (Name_Space.extern ctxt class_space name, [], [], [], false), NONE)
                 | retrieve (Universal_Key.LocaleK, name) =
-                    SOME (Name_Space.extern ctxt locale_space name, [], [], [], false)
+                    (SOME (Name_Space.extern ctxt locale_space name, [], [], [], false), NONE)
                 | retrieve (Universal_Key.Theorem_CollectionK, name) =
                     (* Collection entity: render name + up to 3 member props, with a
                        "... (N more)" sentinel when there are more.  dynamic_fact_members
@@ -977,16 +990,16 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                        drops this entity from the result. *)
                     let val full = Facts.intern facts name
                     in case Context_Callbacks.dynamic_fact_members (Context.Proof ctxt) facts full of
-                         NONE => NONE
+                         NONE => (NONE, NONE)
                        | SOME members =>
                            let val n = length members
                                val shown = map (SOT o Thm.prop_of) (take 3 members)
                                val props = if n > 3
                                            then shown @ ["... (" ^ string_of_int (n - 3) ^ " more)"]
                                            else shown
-                           in SOME (Facts.extern ctxt facts full, props, [], [], false) end
+                           in (SOME (Facts.extern ctxt facts full, props, [], [], false), NONE) end
                     end
-          in map (fn e => the_default NONE (try retrieve e)) entities end),
+          in map (fn e => the_default (NONE, NONE) (try retrieve e)) entities end),
         timeout = NONE
       }
 
