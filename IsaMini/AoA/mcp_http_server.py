@@ -2241,7 +2241,11 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     ``runtime.created_memories`` is a fresh create that never scans for, nor touches,
     a pre-existing memory from a prior run. The universal key is content-addressed
     (theory-constituent prefix + xxhash of name/patterns/description/experience), so
-    an identical re-write is absorbed idempotently."""
+    an identical re-write is absorbed idempotently -- PROVIDED both writes computed
+    the key the same way. The prefix depends on how Universal_Key resolves the
+    patterns' constituent theories, so across a change to that computation (e.g. the
+    2026-08 short-name fix) a byte-identical re-write lands on a different key, and
+    only the cosine dedup below stands between that and a duplicated record."""
     import xxhash
     from Isabelle_RPC_Host.universal_key import xor_theory_prefix, EntityKind
     from Isabelle_Semantic_Embedding.semantics import Semantic_DB, SemanticRecord
