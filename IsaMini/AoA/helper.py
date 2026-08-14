@@ -62,8 +62,13 @@ def split_id_into_segs(id: str) -> list[int]:
             while i < n and id[i].isalpha():
                 i += 1
             segs.append(alpha_to_num(id[start:i]))
-        elif id[i].isdigit():
-            while i < n and id[i].isdigit():
+        elif id[i].isdecimal():
+            # isdecimal, NOT isdigit: the guard must accept exactly what int()
+            # parses. isdigit also admits sub/superscripts and circled digits
+            # (e.g. '₁' from a decoded case name like app₁), on which int()
+            # raises; isdecimal rejects them, so they fall through to the
+            # separate-segment branch below like any other symbol.
+            while i < n and id[i].isdecimal():
                 i += 1
             segs.append(int(id[start:i]))
         else:

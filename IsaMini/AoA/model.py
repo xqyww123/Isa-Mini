@@ -9108,7 +9108,9 @@ class Interaction_SelectIHFacts(Interaction):
     async def prompt(self, indent: int, file: MyIO) -> None:
         if not self.candidates:
             raise ImmediateAnswer([])
-        vars_str = string_of_and_list(self.relevant_vars)
+        # `relevant_vars` comes from IsaMini.analyze_induct (Variable.revert_fixed
+        # names, ASCII notation); decode for display. Never sent back to Isabelle.
+        vars_str = string_of_and_list([pretty_unicode(v) for v in self.relevant_vars])
         print_indent(indent, file)
         file.write(
             f"These in-scope facts mention {vars_str}. Select the ones you will "
@@ -11207,8 +11209,11 @@ class Induction(CaseSplit_Like):
         # The NAME is decoded here and nowhere else: `answer` echoes back the very
         # string that was displayed, so decoding once keeps the prompt, the
         # answer, the `_already` comparison and what gets stored all in one form.
-        offered = [(pretty_unicode(n), IsaTerm.from_isabelle(p))
-                   for (n, p) in candidates if not _already(n)]
+        # The filter must see the decoded name too — `supplied_exact` holds the
+        # model's own (display-form) spellings.
+        offered = [(dn, IsaTerm.from_isabelle(p))
+                   for (n, p) in candidates
+                   if not _already(dn := pretty_unicode(n))]
         if not offered:
             return
         chosen = await the_session().launch_interaction(

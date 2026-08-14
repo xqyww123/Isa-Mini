@@ -18473,6 +18473,7 @@ async def _test_SymbolicFactName(root: Root, file: MyIO):
         FactByName(name="sym_pair⇩R(1)"),
         FactByName(name="sym_pair⇩R(9)"),
         FactByName(name="empty_coll⇩R"),
+        FactByName(name="empty_coll⇩R(1)"),
         FactByName(name="no_such_φ_fact"),
     ]))
     for f in facts:
@@ -18504,6 +18505,11 @@ async def _test_SymbolicFactName(root: Root, file: MyIO):
         "an empty collection must resolve, with zero theorems"
     assert any("out of range" in w for w in warnings), \
         f"expected an out-of-range diagnostic among {warnings}"
+    # The empty-collection-with-index case: same else-arm as the out-of-range
+    # one, rendered with the user-ruled "(has 0 theorems here)" tail. This was
+    # the row of the four-way table the plan's first draft got fatally wrong.
+    assert any("(has 0 theorems here)" in w for w in warnings), \
+        f"expected the zero-theorems out-of-range rendering among {warnings}"
     assert any(w.endswith('"no_such_φ_fact" not found, skipped.') for w in warnings), \
         f"expected a plain not-found for the absent name among {warnings}"
 
