@@ -1,7 +1,7 @@
 #!/bin/env python
 
 USAGE = """
-statistics.py <PATH TO THE DATABASE>
+translation_statistics.py <PATH TO THE DATABASE>
 """
 
 from sqlitedict import SqliteDict
