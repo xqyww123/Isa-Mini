@@ -17,7 +17,9 @@ from Isabelle_RPC_Host.universal_key import (
     EntityKind, THM_RULE_KINDS, universal_key, universal_key_of, universal_key_and_name_of,
     key_of_theorems, UndefinedEntity,
 )
-from Isabelle_Semantic_Embedding.semantics import Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base
+from Isabelle_Semantic_Embedding.semantics import (
+    Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base,
+    apply_live_name, apply_live_name_if_member)
 
 # Max number of members shown when an exact_name lookup hits a multi-theorem
 # fact (a bundle); any beyond this are summarised with a "use foo(k)…" note.
@@ -2197,10 +2199,20 @@ class Minilang_State:
                     bundle_N = n_total
                     for uk, ref_name in members:
                         rec = Semantic_DB[uk]
-                        rec = (rec._replace(name=ref_name, kind=tag) if rec is not None
-                               else SemanticRecord(tag, ref_name, None, None))
+                        if rec is not None:
+                            # The name substitution is CONDITIONAL
+                            # (DYNAMIC_MEMBER_NAMING_PLAN.md §2.1's table):
+                            # ref_name is manufactured coll(i), and the
+                            # condition is what protects the records that
+                            # already carry real names.  The kind retag to the
+                            # requested face stays unconditional, as before.
+                            rec = apply_live_name_if_member(rec, ref_name)._replace(kind=tag)
+                        else:
+                            rec = SemanticRecord(tag, ref_name, None, None)
                         if n_total > 1:
-                            bundle_member_names.add(ref_name)
+                            # the CHOSEN name, not ref_name, so the
+                            # suppress_def match still works on what is shown
+                            bundle_member_names.add(rec.name)
                         scored_recs.append((1.0, rec, None))
                     continue
                 try:
@@ -2318,7 +2330,12 @@ class Minilang_State:
                 for uk, name, _ in entries[:k]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
-                        scored_recs.append((_pat_score(uk), rec, None))
+                        # UNCONDITIONAL (§2.1's table): `name` is the live,
+                        # context-resolved name from this query's own
+                        # enumeration -- same population and provenance as
+                        # _resolve, whose substitution line this hand-copied
+                        # loop had dropped; the fallback below already used it.
+                        scored_recs.append((_pat_score(uk), apply_live_name(rec, name), None))
                     else:
                         scored_recs.append((_pat_score(uk), SemanticRecord(EntityKind(uk[16]), name, None, None), None))
                 # No query vector here, so experiences can't be cosine-ranked, but

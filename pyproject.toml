@@ -46,7 +46,9 @@ classifiers = [
 dependencies = [
     "msgpack>=1.1.2",
     "isabelle-rpc>=0.4.0",
-    "Isabelle_Semantic_Embedding>=0.1.0",
+    # >=0.5.0: the first version shipping Record.from_collection, which
+    # apply_live_name_if_member reads (DYNAMIC_MEMBER_NAMING_PLAN.md §4)
+    "Isabelle_Semantic_Embedding>=0.5.0",
     "rich",  # main.py, module level
     "PyYAML>=6.0.3",
     "platformdirs>=4.9.4",

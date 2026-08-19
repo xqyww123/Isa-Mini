@@ -19,12 +19,14 @@ import jsoncomment
 
 from Isabelle_RPC_Host import pretty_unicode
 from Isabelle_RPC_Host.position import IsabellePosition
-from Isabelle_RPC_Host.universal_key import universal_key, universal_key_of, UndefinedEntity
+from Isabelle_RPC_Host.universal_key import (
+    universal_key, universal_key_of, universal_key_and_name_of, UndefinedEntity)
 from Isabelle_Semantic_Embedding.semantics import (
     trunc_expr as _trunc_expr_base,
     trunc_expr,
     _get_definition_with_pos,
     Semantic_DB,
+    apply_live_name_if_member,
 )
 
 from .model import (
@@ -914,14 +916,20 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
     """Core query logic: resolve name, look up semantic record, format.
     Returns (formatted_text, is_error, uk_or_None). Needs only a connection, no Session.
     uk is returned for callers that need to fetch definition sources."""
+    # The two-value form in BOTH branches: the qualified live name was being
+    # computed and thrown away here (DYNAMIC_MEMBER_NAMING_PLAN.md §2.1's
+    # second site).  It is applied through apply_live_name_if_member below --
+    # never a blind substitution: rec.name is fully qualified while the
+    # caller's may not be, and an index-free live name (a single-member
+    # collection resolved from the bare `C`) must keep the stored name.
     try:
-        uk = await universal_key_of(connection, tag, name, ctxt=ctxt)
+        uk, live_name = await universal_key_and_name_of(connection, tag, name, ctxt=ctxt)
         prefix = ""
     except UndefinedEntity:
         if "." in name:
             short = name.rsplit(".", 1)[1]
             try:
-                uk = await universal_key_of(connection, tag, short, ctxt=ctxt)
+                uk, live_name = await universal_key_and_name_of(connection, tag, short, ctxt=ctxt)
                 prefix = f"The {name} is undefined, but we find:\n"
             except Exception:
                 return (f'Undefined: "{name}". Try query.', True, None)
@@ -931,6 +939,8 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
         return (str(e), True, None)
 
     rec = Semantic_DB[uk]
+    if rec is not None:
+        rec = apply_live_name_if_member(rec, live_name)
     buf = StringIO()
     buf.write(prefix)
     _format_record(buf,
