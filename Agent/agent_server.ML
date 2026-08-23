@@ -679,6 +679,189 @@ fun restore_concl orig th =
    Synchronous: returns the four by-products (xcmds, cost, replay time, proof
    text) beside the theorem.  run_AoA feeds it to async_prove, which is where
    futures come into existence. *)
+(*** IsaMini.retrieve_entity — renders entities against a caller-chosen context.
+     Lifted out of raw_AoA (2026-08-23) so the query_by_name RPC can install it
+     too; the context arrives through a context_unpacker, the standard idiom of
+     Isabelle_RPC/Tools/context.ML.  A bare-string ctxt slot still decodes as
+     SOME via unpackOption, so the AoA search path's wire format is unchanged. ***)
+
+local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
+
+fun abbreviations_in_term ctxt consts term =
+  let val contracted = singleton (Syntax.uncheck_terms ctxt) term
+  in Term.fold_aterms (fn Const (name, _) =>
+        (fn acc =>
+          if is_some (try (Consts.the_abbreviation consts) name)
+          then insert (op =) name acc
+          else acc)
+      | _ => I) contracted []
+  end
+
+(* Builds the system-rule membership tables for ctxt and returns the role
+   classifier over them.  raw_AoA calls this once per run (its init-time
+   context); the query_by_name RPC builds it per call. *)
+fun make_thm_roles ctxt =
+  let
+    (* All three rule sets use iNet keyed by proposition + aconv post-filter.
+       Name-based matching is unreliable: the simpset stores rrule names from
+       add-time (via Thm.get_name_hint), which can differ from the fact-table
+       name after Global_Theory.name_thms unofficial2 renaming; classical_rule
+       derivation strips hints for intro/elim.  For simp, the rrule propositions
+       are meta-equalities produced by mksimps — at query time we apply mksimps
+       to the queried theorems before matching. *)
+    val simp_rule_net : term iNet.net =
+      fold (fn (_, thm) =>
+        let val p = Thm.prop_of thm
+        in iNet.insert_term_safe (op aconv) (p, p) end)
+        (#simps (Raw_Simplifier.dest_ss (simpset_of ctxt))) iNet.empty
+    val (intro_rule_net : term iNet.net, elim_rule_net : term iNet.net) =
+      let (* Declared (original) forms.  Unlike the 2024 nets, dest rules are
+             NOT make_elim'd here, so a queried dest theorem now matches the
+             elim net and gets the "elim" role (2024 silently never matched
+             dest rules because the stored form was the hint-stripped
+             make_elim derivative). *)
+          fun rules is_elim =
+            map #1 (Classical.dest_decls ctxt (fn (_, {kind, ...}) =>
+                Bires.kind_is_elim kind = is_elim andalso not (Bires.kind_extra kind)))
+          fun build_net thms =
+            fold (fn thm =>
+              let val p = Thm.prop_of thm
+              in iNet.insert_term_safe (op aconv) (p, p) end) thms iNet.empty
+      in (build_net (rules false), build_net (rules true))
+      end
+    fun in_rule_net net prop =
+      exists (fn stored => prop aconv stored) (iNet.match_term net prop)
+  in
+    fn thms =>
+      let val props = map Thm.prop_of thms
+          val simp_props = maps (fn thm =>
+                the_default [] (try (map Thm.prop_of o Raw_Simplifier.mksimps ctxt) thm)) thms
+      in (if exists (in_rule_net simp_rule_net) simp_props then ["simp"] else []) @
+         (if exists (in_rule_net intro_rule_net) props then ["intro"] else []) @
+         (if exists (in_rule_net elim_rule_net) props then ["elim"] else [])
+      end
+  end
+
+fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpacker)
+    (thm_roles : thm list -> string list) : Remote_Procedure_Calling.callback' =
+  Remote_Procedure_Calling.mk_callback {
+  name = "IsaMini.retrieve_entity",
+  arg_schema = unpackPair (ctxt_unpack,
+    unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
+  ret_schema = packList (packPair
+      (packOption (packTuple5 (packString, packList packString,
+                               packList packString, packList packString, packBool)),
+       packOption packString)),
+  function = (fn (gctx, entities) =>
+    let val ctxt = Context.cases Proof_Context.init_global I gctx
+        val thy = Proof_Context.theory_of ctxt
+        val SOT = MiniLang_Agent.string_of_term ctxt
+        val SOTy = MiniLang_Agent.string_of_type ctxt
+        val facts = Proof_Context.facts_of ctxt
+        (* `global_facts` enumerates only facts visible at the
+         * theory level; a `full_name` that does NOT resolve here
+         * must have come from the local proof context (assms, IH,
+         * named `have`, locale-internal fixes). Used to classify
+         * theorem-kind retrievals as local vs global — the
+         * `facts_to_generalize` field on the Induction tool
+         * filters out globals. *)
+        val global_facts = Global_Theory.facts_of thy
+        val const_space = Proof_Context.const_space ctxt
+        val consts = Proof_Context.consts_of ctxt
+        val type_space = Proof_Context.type_space ctxt
+        val class_space = Proof_Context.class_space ctxt
+        val locale_space = Locale.locale_space thy
+        (* Returns (entity, diagnostic).  The three ways a theorem
+         * reference can fail to yield an entity are kept apart: an
+         * unknown name gets no diagnostic (Python words it), an
+         * out-of-range index gets one, and a name bound to zero
+         * theorems is a legitimate empty answer, not a failure.
+         * Branch on the index FIRST — `null thms` cannot tell an empty
+         * collection apart from an out-of-range index into one. *)
+        fun retrieve_thm name =
+          let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
+              val full_name = Facts.intern facts base_name
+          in case Facts.lookup (Context.Proof ctxt) facts full_name of
+               NONE => (NONE, NONE)
+             | SOME {thms, ...} =>
+               let
+                 val base_extern = Facts.extern ctxt facts full_name
+                 fun found sel short_name =
+                   let val thms' = map (Thm.transfer thy) sel
+                       val abbrevs = distinct (op =) (maps
+                            (abbreviations_in_term ctxt consts
+                              o Thm.prop_of) thms')
+                       val is_local =
+                          not (is_some (Facts.lookup (Context.Theory thy)
+                                          global_facts full_name))
+                    in (SOME (short_name,
+                              map (SOT o Thm.prop_of) thms',
+                              thm_roles thms',
+                              abbrevs,
+                              is_local),
+                        NONE)
+                   end
+                in case idx_opt of
+                     NONE => found thms base_extern
+                   | SOME i =>
+                       if i >= 1 andalso i <= length thms
+                       then found [nth thms (i - 1)]
+                                  (Thm_Name.print (base_extern, i))
+                       else (NONE, SOME (Universal_Key.out_of_range_msg
+                                           base_extern i (length thms) " here"))
+               end
+          end
+        fun retrieve (Universal_Key.TheoremK, name) = retrieve_thm name
+          | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
+          | retrieve (Universal_Key.EliminationRuleK, name) = retrieve_thm name
+          | retrieve (Universal_Key.InductionRuleK, name) = retrieve_thm name
+          | retrieve (Universal_Key.CaseSplitRuleK, name) = retrieve_thm name
+          | retrieve (Universal_Key.ConstantK, name) =
+              if Name_Space.declared const_space (Consts.intern consts name) then
+                let val cname = Consts.intern consts name
+                    val short = Name_Space.extern ctxt const_space cname
+                    val T = Consts.the_constraint consts cname
+                    val abbrevs = if is_some (try (Consts.the_abbreviation consts) cname)
+                                  then [cname] else []
+                in (SOME (short, [SOTy T], [], abbrevs, false), NONE) end
+              else
+                (case Variable.lookup_fixed ctxt name of
+                  SOME fq_name =>
+                    (SOME (Variable.revert_fixed ctxt fq_name,
+                      (case Variable.default_type ctxt fq_name of
+                         SOME T => [SOTy T]
+                       | NONE => []),
+                      [], [], true), NONE)
+                | NONE => (NONE, NONE))
+          | retrieve (Universal_Key.TypeK, name) =
+              (SOME (Name_Space.extern ctxt type_space name, [], [], [], false), NONE)
+          | retrieve (Universal_Key.ClassK, name) =
+              (SOME (Name_Space.extern ctxt class_space name, [], [], [], false), NONE)
+          | retrieve (Universal_Key.LocaleK, name) =
+              (SOME (Name_Space.extern ctxt locale_space name, [], [], [], false), NONE)
+          | retrieve (Universal_Key.Theorem_CollectionK, name) =
+              (* Collection entity: render name + up to 3 member props, with a
+                 "... (N more)" sentinel when there are more.  dynamic_fact_members
+                 returns NONE for a stale/non-collection (non-dynamic) name, which
+                 drops this entity from the result. *)
+              let val full = Facts.intern facts name
+              in case Context_Callbacks.dynamic_fact_members (Context.Proof ctxt) facts full of
+                   NONE => (NONE, NONE)
+                 | SOME members =>
+                     let val n = length members
+                         val shown = map (SOT o Thm.prop_of) (take 3 members)
+                         val props = if n > 3
+                                     then shown @ ["... (" ^ string_of_int (n - 3) ^ " more)"]
+                                     else shown
+                     in (SOME (Facts.extern ctxt facts full, props, [], [], false), NONE) end
+              end
+    in map (fn e => the_default (NONE, NONE) (try retrieve e)) entities end),
+  timeout = NONE
+}
+
+end (*local*)
+
+
 fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       (* THE GATE — first cell of the body (12.18).  Test drivers pass: no LM
@@ -838,170 +1021,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
          local additions made during the proof (e.g. local simp adds, using-facts).
          TODO: to track proof-local rule changes, the tables would need to be
          rebuilt per proof state from Minilang.context_of. *)
-
-      (* All three rule sets use iNet keyed by proposition + aconv post-filter.
-         Name-based matching is unreliable: the simpset stores rrule names from
-         add-time (via Thm.get_name_hint), which can differ from the fact-table
-         name after Global_Theory.name_thms unofficial2 renaming; classical_rule
-         derivation strips hints for intro/elim.  For simp, the rrule propositions
-         are meta-equalities produced by mksimps — at query time we apply mksimps
-         to the queried theorems before matching. *)
-      val simp_rule_net : term iNet.net =
-        fold (fn (_, thm) =>
-          let val p = Thm.prop_of thm
-          in iNet.insert_term_safe (op aconv) (p, p) end)
-          (#simps (Raw_Simplifier.dest_ss (simpset_of ctxt))) iNet.empty
-      val (intro_rule_net : term iNet.net, elim_rule_net : term iNet.net) =
-        let (* Declared (original) forms.  Unlike the 2024 nets, dest rules are
-               NOT make_elim'd here, so a queried dest theorem now matches the
-               elim net and gets the "elim" role (2024 silently never matched
-               dest rules because the stored form was the hint-stripped
-               make_elim derivative). *)
-            fun rules is_elim =
-              map #1 (Classical.dest_decls ctxt (fn (_, {kind, ...}) =>
-                  Bires.kind_is_elim kind = is_elim andalso not (Bires.kind_extra kind)))
-            fun build_net thms =
-              fold (fn thm =>
-                let val p = Thm.prop_of thm
-                in iNet.insert_term_safe (op aconv) (p, p) end) thms iNet.empty
-        in (build_net (rules false), build_net (rules true))
-        end
-      fun in_rule_net net prop =
-        exists (fn stored => prop aconv stored) (iNet.match_term net prop)
-      fun thm_roles thms =
-        let val props = map Thm.prop_of thms
-            val simp_props = maps (fn thm =>
-                  the_default [] (try (map Thm.prop_of o Raw_Simplifier.mksimps ctxt) thm)) thms
-        in (if exists (in_rule_net simp_rule_net) simp_props then ["simp"] else []) @
-           (if exists (in_rule_net intro_rule_net) props then ["intro"] else []) @
-           (if exists (in_rule_net elim_rule_net) props then ["elim"] else [])
-        end
-
-      fun abbreviations_in_term ctxt consts term =
-        let val contracted = singleton (Syntax.uncheck_terms ctxt) term
-        in Term.fold_aterms (fn Const (name, _) =>
-              (fn acc =>
-                if is_some (try (Consts.the_abbreviation consts) name)
-                then insert (op =) name acc
-                else acc)
-            | _ => I) contracted []
-        end
-
-      val retrieve_entity_callback = {
-        name = "IsaMini.retrieve_entity",
-        arg_schema = unpackPair (unpackString,
-          unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-        ret_schema = packList (packPair
-            (packOption (packTuple5 (packString, packList packString,
-                                     packList packString, packList packString, packBool)),
-             packOption packString)),
-        function = (fn (state_id, entities) =>
-          let val s0 = get_state state_id
-              val ctxt = Minilang.context_of s0
-              val thy = Proof_Context.theory_of ctxt
-              val SOT = MiniLang_Agent.string_of_term ctxt
-              val SOTy = MiniLang_Agent.string_of_type ctxt
-              val facts = Proof_Context.facts_of ctxt
-              (* `global_facts` enumerates only facts visible at the
-               * theory level; a `full_name` that does NOT resolve here
-               * must have come from the local proof context (assms, IH,
-               * named `have`, locale-internal fixes). Used to classify
-               * theorem-kind retrievals as local vs global — the
-               * `facts_to_generalize` field on the Induction tool
-               * filters out globals. *)
-              val global_facts = Global_Theory.facts_of thy
-              val const_space = Proof_Context.const_space ctxt
-              val consts = Proof_Context.consts_of ctxt
-              val type_space = Proof_Context.type_space ctxt
-              val class_space = Proof_Context.class_space ctxt
-              val locale_space = Locale.locale_space thy
-              (* Returns (entity, diagnostic).  The three ways a theorem
-               * reference can fail to yield an entity are kept apart: an
-               * unknown name gets no diagnostic (Python words it), an
-               * out-of-range index gets one, and a name bound to zero
-               * theorems is a legitimate empty answer, not a failure.
-               * Branch on the index FIRST — `null thms` cannot tell an empty
-               * collection apart from an out-of-range index into one. *)
-              fun retrieve_thm name =
-                let val (base_name, idx_opt) = Theory_Structure.parse_thm_name name
-                    val full_name = Facts.intern facts base_name
-                in case Facts.lookup (Context.Proof ctxt) facts full_name of
-                     NONE => (NONE, NONE)
-                   | SOME {thms, ...} =>
-                     let
-                       val base_extern = Facts.extern ctxt facts full_name
-                       fun found sel short_name =
-                         let val thms' = map (Thm.transfer thy) sel
-                             val abbrevs = distinct (op =) (maps
-                                  (abbreviations_in_term ctxt consts
-                                    o Thm.prop_of) thms')
-                             val is_local =
-                                not (is_some (Facts.lookup (Context.Theory thy)
-                                                global_facts full_name))
-                          in (SOME (short_name,
-                                    map (SOT o Thm.prop_of) thms',
-                                    thm_roles thms',
-                                    abbrevs,
-                                    is_local),
-                              NONE)
-                         end
-                      in case idx_opt of
-                           NONE => found thms base_extern
-                         | SOME i =>
-                             if i >= 1 andalso i <= length thms
-                             then found [nth thms (i - 1)]
-                                        (Thm_Name.print (base_extern, i))
-                             else (NONE, SOME (Universal_Key.out_of_range_msg
-                                                 base_extern i (length thms) " here"))
-                     end
-                end
-              fun retrieve (Universal_Key.TheoremK, name) = retrieve_thm name
-                | retrieve (Universal_Key.IntroductionRuleK, name) = retrieve_thm name
-                | retrieve (Universal_Key.EliminationRuleK, name) = retrieve_thm name
-                | retrieve (Universal_Key.InductionRuleK, name) = retrieve_thm name
-                | retrieve (Universal_Key.CaseSplitRuleK, name) = retrieve_thm name
-                | retrieve (Universal_Key.ConstantK, name) =
-                    if Name_Space.declared const_space (Consts.intern consts name) then
-                      let val cname = Consts.intern consts name
-                          val short = Name_Space.extern ctxt const_space cname
-                          val T = Consts.the_constraint consts cname
-                          val abbrevs = if is_some (try (Consts.the_abbreviation consts) cname)
-                                        then [cname] else []
-                      in (SOME (short, [SOTy T], [], abbrevs, false), NONE) end
-                    else
-                      (case Variable.lookup_fixed ctxt name of
-                        SOME fq_name =>
-                          (SOME (Variable.revert_fixed ctxt fq_name,
-                            (case Variable.default_type ctxt fq_name of
-                               SOME T => [SOTy T]
-                             | NONE => []),
-                            [], [], true), NONE)
-                      | NONE => (NONE, NONE))
-                | retrieve (Universal_Key.TypeK, name) =
-                    (SOME (Name_Space.extern ctxt type_space name, [], [], [], false), NONE)
-                | retrieve (Universal_Key.ClassK, name) =
-                    (SOME (Name_Space.extern ctxt class_space name, [], [], [], false), NONE)
-                | retrieve (Universal_Key.LocaleK, name) =
-                    (SOME (Name_Space.extern ctxt locale_space name, [], [], [], false), NONE)
-                | retrieve (Universal_Key.Theorem_CollectionK, name) =
-                    (* Collection entity: render name + up to 3 member props, with a
-                       "... (N more)" sentinel when there are more.  dynamic_fact_members
-                       returns NONE for a stale/non-collection (non-dynamic) name, which
-                       drops this entity from the result. *)
-                    let val full = Facts.intern facts name
-                    in case Context_Callbacks.dynamic_fact_members (Context.Proof ctxt) facts full of
-                         NONE => (NONE, NONE)
-                       | SOME members =>
-                           let val n = length members
-                               val shown = map (SOT o Thm.prop_of) (take 3 members)
-                               val props = if n > 3
-                                           then shown @ ["... (" ^ string_of_int (n - 3) ^ " more)"]
-                                           else shown
-                           in (SOME (Facts.extern ctxt facts full, props, [], [], false), NONE) end
-                    end
-          in map (fn e => the_default (NONE, NONE) (try retrieve e)) entities end),
-        timeout = NONE
-      }
+      val thm_roles = make_thm_roles ctxt
 
       val compute_bindings_callback = {
         name = "IsaMini.compute_bindings",
@@ -1743,7 +1763,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
           mk_callback reset_state_callback,
           mk_callback set_replay_mode_callback,
           mk_callback lookup_fact_callback,
-          mk_callback retrieve_entity_callback,
+          make_retrieve_entity_callback au thm_roles,
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,
@@ -2142,7 +2162,9 @@ fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind,
       name = "IsaMini.query_by_name",
       arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
       ret_schema = unpackPair (unpackString, unpackBool),
-      callback = [Universal_Key.make_universal_key_callback su],
+      callback = [Universal_Key.make_universal_key_callback su,
+                  make_retrieve_entity_callback su
+                    (make_thm_roles (Context.cases Proof_Context.init_global I context))],
       timeout = NONE
     }
   in Remote_Procedure_Calling.call_command cmd (kind, name) end
