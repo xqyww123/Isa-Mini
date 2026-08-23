@@ -143,6 +143,22 @@ class LMDriver(Session):
             self.warn_AoA_opr("Cancelled (Isabelle interrupted)")
             raise
 
+    async def _quota_pause(self):
+        """The 20-minute quota wait, shared by every quota-retry branch.
+
+        Time spent waiting on quota is exempt from the wall-clock budget: the
+        shared budget start is moved forward by the actual wait (the same
+        self-exemption the missing-lemma survey in model.py uses). Do NOT
+        instead subtract ``total_quota_wait_time`` at the deadline check — that
+        counter is per-session, so sessions would compute diverging deadlines.
+        The 2-second transient backoff is noise-level and not compensated."""
+        t0 = time()
+        await asyncio.sleep(1200)
+        waited = time() - t0
+        self.total_quota_wait_time += waited
+        if self._budget_start_time is not None:
+            self._budget_start_time += waited
+
     async def _with_retry(self, fn: Callable[[], Awaitable]):
         """Retry *fn()* on quota exhaustion or transient API errors."""
         while True:
@@ -151,9 +167,7 @@ class LMDriver(Session):
             except _QuotaError as e:
                 self.warn_AoA_opr("Quota exhausted, waiting 20min to retry"
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
+                await self._quota_pause()
             except _TransientError as e:
                 self.warn_AoA_opr(f"Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)

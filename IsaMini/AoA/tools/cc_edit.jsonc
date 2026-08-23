@@ -124,7 +124,12 @@
       "type": "object"
     },
     "Obvious": {
-      "additionalProperties": false,
+      // true (unlike every other op): Obvious deliberately has no `thought`,
+      // but models habitually send one anyway (every other op takes it) and the
+      // MCP library's schema validation would reject the whole call before AoA
+      // sees it. Tolerate and silently ignore extras; Obvious has no optional
+      // fields, so this hides no misspelling.
+      "additionalProperties": true,
       "description": "the goal holds trivially. Caution: this operation barely unfolds definitions unless you supply them in `facts`.",
       "properties": {
         "operation": {

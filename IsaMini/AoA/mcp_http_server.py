@@ -2400,6 +2400,32 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
     return await _persist("Saved")
 
 
+def _find_lone_surrogate(obj, path: str = "") -> tuple[str, str] | None:
+    """(JSON path, string) of the first string containing a lone UTF-16
+    surrogate (code point in U+D800–U+DFFF), or None. A paired surrogate never
+    reaches a Python str — json.loads merges valid pairs into one non-BMP
+    character — so presence of any code point in that range is an exact
+    corruption criterion. Dict KEYS are scanned too, not just values."""
+    if isinstance(obj, str):
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in obj):
+            return (path or "$", obj)
+        return None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            hit = (_find_lone_surrogate(k, f"{path}.{k}(key)")
+                   or _find_lone_surrogate(v, f"{path}.{k}"))
+            if hit:
+                return hit
+        return None
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            hit = _find_lone_surrogate(v, f"{path}[{i}]")
+            if hit:
+                return hit
+        return None
+    return None
+
+
 class ToolExecutor:
     """Direct in-process tool dispatch. Used by both MCP server and APIDriver."""
 
@@ -2582,6 +2608,20 @@ class ToolExecutor:
         """
         session = self._session
         bind_session_context(session)
+
+        # Corruption gate, BEFORE any logging or bookkeeping: a lone UTF-16
+        # surrogate in tool input (a CLI streaming bug halves a non-BMP char)
+        # must never reach the proof tree — a corrupted Statement would poison
+        # proof.yaml on every later render. The content is semantically damaged,
+        # so we only reject, never repair. Recovery is not our job here: the
+        # poisoned CLI history 400s on the next request and the driver's
+        # _CorruptedHistoryError branch restarts the context.
+        if (hit := _find_lone_surrogate(arguments)) is not None:
+            corrupt_path, corrupt_value = hit
+            session._log_meta("CORRUPTED_TOOL_INPUT", tool=name,
+                              path=ascii(corrupt_path), value=ascii(corrupt_value))
+            return ("Input validation error: argument text contains an "
+                    "unpaired UTF-16 surrogate.", True)
 
         # Hard budget enforcement at per-tool-call granularity, BEFORE the
         # permission check (so even a would-be-denied call halts immediately).

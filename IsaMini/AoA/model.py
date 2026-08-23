@@ -1894,6 +1894,38 @@ class Minilang_Operation(NamedTuple):
 type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 
 
+async def retrieve_entities_with_diagnostics(
+    connection: 'Connection', ctxt: 'str | None',
+    entities: 'list[tuple[EntityKind, str]]',
+) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
+    """Retrieve entity info by kind and name (short or full), with a per-entity
+    diagnostic sentence (None when there is nothing to say beyond "not found").
+    Returns list of (info, diagnostic); see `Minilang_State._retrieve_entity`
+    for the info tuple.
+
+    ``ctxt`` is the context slot of the ML callback's arg_schema, a
+    context_unpacker: a Minilang state name on the AoA channel, or None where
+    the channel fixed the context at callback construction (the
+    ``IsaMini.query_by_name`` RPC).
+
+    Names are converted to Isabelle's ASCII notation HERE — this is the one and
+    only conversion point for retrieval by name, and everything that resolves a
+    name against Isabelle goes through it. `ascii_of_unicode` is idempotent, so
+    callers already holding an ASCII name are unaffected."""
+    args = [(int(kind), ascii_of_unicode(name)) for kind, name in entities]
+    results = await connection.callback("IsaMini.retrieve_entity", (ctxt, args))
+    out = []
+    for info, diag in results:
+        parsed = ((IsaTerm.from_isabelle(info[0]),
+                   [IsaTerm.from_isabelle(e) for e in info[1]],
+                   list(info[2]), list(info[3]), bool(info[4]))
+                  if info is not None else None)
+        # The diagnostic is an ordinary return value, not an IsabelleError, so
+        # nothing else would decode it.
+        out.append((parsed, pretty_unicode(diag) if diag is not None else None))
+    return out
+
+
 class Minilang_State:
     def __init__(self, connection: Connection, name: str):
         self.connection = connection
@@ -2158,6 +2190,16 @@ class Minilang_State:
         entities matching the filters (the full pool before the top-k cut)."""
         from Isabelle_Semantic_Embedding.semantics import Semantic_DB
 
+        # Fetch a few more than asked for, because the accessibility drop below
+        # runs AFTER ranking and would otherwise return short.  Proportional so
+        # the headroom scales with k (+1 at k=10, +2 at the default 15, +6 at the
+        # fixed 40 of the candidate-facts path); the `k + 1` floor exists because
+        # int(k * 1.15) gives zero headroom for k <= 6, and k=1 is exactly where
+        # losing one entry loses everything.  Measured hidden rate is 0.378% of
+        # fact names, so 15% over-fetch is a factor of forty of margin —
+        # QUERY_BY_NAME_LIVE_RENDER_PLAN.md.
+        k_fetch = max(k + 1, int(k * 1.15))
+
         # Exact name lookup — bypass all search criteria
         # scored_recs elements are (score, rec, override) in ALL branches below:
         # override is None except for abbreviation constants hit by exact_name,
@@ -2293,7 +2335,7 @@ class Minilang_State:
             # for all of them.  Embedding of already-interpreted
             # entities is unaffected.
             if query is not None:
-                raw_results, warnings_raw, total = await store.lookup(query, k, kinds, domain,
+                raw_results, warnings_raw, total = await store.lookup(query, k_fetch, kinds, domain,
                                        term_patterns=term_patterns,
                                        type_patterns=type_patterns,
                                        theories_include=theories_include,
@@ -2327,7 +2369,7 @@ class Minilang_State:
                             else store.emb_provider.default_score)
                 entries.sort(key=lambda e: _pat_score(e[0]), reverse=True)
                 scored_recs = []
-                for uk, name, _ in entries[:k]:
+                for uk, name, _ in entries[:k_fetch]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
                         # UNCONDITIONAL (§2.1's table): `name` is the live,
@@ -2351,7 +2393,7 @@ class Minilang_State:
                         if rec is not None:
                             scored_recs.append((hr, rec, None))
                     scored_recs.sort(key=lambda x: x[0], reverse=True)
-                    scored_recs = scored_recs[:k]
+                    scored_recs = scored_recs[:k_fetch]
         if not scored_recs:
             return [], warnings, total
         # Resolve entities via RPC — but NOT experiences, which are not Isabelle
@@ -2360,11 +2402,48 @@ class Minilang_State:
         # payload for rendering.
         ent_idx = [i for i, (_, rec, _) in enumerate(scored_recs)
                    if rec.kind != EntityKind.EXPERIENCE]
-        infos = await self._retrieve_entity(
+        diagnosed = await self._retrieve_entity_with_diagnostics(
             [(scored_recs[i][1].kind, scored_recs[i][1].name) for i in ent_idx])
-        info_by_idx = dict(zip(ent_idx, infos))
+        info_by_idx = dict(zip(ent_idx, [d[0] for d in diagnosed]))
+        # Drop what the agent cannot cite.  `Name_Space.extern` returns
+        # "??." ^ name when no access path resolves to the entity in this
+        # context, so such a name is unusable in a proof; and an entity
+        # retrieve_entity could not resolve at all (info is None) is listed today
+        # under its stored full name with an empty statement, which is no better.
+        # EXPERIENCE records are never touched: they are not namespace entities,
+        # never go through retrieve_entity, and so can never carry "??.".
+        # Only the entity's OWN name is judged — a "??." appearing inside a
+        # rendered statement is left alone (ruled 2026-08-20).
+        # The drop runs here, not in the candidate fold: extern already runs on
+        # this shortlist, so it costs nothing, whereas the fold would pay
+        # ~4.0 us per cached entry per query to remove 0.378% of names.
+        # The drop applies on every path, exact_name included (ruled 2026-08-23):
+        # a name the agent cannot write is useless however it was asked for.  The
+        # CAP does not: exact_name never over-fetched, and a bundle expansion
+        # legitimately returns more than k members.
+        cap = k if exact_name is None else len(scored_recs)
+        drop_idx: set[int] = set()
+        dropped_log: list[str] = []
+        for i, (info, diag) in zip(ent_idx, diagnosed):
+            if info is None:
+                drop_idx.add(i)
+                dropped_log.append(f"{scored_recs[i][1].name}: unresolved"
+                                   + (f" ({diag})" if diag else ""))
+            elif info[0].unicode.startswith("??."):
+                drop_idx.add(i)
+                dropped_log.append(f"{scored_recs[i][1].name}: inaccessible ({info[0].unicode})")
+        if dropped_log:
+            # Not surfaced to the agent: an unresolvable entity may be the symptom
+            # of a defect elsewhere, and silently dropping it would hide that.
+            logging.getLogger(__name__).info(
+                "semantic_knn dropped %d uncitable of %d: %s",
+                len(dropped_log), len(ent_idx), "; ".join(dropped_log))
         out: list[RetrievedEntity] = []
         for i, (score, rec, override) in enumerate(scored_recs):
+            if len(out) >= cap:
+                break
+            if i in drop_idx:
+                continue
             if rec.kind == EntityKind.EXPERIENCE:
                 entity = IsabelleEntity(
                     full_name=rec.name, short_name=IsaTerm.from_isabelle(rec.name),
@@ -2405,27 +2484,10 @@ class Minilang_State:
         return result
     async def _retrieve_entity_with_diagnostics(self, entities: list[tuple[EntityKind, str]]
         ) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
-        """Retrieve entity info by kind and name (short or full), with a per-entity
-        diagnostic sentence (None when there is nothing to say beyond "not found").
-        Returns list of (info, diagnostic); see `_retrieve_entity` for the info tuple.
-
-        Names are converted to Isabelle's ASCII notation HERE — this is the one and
-        only conversion point for retrieval by name, and everything that resolves a
-        name against Isabelle goes through it. `ascii_of_unicode` is idempotent, so
-        callers already holding an ASCII name are unaffected."""
-        args = [(int(kind), ascii_of_unicode(name)) for kind, name in entities]
-        results = await self.connection.callback(
-            "IsaMini.retrieve_entity", (self.name, args))
-        out = []
-        for info, diag in results:
-            parsed = ((IsaTerm.from_isabelle(info[0]),
-                       [IsaTerm.from_isabelle(e) for e in info[1]],
-                       list(info[2]), list(info[3]), bool(info[4]))
-                      if info is not None else None)
-            # The diagnostic is an ordinary return value, not an IsabelleError, so
-            # nothing else would decode it.
-            out.append((parsed, pretty_unicode(diag) if diag is not None else None))
-        return out
+        """Retrieve entity info in this state's context; see
+        `retrieve_entities_with_diagnostics` (the module-level worker)."""
+        return await retrieve_entities_with_diagnostics(
+            self.connection, self.name, entities)
     async def _retrieve_entity(self, entities: list[tuple[EntityKind, str]]
         ) -> list[tuple[short_name, list[term], list[str], list[full_name], bool] | None]:
         """Retrieve entity info by kind and name (short or full).
@@ -12318,12 +12380,16 @@ class Session:
         self.retrieval_log_path = self.log_dir / "retrieval.yaml"
         self.missing_lemmas_log_path = self.log_dir / "missing_lemmas.yaml"
 
-        # Open log files in append mode, keep them open
-        self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8')
-        self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8')
-        self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8')
-        self.retrieval_log_file = open(self.retrieval_log_path, 'a', encoding='utf-8')
-        self.missing_lemmas_log_file = open(self.missing_lemmas_log_path, 'a', encoding='utf-8')
+        # Open log files in append mode, keep them open.
+        # errors="backslashreplace": diagnostic sinks must survive lone UTF-16
+        # surrogates (corrupted upstream model output) instead of raising
+        # UnicodeEncodeError and killing the whole command. proof.yaml stays
+        # strict — the tree is protected at the tool-dispatch entry instead.
+        self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8', errors='backslashreplace')
+        self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8', errors='backslashreplace')
+        self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8', errors='backslashreplace')
+        self.retrieval_log_file = open(self.retrieval_log_path, 'a', encoding='utf-8', errors='backslashreplace')
+        self.missing_lemmas_log_file = open(self.missing_lemmas_log_path, 'a', encoding='utf-8', errors='backslashreplace')
 
         # Open compressed meta log
         import zstandard
@@ -12380,7 +12446,9 @@ class Session:
         # COMPACTION, …) — is attributable. A caller-supplied role in **data wins.
         entry = {"event": event_type, "ts": datetime.now().isoformat(),
                  "role": self.role_label, **data}
-        line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+        # ensure_ascii=True: escapes lone surrogates to \udXXX literals
+        # (lossless, reversible) instead of raising on .encode below.
+        line = json.dumps(entry, ensure_ascii=True, default=str) + "\n"
         self._meta_log_writer.write(line.encode("utf-8"))
         self._meta_log_writer.flush(zstandard.FLUSH_FRAME)
 

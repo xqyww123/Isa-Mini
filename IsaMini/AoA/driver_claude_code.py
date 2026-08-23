@@ -60,6 +60,30 @@ def _serialize_args(args: Any) -> Any:
     except (TypeError, ValueError):
         return str(args)
 
+
+# The API's rejection of a request whose replayed session history contains a
+# lone UTF-16 surrogate (a CLI streaming bug corrupts non-BMP characters in
+# tool-call input; upstream issue family anthropics/claude-code#16294 — delete
+# this pattern once fixed upstream). Narrow three-condition match:
+# 400 + not valid JSON + surrogate ("no high surrogate" is the lone-low
+# variant). Matched only inside synthetic messages (see _classify_message),
+# never against real model prose.
+_CORRUPTED_HISTORY_RE = re.compile(
+    r"400 .*not valid JSON: no (?:low|high) surrogate")
+
+
+class _CorruptedHistoryError(Exception):
+    """The CLI stored a corrupted (lone-surrogate) assistant message in its
+    session history; every subsequent request replays it and is rejected by the
+    API at the same position, so retrying this session is pure waste — the only
+    remedy is discarding the session and restarting the context.
+
+    Deliberately local to this driver, not in the shared driver base: the
+    exception type declares what the catcher must do, and the remedy is
+    ClaudeCode-specific (API drivers own their message list and would clean it
+    in place instead of restarting).
+    """
+
 @agent_driver("ClaudeCode")
 class ClaudeCode(LMDriver):
     _NON_PROOF_TOOLS = [
@@ -157,6 +181,10 @@ class ClaudeCode(LMDriver):
 
         # Common to both modes
         self._model_time_start: float | None = None
+        # Highest total_cost_usd seen per CLI session id (that field is a
+        # running total within one CLI session, not per-turn) — see
+        # _accumulate_cost.
+        self._cost_by_session: dict[str, float] = {}
         self._session_id: str | None = None       # constant, set in initialize(), used for HTTP server registration
         self._conversation_id: str | None = None   # mutable, set by Agent SDK hook, used for fork resume
         self._fork_counter = 0
@@ -514,6 +542,9 @@ class ClaudeCode(LMDriver):
                         self.debug_info(f"[TOOLS LIST] {text}")
 
     def _check_error_text(self, text: str) -> None:
+        # Sole remaining caller: _check_result_error (gated on is_error, i.e.
+        # structural). AssistantMessages go through _classify_message instead —
+        # never pattern-match real model prose.
         if text.startswith("You've hit your limit"):
             raise _QuotaError(text)
         if "Rate limit" in text or "Request rejected (429)" in text:
@@ -528,18 +559,27 @@ class ClaudeCode(LMDriver):
             raise _QuotaError("Rate limit rejected"
                               + (f", resets at {resets}" if resets else ""))
 
-    def _check_message_error(self, message: Any) -> None:
-        """Classify a failure the SDK reports structurally, and raise.
+    def _classify_message(self, message: Any) -> None:
+        """AssistantMessage-level failure classification; raises on a match.
 
-        `_check_error_text` alone is a whitelist of two string patterns, so every
-        failure outside it — an unauthenticated CLI above all — used to pass through as
-        if it were ordinary model output. The agent then made no progress, the retry
-        loop span to `max_retries`, and the run ended as
-        ``ResourceExhausted("retry limit")``: an infrastructure failure reported as a
-        proof failure, with cost $0 and zero tool calls as the only clue.
+        Gate first, patterns second: only a message the CLI itself synthesised
+        (top-level ``error`` field set, or ``model == "<synthetic>"`` — each
+        covers a CLI code path the other misses) enters text-pattern matching.
+        Real model output NEVER gets classified as an error, so the model
+        writing "Rate limit" in its prose can no longer trip the quota rail
+        (which the old per-text-block ``_check_error_text`` calls did).
 
-        AssistantMessage.error (claude_agent_sdk.types.AssistantMessageError) is the
-        stable, version-independent signal, and it is what an unauthenticated CLI sets.
+        Classified failures, each on its existing rail:
+          - ``authentication_failed`` -> ``LMUnreachable`` (give up cleanly;
+            retrying cannot authenticate us);
+          - quota / rate-limit texts -> ``_QuotaError`` / ``_TransientError``
+            (the two patterns moved here verbatim from the per-block calls);
+          - the API's 400 "no low/high surrogate" rejection ->
+            ``_CorruptedHistoryError`` (the session history is poisoned; the
+            except-branch in the caller restarts the context).
+        Any other synthetic error (e.g. ConnectionRefused) keeps the old
+        behaviour: it falls through to the log — an unrecognised signal must
+        not become a terminal verdict.
 
         DELIBERATELY ONLY AssistantMessage: there is no `is_error` fail-safe on
         ResultMessage here, unlike the interpretation pipeline. In AoA an is_error
@@ -552,27 +592,32 @@ class ClaudeCode(LMDriver):
         happen. ResultMessages stay with _check_result_error -> _check_error_text, which
         keeps quota and rate-limit results on their wait-and-retry rails.
         """
-        err = getattr(message, "error", None) if isinstance(message, AssistantMessage) else None
-        if err is None:
+        if not isinstance(message, AssistantMessage):
             return
+        err = getattr(message, "error", None)
+        # "<synthetic>" is a CLI implementation constant (the model name it
+        # stamps on fabricated messages) — a boundary adaptation to a closed
+        # upstream, same as the regex above.
+        if err is None and getattr(message, "model", None) != "<synthetic>":
+            return  # real model output — never classify
 
-        if err != "authentication_failed":
-            # Deliberately ONE value, not a catch-all. rate_limit / server_error already
-            # have owners -- _check_error_text -> _QuotaError (20-min wait) and
-            # _TransientError (2 s backoff) -- and routing them from here preempted those
-            # rails, turning a recoverable usage cap into a terminal failure. No other
-            # value has ever been observed, and an unrecognised signal must not become a
-            # terminal verdict.
-            return
+        if err == "authentication_failed":
+            detail = self._model_error_detail(message)
+            # Give up cleanly through the existing LMUnreachable -> ResourceUnavailable
+            # rail (see ``driver_api._api_loop``), the same one
+            # ``driver_openai_api._fail_fast`` uses for a 401.
+            raise LMUnreachable(
+                "You have not logged Claude-Code. Run `claude '/login'` using your shell, then retry.\n"
+                + (f" The CLI reported: {detail!r}" if detail else "")
+                + "\nRead https://github.com/xqyww123/Isa-Mini/blob/main/IsaMini/AoA/Readme.md for more information")
 
-        detail = self._model_error_detail(message)
-        # Give up cleanly through the existing LMUnreachable -> ResourceUnavailable rail
-        # (see ``driver_api._api_loop``), the same one ``driver_openai_api._fail_fast``
-        # uses for a 401. Retrying cannot authenticate us.
-        raise LMUnreachable(
-            "You have not logged Claude-Code. Run `claude '/login'` using your shell, then retry.\n"
-            + (f" The CLI reported: {detail!r}" if detail else "")
-            + "\nRead https://github.com/xqyww123/Isa-Mini/blob/main/IsaMini/AoA/Readme.md for more information")
+        text = self._model_error_detail(message)
+        if text.startswith("You've hit your limit"):
+            raise _QuotaError(text)
+        if "Rate limit" in text or "Request rejected (429)" in text:
+            raise _TransientError(text)
+        if _CORRUPTED_HISTORY_RE.search(text):
+            raise _CorruptedHistoryError(text)
 
     @staticmethod
     def _model_error_detail(message: Any) -> str:
@@ -595,7 +640,12 @@ class ClaudeCode(LMDriver):
         """Run using the Claude Agent SDK (embedded mode)."""
         if self._client is not None:
             raise InternalError("_sdk_loop called while already running")
-        self._budget_start_time = time()
+        # Guarded: _budget_start_time lives on the shared Runtime, so an
+        # unconditional write here re-granted the full time budget on every
+        # worker spawn and every quota/transient retry (same guard as
+        # driver_api._api_loop).
+        if self._budget_start_time is None:
+            self._budget_start_time = time()
         while True:
             try:
                 async with ClaudeSDKClient(options=self.options) as client:
@@ -612,17 +662,15 @@ class ClaudeCode(LMDriver):
                             if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
                                 self._check_rate_limit_event(message)
                                 continue
-                            # Structural check first: an AssistantMessage carrying
-                            # error='authentication_failed' also carries the failure text
-                            # in its content, which would otherwise be logged as if the
-                            # model had said it.
-                            self._check_message_error(message)
+                            # Structural check first: a synthetic error message also
+                            # carries the failure text in its content, which would
+                            # otherwise be logged as if the model had said it.
+                            self._classify_message(message)
                             content = getattr(message, "content", None)
                             if isinstance(content, list):
                                 for block in content:
                                     text = getattr(block, "text", None)
                                     if isinstance(text, str) and text:
-                                        self._check_error_text(text)
                                         self.log_model_output(text)
                                     thinking = getattr(block, "thinking", None)
                                     if isinstance(thinking, str) and thinking:
@@ -662,6 +710,28 @@ class ClaudeCode(LMDriver):
                     self.quit_info = ResourceUnavailable(detail=str(e))
                 self.warn_AoA_opr(f"LM unreachable: {e}", to_isabelle=True)
                 break
+            except _CorruptedHistoryError as e:
+                # The CLI session history is poisoned (see the exception's
+                # docstring); discard it and restart the context. The proof
+                # tree survives — only the chat history is lost. A restart
+                # spends one retry: it sends a fresh full attempt, so it is
+                # priced like one; the old behaviour (8 x 400 burning the whole
+                # retry budget on a doomed session) cannot recur because the
+                # notice now raises inside the message loop and never reaches
+                # the turn-end _retry_count bookkeeping.
+                self._retry_count += 1
+                self.warn_AoA_opr(f"API error, restarting context: {e}",
+                                  to_isabelle=True)
+                self._log_meta("CORRUPTED_HISTORY_RESTART",
+                               cli_record=str(self._cli_project_dir()))
+                if self.check_budget():
+                    # Retry limit / shared budget exhausted, or a concurrent
+                    # terminal verdict stands (check_budget never overwrites
+                    # quit_info) — stop, keeping the existing verdict.
+                    break
+                self._reset_view_state()
+                self.log_AoA_opr("Context restarted")
+                continue
             finally:
                 self._client = None
 
@@ -783,8 +853,10 @@ class ClaudeCode(LMDriver):
         await self.root.ml_state.connection.writeln(
             f"Interactive proof session started. Open web terminal: {web_terminal_url}")
 
-        # Wait for either proof completion, tmux death, or budget timeout
-        self._budget_start_time = time()
+        # Wait for either proof completion, tmux death, or budget timeout.
+        # Guarded: shared Runtime field, see _sdk_loop.
+        if self._budget_start_time is None:
+            self._budget_start_time = time()
         proof_task = asyncio.create_task(self._proof_complete.wait())
         monitor_task = asyncio.create_task(self._monitor_tmux(tmux_session))
 
@@ -830,6 +902,11 @@ class ClaudeCode(LMDriver):
         # Claude versions fall back to the opus default. See docs/COST_ACCOUNTING.md.
         return pricing_for(_pricing_key(self._model), PRICING["claude-opus-4-6"])
 
+    def _cli_project_dir(self) -> Path:
+        """Where the Claude Code CLI stores this working dir's session JSONLs."""
+        return (Path.home() / ".claude" / "projects"
+                / re.sub(r'[^a-zA-Z0-9]', '-', self.working_dir))
+
     def _read_cost_from_session_log(self) -> None:
         """Read token usage from Claude Code JSONL session logs (standalone mode).
 
@@ -844,8 +921,7 @@ class ClaudeCode(LMDriver):
         """
         if self._conversation_id is None:
             return
-        project_name = re.sub(r'[^a-zA-Z0-9]', '-', self.working_dir)
-        project_dir = Path.home() / ".claude" / "projects" / project_name
+        project_dir = self._cli_project_dir()
         if not project_dir.exists():
             self.log_cost(f"Project directory not found: {project_dir}")
             return
@@ -904,10 +980,23 @@ class ClaudeCode(LMDriver):
     def _accumulate_cost(self, message: ResultMessage) -> None:
         """Per-turn accounting from a ResultMessage. Cost is the REMOTE-reported
         ``total_cost_usd`` (authoritative); tokens go through the shared
-        ``_accumulate_usage`` (Anthropic-native input already excludes cache)."""
-        self.log_cost(f"usage={message.usage} total_cost_usd={message.total_cost_usd}")
-        if message.total_cost_usd:
-            self.total_cost_usd += message.total_cost_usd
+        ``_accumulate_usage`` (Anthropic-native input already excludes cache).
+
+        ``total_cost_usd`` is a RUNNING TOTAL within one CLI session ("read the
+        latest result rather than summing across results" — official SDK docs),
+        while ``usage`` on the same message is per-turn. So dollars take the
+        per-session increment over the highest value seen; a straight ``+=``
+        double-counted earlier turns whenever one session emitted several
+        ResultMessages (retry prompts, fork nudges). ``total_cost_usd`` must
+        stay an accumulator (+=) because ``_settle_costs`` merges worker costs
+        into it — never assign to it wholesale."""
+        self.log_cost(f"session={message.session_id} usage={message.usage} "
+                      f"total_cost_usd={message.total_cost_usd}")
+        seen = self._cost_by_session.get(message.session_id, 0.0)
+        running = message.total_cost_usd or 0.0
+        if running > seen:
+            self.total_cost_usd += running - seen
+            self._cost_by_session[message.session_id] = running
         if message.usage:
             self._accumulate_usage(Usage.from_uncached(
                 input_tokens=message.usage.get("input_tokens", 0),
@@ -1011,12 +1100,12 @@ class ClaudeCode(LMDriver):
                         if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
                             self._check_rate_limit_event(message)
                             continue
+                        self._classify_message(message)
                         content = getattr(message, "content", None)
                         if isinstance(content, list):
                             for block in content:
                                 text = getattr(block, "text", None)
                                 if isinstance(text, str) and text:
-                                    self._check_error_text(text)
                                     fork.log_model_output(f"{tag} {text}")
                                 thinking = getattr(block, "thinking", None)
                                 if isinstance(thinking, str) and thinking:
@@ -1041,12 +1130,33 @@ class ClaudeCode(LMDriver):
             except _QuotaError as e:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
+                await self._quota_pause()
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
+            except _CorruptedHistoryError as e:
+                # Under FORKING_WITH_CTXT the fork resumes the parent's session,
+                # so every rebuild replays the poisoned prefix — retrying as-is
+                # is doomed. Degrade to a context-free rebuild (the existing
+                # FORKING_NO_CTXT configuration): the fork prompt carries all
+                # the information the answer needs, which is why that mode
+                # works at all. For the NO_CTXT modes these two assignments are
+                # no-ops. Counter and verdict live on the FORK, never on self
+                # (the parent): a terminal fork verdict is copied onto the
+                # parent by the SessionQuit rail and would kill the proof.
+                fork._retry_count += 1
+                self.warn_AoA_opr(f"{tag} API error, restarting context: {e}",
+                                  to_isabelle=True)
+                fork._log_meta("CORRUPTED_HISTORY_RESTART",
+                               cli_record=str(self._cli_project_dir()))
+                if fork.check_budget():
+                    # Terminal ResourceExhausted on the fork: the quit_info
+                    # setter settles the answer future with SessionQuit — the
+                    # existing terminal path for any fork ending.
+                    break
+                fork_options.resume = None
+                fork_options.fork_session = False
+                continue
         finally:
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)

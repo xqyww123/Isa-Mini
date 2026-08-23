@@ -755,9 +755,7 @@ class APIDriver(LMDriver):
             except _QuotaError as e:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
+                await self._quota_pause()
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)

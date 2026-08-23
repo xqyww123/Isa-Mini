@@ -296,7 +296,12 @@ class Codex_Driver(LMDriver):
         await self._with_retry(self._codex_loop)
 
     async def _codex_loop(self):
-        self._budget_start_time = time()
+        # Guarded: _budget_start_time lives on the shared Runtime, so an
+        # unconditional write re-granted the full time budget on every worker
+        # spawn and every quota/transient retry (same guard as
+        # driver_api._api_loop).
+        if self._budget_start_time is None:
+            self._budget_start_time = time()
         prompt: str = await self.initial_prompt()
         codex_session_id: str | None = None
 
@@ -637,9 +642,7 @@ class Codex_Driver(LMDriver):
             except _QuotaError as e:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
-                t0 = time()
-                await asyncio.sleep(1200)
-                self.total_quota_wait_time += time() - t0
+                await self._quota_pause()
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
