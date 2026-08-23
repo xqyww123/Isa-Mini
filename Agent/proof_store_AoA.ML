@@ -78,7 +78,11 @@ fun l1_write (key, std_time, text) =
   catch _ => ()\<close>
 
 fun l1_invalidate key =
-  \<^try>\<open>
+  ((*the L1 counterpart of L2's report_cache_is_outdated: the one countable signal
+     for cross-family stale hits (UNIFIED_KEY_MINT_PLAN §5.7) -- keep the "L1" prefix,
+     counting must separate the two ledgers*)
+   warning ("L1 proof cache " ^ quote key ^ " is outdated!");
+   \<^try>\<open>
     let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
         val cmd : (string, unit) Remote_Procedure_Calling.command = {
               name = "IsaMini.ProofStore.invalidate",
@@ -88,7 +92,7 @@ fun l1_invalidate key =
               timeout = NONE }
      in Remote_Procedure_Calling.call_command cmd key
     end
-  catch _ => ()\<close>
+  catch _ => ()\<close>)
 
 end (*local*)
 
