@@ -46,6 +46,8 @@ class GeminiProvider(Provider):
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
                    allowed_tools: list[str] | None = None) -> ProviderResponse:
+        # allowed_tools is accepted and ignored: fork tool restriction is
+        # enforced at execution time by _check_tool_permission.
         system_instruction: str | None = None
         contents: list[genai_types.Content] = []
         for m in messages:

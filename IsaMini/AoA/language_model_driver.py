@@ -24,9 +24,10 @@ class _CorruptedSampleError(_TransientError):
     message list — once in history it would crash every later request
     client-side (httpx serializes with strict UTF-8). Subclassing
     ``_TransientError`` gets a free re-roll wherever a real inner retry layer
-    exists; ``_api_loop``'s dedicated arm catches it before it can reach
-    ``_with_retry`` (which retries unboundedly and silently rebuilds the
-    context — see BUG_OPENAI_TRANSIENT_SILENT_CONTEXT_LOSS)."""
+    exists; ``APIDriver._api_loop``'s merged arm catches it before it can
+    reach ``_with_retry`` (which retries unboundedly and silently rebuilds the
+    context — see BUG_OPENAI_TRANSIENT_SILENT_CONTEXT_LOSS). Only raise it
+    from code that loop covers."""
     pass
 
 

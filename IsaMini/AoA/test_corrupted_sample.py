@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import os
 import sys
+from time import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
@@ -24,8 +25,8 @@ from IsaMini.AoA.driver_api import (
 from IsaMini.AoA.language_model_driver import (
     _CorruptedSampleError, _TransientError, Usage)
 from IsaMini.AoA.model import (
-    Runtime, Role_Major, Restart, ResourceExhausted, Interaction, ForkingMode,
-    TOOL_ANSWER_INDEX)
+    Runtime, Role_Major, ResourceExhausted, SessionQuit, Interaction,
+    ForkingMode, TOOL_ANSWER_INDEX)
 
 LONE = "\ud83d"            # lone high surrogate (孤悬半)
 SPLIT = "\ud83d" + "\ude00"  # surrogate pair split into two code points (劈开对)
@@ -288,7 +289,7 @@ async def test_bounded_arm_after_retries_exhausted():
     check(d._retry_count == 1, "the arm must charge exactly one retry")
     check("CONTEXT_RESTART" in meta_events(d),
           "the arm must go through the existing restart dispatcher")
-    check(any("Corrupted sample" in w for w in warns(d)),
+    check(any("restarting context" in w for w in warns(d)),
           "the arm must log the restart")
     check(not any(WITH_RETRY_MARK in w for w in warns(d)),
           "the corrupted sample must never reach _with_retry")
@@ -385,16 +386,67 @@ async def test_fork_transient_arm_in_noop_family():
           "no verdict may spill onto the calling session")
 
 
+class AlwaysRaise(Provider):
+    """chat() raises the same exception on every call (counts calls)."""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = 0
+
+    async def chat(self, messages, tools, *, previous_response_id=None,
+                   allowed_tools=None):
+        self.calls += 1
+        raise self.exc
+
+    format_tools = FakeProvider.format_tools
+    format_assistant_msg = FakeProvider.format_assistant_msg
+    context_window = FakeProvider.context_window
+    model_name = FakeProvider.model_name
+    pricing = FakeProvider.pricing
+
+
+async def test_fork_transient_spin_is_bounded():
+    # The fork's transient arm re-rolls forever unless the RUN-WIDE budget
+    # stops it; a fork's own _retry_count must never become the reason.
+    p = AlwaysRaise(_TransientError("5xx"))
+    parent = make_driver(p)
+    parent.runtime._budget_start_time = time() - parent.timeout_seconds - 1
+    try:
+        await _drive_fork(parent)
+        check(False, "an exhausted budget must end the fork via SessionQuit")
+    except SessionQuit as e:
+        check(isinstance(e.quit_info, ResourceExhausted)
+              and "timeout" in e.quit_info.detail,
+              "the fork must stop on the shared wall clock")
+    check(p.calls == 10, "one _retry_transient burst, then the guard trips")
+    check(parent._retry_count == 0, "no retry may be charged to the parent")
+
+
+async def test_fork_unicode_error_escapes_by_design():
+    # Retry is futile on this seam (the poisoned list cannot be rebuilt), so
+    # the fork lets UnicodeEncodeError out unchanged — fail fast, true cause.
+    p = AlwaysRaise(UnicodeEncodeError("utf-8", LONE, 0, 1, "surrogates"))
+    parent = make_driver(p)
+    try:
+        await _drive_fork(parent)
+        check(False, "UnicodeEncodeError must propagate out of _run_fork")
+    except UnicodeEncodeError:
+        pass
+    check(p.calls == 1, "no retry may be attempted")
+
+
 # ---------------------------------------------------------------------------
 # 4. compaction degrades to a skip (§5.4)
 # ---------------------------------------------------------------------------
 
 async def test_compaction_degrades_to_skip():
-    p = FakeProvider([resp(content="ab" + SPLIT)] * 10)
+    # No retry at this seam (it sits outside the wall-clock cap): one
+    # corrupted summary is one skipped compaction.
+    p = FakeProvider([resp(content="ab" + SPLIT)])
     d = make_driver(p)
     msgs = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT")]
-    with fast_sleep():
-        result = await asyncio.wait_for(d._compact(msgs, []), timeout=30)
+    result = await asyncio.wait_for(d._compact(msgs, []), timeout=30)
+    check(p.calls == 1, "a corrupted summary must not be re-rolled here")
     check(result is msgs, "the degrade must return the SAME list object "
           "(downstream identity test keeps the cache state)")
     check(len(result) == 2, "the appended compaction prompt must be popped")
@@ -439,6 +491,10 @@ def main():
     print("PASS: fork re-rolls on the real retry path")
     asyncio.run(test_fork_transient_arm_in_noop_family())
     print("PASS: fork existing transient arm (no-op family)")
+    asyncio.run(test_fork_transient_spin_is_bounded())
+    print("PASS: fork transient spin is bounded by the run-wide budget")
+    asyncio.run(test_fork_unicode_error_escapes_by_design())
+    print("PASS: fork UnicodeEncodeError escapes by design")
     asyncio.run(test_compaction_degrades_to_skip())
     print("PASS: compaction degrades to a skip")
     asyncio.run(test_safety_net_leg())

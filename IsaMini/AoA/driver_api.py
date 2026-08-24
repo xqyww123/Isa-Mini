@@ -95,6 +95,8 @@ class Provider(ABC):
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
                    allowed_tools: list[str] | None = None) -> ProviderResponse:
+        # Drivers must never call this directly: go through
+        # APIDriver._checked_chat, which applies entry validation.
         ...
 
     @abstractmethod
@@ -352,12 +354,12 @@ class APIDriver(LMDriver):
         decode) BEFORE it can enter any message list; once in history it
         crashes every later request client-side (httpx serializes with strict
         UTF-8). Encoding is the ground truth, so probe the three raw string
-        fields. Tool-call ``arguments`` accumulate raw JSON text and are parsed
-        once, so a split pair cannot arise there — the probe still covers them
-        for free. Poison that hides in a *parsed native* payload behind an
-        ASCII-escaped raw string is invisible here by construction; the
-        ``UnicodeEncodeError`` leg of ``_api_loop``'s dedicated arm bounds
-        that residue."""
+        fields. The ``arguments`` probe is live only where ``arguments`` is
+        the provider's raw wire text (the OpenAI providers); Anthropic and
+        Gemini re-serialize with ``ensure_ascii=True``, so there it is ASCII
+        by construction and poison survives in the *parsed native* payload
+        instead — invisible here; the ``UnicodeEncodeError`` leg of
+        ``_api_loop``'s merged arm bounds that residue on the main loop."""
         fields = [("content", response.content), ("thinking", response.thinking)]
         fields += [(f"tool_calls[{i}].arguments", tc.arguments)
                    for i, tc in enumerate(response.tool_calls)]
@@ -382,7 +384,10 @@ class APIDriver(LMDriver):
     async def _checked_chat(self, provider: Provider, messages: list[Msg],
                             tools: list[dict], **kwargs) -> ProviderResponse:
         """``Provider.chat`` behind entry validation — every chat seam that
-        appends the response to a message list must go through here."""
+        appends the response to a message list must go through here. Call it
+        on the session that should own the ``CORRUPTED_SAMPLE`` meta (the
+        fork, not the parent); *provider* is only the transport and may
+        differ from that session's own (``_fork_provider``)."""
         response = await provider.chat(messages, tools, **kwargs)
         self._validate_sample(response)
         return response
@@ -441,18 +446,21 @@ class APIDriver(LMDriver):
                             detail="model turn exceeded the remaining time budget"))
                     break
                 except (_CorruptedSampleError, UnicodeEncodeError) as e:
-                    # A corrupted sample survived _retry_transient's re-rolls
-                    # (in the no-op-override family it gets none at all), or —
-                    # the UnicodeEncodeError leg — poison hidden in a parsed
-                    # native payload hit the HTTP client's strict UTF-8 encode.
-                    # Neither may fall through to _with_retry (unbounded,
-                    # silently rebuilds the context): charge one retry and
-                    # restart the context, capped by max_retries. The restart
-                    # branch below deliberately does not reset _retry_count.
-                    self.warn_AoA_opr(
-                        f"Corrupted sample, restarting context: {e}")
+                    # The merged arm. Two legs: a corrupted sample survived
+                    # _retry_transient's re-rolls (in the no-op-override
+                    # family it gets none at all); or — the UnicodeEncodeError
+                    # leg — poison hidden in a parsed native payload hit the
+                    # HTTP client's strict UTF-8 encode. _CorruptedSampleError
+                    # must not fall through to _with_retry (unbounded, silently
+                    # rebuilds the context); UnicodeEncodeError is no
+                    # _TransientError at all — nothing else catches it and it
+                    # would kill the whole run. Charge one retry and restart
+                    # the context, capped by max_retries; the restart branch
+                    # below deliberately does not reset _retry_count.
                     self._retry_count += 1
                     if not self.check_budget():
+                        self.warn_AoA_opr(f"{type(e).__name__} on the model "
+                                          f"turn; restarting context: {e}")
                         await self.request_restart()
                     break
 
@@ -615,11 +623,15 @@ class APIDriver(LMDriver):
 
         messages.append(UserMsg(COMPACTION_PROMPT))
         try:
-            summary_resp = await self._retry_transient(
-                lambda: self._checked_chat(self._provider, messages, []))
+            # No _retry_transient here: this call sits outside _api_loop's
+            # wall-clock cap, and a skipped compaction re-fires next turn
+            # (occupancy is unchanged), inside the cap.
+            summary_resp = await self._checked_chat(self._provider, messages, [])
         except Exception as e:
             # A corrupted summary (or any other failure) degrades to skipping
-            # this compaction: same list object back, cache state untouched.
+            # this compaction: same list object back. The _should_compact
+            # caller's identity test then keeps the cache state; the Refresh
+            # caller has no such test and resets it regardless.
             # str(e), not repr: UnicodeEncodeError's repr embeds the whole
             # unencodable payload (here: the full serialized prompt).
             self.warn_AoA_opr("Compaction summary request failed "
@@ -823,6 +835,15 @@ class APIDriver(LMDriver):
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
                 await self._quota_pause()
             except _TransientError as e:
+                # Bound the retry by the RUN-WIDE budget. A fork's _retry_count
+                # is never incremented, so this can only trip on the Runtime's
+                # wall clock / tool-call count — limits the caller has hit too.
+                # NEVER add `fork._retry_count += 1` here: that would end the
+                # parent's proof for a fork-local reason. UnicodeEncodeError is
+                # deliberately NOT caught on this seam: the fork cannot rebuild
+                # its poisoned list, so a retry is futile — fail fast instead.
+                if fork.check_budget():
+                    break
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
         finally:

@@ -40,6 +40,8 @@ class AnthropicProvider(Provider):
     async def chat(self, messages: list[Msg], tools: list[dict],
                    *, previous_response_id: str | None = None,
                    allowed_tools: list[str] | None = None) -> ProviderResponse:
+        # allowed_tools is accepted and ignored: fork tool restriction is
+        # enforced at execution time by _check_tool_permission.
         system_blocks: list[dict] | None = None
         api_messages: list[dict] = []
 
