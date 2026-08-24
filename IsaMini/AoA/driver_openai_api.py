@@ -1098,7 +1098,7 @@ class APIDriver_OpenAICodex(APIDriver_OpenAI):
 
 @agent_driver("K2-Think")
 class APIDriver_K2Think(APIDriver):
-    DEFAULT_MODEL = "k2moe375B_mid4_v2_checkpoint_0004000"
+    DEFAULT_MODEL = "k2moe375B_mid4_v2_6000"
 
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):

@@ -44,9 +44,14 @@ def check(cond, msg):
 
 
 def make_runtime(*, tool_calls=0, start_time=None, debug=False):
-    return types.SimpleNamespace(
-        total_tool_calls=tool_calls, _budget_start_time=start_time,
-        connection=None, debug=debug)
+    # A real Runtime (not a SimpleNamespace): the budget clock now lives in
+    # Runtime METHODS (elapsed_working_time / budget_exempt), which a
+    # namespace of fields cannot provide.
+    rt = model.Runtime()
+    rt.total_tool_calls = tool_calls
+    rt._budget_start_time = start_time
+    rt.debug = debug
+    return rt
 
 
 def make_session(*, role=None, runtime=None):

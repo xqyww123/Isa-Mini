@@ -96,13 +96,12 @@ api = ["IsaMini[openai-api,anthropic]"]
 # There is no `gemini` extra, and toplevel.py does not register driver_gemini: the
 # driver is unexercised. The module is still shipped -- install google-genai and
 # uncomment the _try_import_driver line to use it.
-# `web`: driver_claude_code imports web_terminal from inside a function, so aiohttp is
-# genuinely optional. (There is no `mcp` extra: see mcp/uvicorn in dependencies.)
-web = ["aiohttp>=3.13.5"]
+# (There is no `mcp` extra: see mcp/uvicorn in dependencies. The former `web`
+# extra died with the web terminal / standalone mode.)
 # `repl` is intentionally NOT in `all`: keeping IsaREPL optional (so `pip install
 # IsaMini` gives the AoA agent without it) is the whole point -- do not add it back.
 # Users who want the Minilang REPL client / CLI ask for `IsaMini[repl]` explicitly.
-all = ["IsaMini[api,web]"]
+all = ["IsaMini[api]"]
 
 [project.urls]
 "Homepage" = "https://github.com/xqyww123/Isa-Mini"

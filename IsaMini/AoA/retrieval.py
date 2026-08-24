@@ -1213,12 +1213,13 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     except SessionQuit as e:
         # An interactive-retrieval fork launched from inside this tool call
         # stopped without answering. This is a work boundary (the `query` tool):
-        # translate the reason back to state on THIS session -- which may itself
-        # be a fork, in which case the setter settles its own slot in turn -- and
-        # end the call. Must stay ABOVE `except Exception`, whose first act is
-        # `sys.exit(1)` under AoA_Debug.
-        if session.quit_info is None or not session.quit_info.is_terminal:
-            session.quit_info = e.quit_info
+        # offer the reason back to state on THIS session -- which may itself
+        # be a fork, in which case the setter settles its own slot in turn --
+        # and end the call. settle_quit may refuse the write (a standing
+        # terminal verdict, or a pending DeepRestart, takes precedence). Must
+        # stay ABOVE `except Exception`, whose first act is `sys.exit(1)`
+        # under AoA_Debug.
+        session.settle_quit(e.quit_info)
         session.log_tool_response(session.tool_name(TOOL_SEARCH),
                                   f"{e.quit_info.reason}: {e}")
         return (str(e), True)
@@ -1237,5 +1238,5 @@ async def _query_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         # quit_info.is_terminal at the top of ToolExecutor.execute and stops the
         # follow-up call the model may already be emitting. Same treatment as
         # LMUnreachable in mcp_http_server.
-        session.quit_info = TechnicalFailure(detail=msg)
+        session.settle_quit(TechnicalFailure(detail=msg))
         return (msg, True)

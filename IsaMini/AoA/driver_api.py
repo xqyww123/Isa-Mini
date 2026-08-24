@@ -204,7 +204,8 @@ class APIDriver(LMDriver):
         self._provider._log = self.warn_AoA_opr
         self._messages: list[Msg] = []
         self._interrupted = False
-        self._executor: ToolExecutor | None = None
+        # _executor is declared by Session.__init__ (shared field, see there);
+        # `initialize` builds it.
         self._fork_counter = 0
         self._model_time_start: float | None = None
         self._last_response_id: str | None = None
@@ -370,9 +371,9 @@ class APIDriver(LMDriver):
                 # of _retry_transient and surfaces here as TimeoutError.
                 # _budget_left is None in test mode (no budget set) =>
                 # asyncio.timeout(None) imposes no cap.
-                _bstart = self._budget_start_time
-                _budget_left = (None if _bstart is None
-                                else self.timeout_seconds - (time() - _bstart))
+                _elapsed = self.elapsed_working_time()
+                _budget_left = (None if _elapsed is None
+                                else self.timeout_seconds - _elapsed)
                 try:
                     async with asyncio.timeout(_budget_left):
                         response = await self._retry_transient(
@@ -383,7 +384,7 @@ class APIDriver(LMDriver):
                     # Proxy down / creds expired (subscription mode): give up
                     # cleanly via quit_info instead of spinning or letting the
                     # exception escape. Terminal ⇒ the outer loop breaks.
-                    self.quit_info = ResourceUnavailable(detail=str(e))
+                    self.settle_quit(ResourceUnavailable(detail=str(e)))
                     break
                 except TimeoutError:
                     # Wall-clock budget ran out mid model turn. check_budget()
@@ -392,8 +393,8 @@ class APIDriver(LMDriver):
                     # fallback covers any scheduling/clock-skew corner where it
                     # reads just under. Terminal ⇒ the outer loop breaks.
                     if not self.check_budget():
-                        self.quit_info = ResourceExhausted(
-                            detail="model turn exceeded the remaining time budget")
+                        self.settle_quit(ResourceExhausted(
+                            detail="model turn exceeded the remaining time budget"))
                     break
 
                 if response.response_id is not None:

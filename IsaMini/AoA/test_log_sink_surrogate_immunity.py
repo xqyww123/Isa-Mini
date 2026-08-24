@@ -4,13 +4,16 @@ surrogates.
 
 Background: a Claude Code CLI streaming bug can corrupt tool-call input so a
 non-BMP character loses half its surrogate pair; ``json.loads`` happily hands
-Python a ``str`` containing the lone surrogate (e.g. ``"\\ud835"``). Strict
-UTF-8 log sinks then raise ``UnicodeEncodeError`` while *logging* the corrupted
-model output — before any recovery branch can run — killing the whole ``by
-aoa`` command. The fix: the five YAML log handles open with
-``errors="backslashreplace"`` and ``_log_meta`` uses ``ensure_ascii=True``.
-proof.yaml (``refresh_YAML``) deliberately stays strict; the proof tree is
-protected at the tool-dispatch entry instead.
+Python a ``str`` containing the lone surrogate (e.g. ``"\\ud835"``). The sink
+that really crashed on it was ``_log_meta`` (strict ``str.encode``) — fixed
+with ``ensure_ascii=False`` + ``errors="backslashreplace"``, which keeps
+normal Unicode greppable and writes a lone surrogate as its lossless
+``\\udXXX`` literal. The five YAML handles never crashed: their only writer is
+``yaml.dump``, and PyYAML itself escapes surrogate-range code points
+losslessly (verified below by reload equality); their
+``errors="backslashreplace"`` is defence in depth only. proof.yaml
+(``refresh_YAML``) deliberately stays strict; the proof tree is protected at
+the tool-dispatch entry instead.
 
 No Isabelle / no REPL. Run directly:  ``python test_log_sink_surrogate_immunity.py``.
 Exits non-zero on any failure.
@@ -63,23 +66,44 @@ def main():
             except Exception as e:
                 check(False, f"_append_yaml raised on {name}: {e!r}")
 
+        # Attribution: PyYAML itself escapes the surrogate LOSSLESSLY — the
+        # document reloads to the identical str, proving the handles' errors=
+        # never fired (it would have written six literal ASCII chars instead).
+        import yaml
+        s.interaction_log_file.flush()
+        with open(s.interaction_log_path, encoding="utf-8") as f:
+            docs = [d for d in yaml.safe_load_all(f)
+                    if isinstance(d, dict) and d.get("event") == "TEST"]
+        check(bool(docs) and docs[-1]["text"] == CORRUPT,
+              "YAML round-trip is lossless (PyYAML's own escaping, not errors=)")
+
         try:
             s._log_meta("TEST_EVENT", text=CORRUPT)
             check(True, "_log_meta with lone surrogate does not raise")
         except Exception as e:
             check(False, f"_log_meta raised: {e!r}")
+        s._log_meta("TEST_EVENT2", text="unicode ≿ stays greppable")
 
-        # Round-trip: the meta line must be lossless (\udXXX escape survives
-        # json.loads back into the identical str).
         import json
         import zstandard
         s._meta_log_writer.close()
         s._meta_log_writer = None
         with open(s.meta_log_path, "rb") as f:
             raw = zstandard.ZstdDecompressor().stream_reader(f).read()
-        last = json.loads(raw.decode("utf-8", errors="surrogatepass")
-                          .splitlines()[-1])
-        check(last["text"] == CORRUPT, "meta round-trip is lossless")
+        # Expected bytes (property, not a diff against old code): the lone
+        # surrogate lands as its \udXXX literal; normal Unicode as raw UTF-8.
+        check(rb"\ud835" in raw, "meta writes the lone surrogate as \\udXXX")
+        check("≿".encode("utf-8") in raw,
+              "meta keeps normal Unicode greppable (raw UTF-8, not \\uXXXX)")
+        lines = raw.decode("utf-8", errors="surrogatepass").splitlines()
+        corrupt_line = json.loads(lines[-2])
+        check(corrupt_line["text"] == CORRUPT, "meta round-trip is lossless")
+
+        # proof.yaml stays STRICT — lock: refresh_YAML opens without errors=.
+        import inspect
+        from IsaMini.AoA.driver_claude_code import ClaudeCode
+        check("errors=" not in inspect.getsource(ClaudeCode.refresh_YAML),
+              "proof.yaml handle must stay strict (no errors= in refresh_YAML)")
 
         s._meta_log_file.close()
         for h in handles:

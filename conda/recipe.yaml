@@ -333,7 +333,6 @@ requirements:
     - tiktoken               # APIDriver_OpenAI.estimate_tokens
     - anthropic >=0.52.0     # driver_anthropic -> the Claude API driver
     - httpx >=0.28.1         # driver_openai_api and driver_anthropic
-    - aiohttp >=3.13.5       # web_terminal, imported from inside a function
     #
     # NOT the `repl` extra.  IsaREPL is on PyPI but on no conda channel, and it is
     # deliberately not published (it needs a patch the `isabelle` package does not carry).
@@ -357,7 +356,7 @@ tests:
       # executes.  Metadata is the wrong instrument for this project's real failure mode --
       # naming conda's `xxhash` (the C library) instead of `python-xxhash` resolves,
       # installs green, and dies only at `import xxhash`.
-      - python -c "import openai, tiktoken, anthropic, httpx, aiohttp, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
+      - python -c "import openai, tiktoken, anthropic, httpx, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
       # The drivers that must be present in a conda install.  This is the assertion that
       # catches the silent-vanish failure the folded extras exist to prevent: it names the
       # drivers rather than trusting that the dependencies imply them.

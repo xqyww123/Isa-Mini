@@ -8,12 +8,11 @@ Architecture:
 - Tool handlers close over their Session instance and call bind_session_context
   per-request (uvicorn gives each request an empty contextvars.Context, so both
   _session_var and the ambient Connection must be re-established here)
-- Both embedded (Agent SDK) and standalone (CLI in tmux) modes connect via HTTP URL
+- The Agent SDK connects via the HTTP URL (the `mcp_servers` option)
 
 Usage:
     server = await ProofMCPHTTPServer.get_or_create()
     url = await server.register_session("my_session_id", session)
-    # Claude Code connects to url via --mcp-config
     await server.unregister_session("my_session_id")
 """
 
@@ -468,8 +467,8 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 f"Proof tree depth exceeded limit, "
                 f"new limit: {session._depth_limit}")
             if session._retry_count >= session.max_retries:
-                session.quit_info = Surrender(
-                    f"proof tree depth exceeded limit {session._depth_limit - 5}")
+                session.settle_quit(Surrender(
+                    f"proof tree depth exceeded limit {session._depth_limit - 5}"))
                 await session.interrupt()
             else:
                 await session.request_restart()
@@ -1261,7 +1260,7 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
     if kind == "surrender":
         session._retry_count += 1
         if session._retry_count >= session.max_retries:
-            session.quit_info = Surrender(detail)
+            session.settle_quit(Surrender(detail))
             msg = f"Proof attempt concluded ({kind})."
             session.log_tool_response(_tn, msg)
             await session.interrupt()
@@ -1271,7 +1270,7 @@ async def _report_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
         await session.request_restart()
         return (msg, False)
     # kind == "refute"
-    session.quit_info = Refute(detail)
+    session.settle_quit(Refute(detail))
     msg = f"Proof attempt concluded ({kind})."
     session.log_tool_response(_tn, msg)
     await session.interrupt()
@@ -2444,6 +2443,31 @@ class ToolExecutor:
         self._channel = InteractionChannel()
         self._suspended_task: asyncio.Task | None = None
         session._channel = self._channel
+        # Back-reference so Session-level teardown (the deep restart's
+        # `discard_parked_interaction`) can reach the parked-task state, which
+        # lives here — under ClaudeCode the executor is otherwise a closure
+        # local of `_create_mcp_server`. Same field APIDriver assigns itself.
+        session._executor = self
+
+    async def discard_parked_interaction(self):
+        """Discard a tool task parked on a non-forking interaction: cancel and
+        await the task, null both state fields, and install a fresh channel on
+        the executor AND the session (the only write of that pair outside
+        ``__init__``). The resets are one unsplittable unit — dropping any one
+        of them wedges the session (mutations refused forever / the loop guard
+        disabled / answer tools dead-ended / the two channel references
+        diverging)."""
+        task, self._suspended_task = self._suspended_task, None
+        if task is not None:
+            task.cancel()
+            # suppress, not a bare await: `_cancel_owned_tasks` may already
+            # have cancelled and awaited this very task, and the re-await
+            # would raise its CancelledError here.
+            with contextlib.suppress(BaseException):
+                await task
+        self._session._nf_pending_interaction = None
+        self._channel = InteractionChannel()
+        self._session._channel = self._channel
 
     def _should_loop_restart(self, session: Session, name: str,
                              arguments: dict) -> bool:
@@ -2615,7 +2639,7 @@ class ToolExecutor:
         # proof.yaml on every later render. The content is semantically damaged,
         # so we only reject, never repair. Recovery is not our job here: the
         # poisoned CLI history 400s on the next request and the driver's
-        # _CorruptedHistoryError branch restarts the context.
+        # Chat_Restart arms trigger the deep restart.
         if (hit := _find_lone_surrogate(arguments)) is not None:
             corrupt_path, corrupt_value = hit
             session._log_meta("CORRUPTED_TOOL_INPUT", tool=name,
@@ -2774,18 +2798,19 @@ class ToolExecutor:
             # `except Exception: sys.exit(1)` below, which would kill the whole
             # (single-process) host. The main agent loop catches LMUnreachable
             # directly (see driver_api._api_loop).
-            session.quit_info = ResourceUnavailable(detail=str(e))
+            session.settle_quit(ResourceUnavailable(detail=str(e)))
             session.log_tool_response(session.tool_name(name), f"LM UNREACHABLE: {e}")
             return (str(e), True)
         except SessionQuit as e:
             # An interaction fork launched from inside this tool call stopped
-            # without answering. A tool call is a work boundary: translate the
-            # reason back to state on THIS session (the fork's caller — it has to
-            # know it should stop too) and end the call. Same shape as the
-            # LMUnreachable arm above, and it must stay ABOVE `except Exception`,
-            # whose first act is `sys.exit(1)` under AoA_Debug.
-            if session.quit_info is None or not session.quit_info.is_terminal:
-                session.quit_info = e.quit_info
+            # without answering. A tool call is a work boundary: offer the
+            # reason back to state on THIS session (the fork's caller — it has
+            # to know it should stop too) and end the call; settle_quit may
+            # refuse (a standing terminal verdict or pending DeepRestart takes
+            # precedence). Same shape as the LMUnreachable arm above, and it
+            # must stay ABOVE `except Exception`, whose first act is
+            # `sys.exit(1)` under AoA_Debug.
+            session.settle_quit(e.quit_info)
             session.log_tool_response(session.tool_name(name),
                                       f"{e.quit_info.reason}: {e}")
             return (str(e), True)
@@ -2799,7 +2824,7 @@ class ToolExecutor:
             # Otherwise take the same rail as the LMUnreachable branch above: a
             # terminal quit_info, which check_budget() honours, instead of taking
             # the whole single-process host down with every concurrent proof on it.
-            session.quit_info = TechnicalFailure(detail=msg)
+            session.settle_quit(TechnicalFailure(detail=msg))
             return (msg, True)
         finally:
             # Append AFTER dispatch (see the note at the top of execute): the
@@ -2956,30 +2981,6 @@ class _SessionRouter:
 
         path: str = scope["path"]
 
-        # Handle /reset_cache/<session_id> — clears view caches on context compaction
-        if scope["type"] == "http" and path.startswith("/reset_cache/"):
-            session_id = path[len("/reset_cache/"):]
-            session = self.sessions.get(session_id)
-            if session is not None:
-                session.seen_commands.clear()
-                session.seen_entities.clear()
-                session.seen_manual_note = False
-                session.seen_abbreviations.clear()
-                session.showed_suffices_notice = False
-                session.showed_fill_hint = False
-                session.showed_cancelled_notice = False
-                session.shown_HAVE_fact_names.clear()
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"text/plain")],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": b"OK",
-            })
-            return
-
         for session_id, app in list(self.apps.items()):
             prefix = f"/mcp/{session_id}"
             if path == prefix or path.startswith(prefix + "/"):
@@ -3057,17 +3058,6 @@ class ProofMCPHTTPServer:
         self._router.sessions.pop(session_id, None)
         if app is not None:
             await app.stop()
-
-    def mcp_config_json(self, session_id: str) -> dict:
-        """Return JSON config suitable for Claude CLI --mcp-config."""
-        return {
-            "mcpServers": {
-                "proof": {
-                    "type": "http",
-                    "url": f"http://127.0.0.1:{self._port}/mcp/{session_id}",
-                }
-            }
-        }
 
     async def _ensure_serving(self):
         """Start the HTTP server if not already running."""

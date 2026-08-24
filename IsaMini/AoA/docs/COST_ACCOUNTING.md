@@ -47,16 +47,13 @@ Sources:
   - `driver_api.py` (OpenAI responses + chat-completions) → `from_inclusive`
   - `driver_gemini.py` (`GeminiProvider.chat`) → `from_inclusive`
   - `driver_codex.py` (`_record_codex_usage`) → `from_inclusive`
-  - `driver_claude_code.py` (`_accumulate_cost`, `_read_cost_from_session_log`) → `from_uncached`
-- **ClaudeCode has two cost sources.** Primary in-process SDK mode
-  (`_sdk_loop` → `_accumulate_cost`) uses the **remote-reported**
-  `message.total_cost_usd` (authoritative; the price table is not used) — but
-  that field is a *running total within one CLI session*, not a per-turn
-  amount, so `_accumulate_cost` adds the per-session increment over the
-  highest value seen (`_cost_by_session`), never the raw value. The
-  standalone external-CLI mode (`_run_standalone` →
-  `_read_cost_from_session_log`) reconstructs cost from logged tokens via the
-  shared formula below.
+  - `driver_claude_code.py` (`_accumulate_cost`) → `from_uncached`
+- **ClaudeCode's cost source** (`_sdk_loop` → `_accumulate_cost`) is the
+  **remote-reported** `message.total_cost_usd` (authoritative; the price
+  table is not used) — but that field is a *running total within one CLI
+  session*, not a per-turn amount, so `_accumulate_cost` adds the per-session
+  increment over the highest value seen (`_cost_by_session`), never the raw
+  value.
 
 ## 4. Pricing & cost formula
 

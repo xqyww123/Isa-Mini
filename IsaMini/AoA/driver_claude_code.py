@@ -5,11 +5,10 @@ import contextvars
 import os
 import re
 from pathlib import Path
-import shlex
 import tempfile
 import shutil
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import LMDriver, Chat_Restart, _TransientError, _QuotaError, PRICING, pricing_for, Usage
 from . import prompts as P
 from .mcp_http_server import ProofMCPHTTPServer
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
@@ -25,7 +24,6 @@ from claude_agent_sdk.types import (
     HookJSONOutput,
     PreToolUseHookInput,
 )
-from io import StringIO
 import Isabelle_Semantic_Embedding
 
 _COMPACT_HEADROOM = 13_000
@@ -52,36 +50,28 @@ def _auto_compact_window(model: str, threshold_pct: float) -> int:
     return max(100_000, min(1_000_000, int(ctx * threshold_pct) + _COMPACT_HEADROOM))
 
 
-def _serialize_args(args: Any) -> Any:
-    """Best-effort JSON-serializable representation of Minilang operation arguments."""
-    try:
-        json.dumps(args)
-        return args
-    except (TypeError, ValueError):
-        return str(args)
-
-
 # The API's rejection of a request whose replayed session history contains a
 # lone UTF-16 surrogate (a CLI streaming bug corrupts non-BMP characters in
 # tool-call input; upstream issue family anthropics/claude-code#16294 — delete
 # this pattern once fixed upstream). Narrow three-condition match:
 # 400 + not valid JSON + surrogate ("no high surrogate" is the lone-low
-# variant). Matched only inside synthetic messages (see _classify_message),
-# never against real model prose.
+# variant). Matched only inside structurally-gated failure texts (synthetic
+# messages / is_error results — see _check_error_text), never against real
+# model prose. re.S is free insurance: the incident's notices were all
+# single-line, but nothing upstream promises that.
 _CORRUPTED_HISTORY_RE = re.compile(
-    r"400 .*not valid JSON: no (?:low|high) surrogate")
+    r"400 .*not valid JSON: no (?:low|high) surrogate", re.S)
 
 
-class _CorruptedHistoryError(Exception):
+class _CorruptedHistoryError(Chat_Restart):
     """The CLI stored a corrupted (lone-surrogate) assistant message in its
     session history; every subsequent request replays it and is rejected by the
-    API at the same position, so retrying this session is pure waste — the only
-    remedy is discarding the session and restarting the context.
+    API at the same position, so retrying this session is pure waste — the
+    remedy is a deep restart (see ``Session.request_deep_restart``).
 
-    Deliberately local to this driver, not in the shared driver base: the
-    exception type declares what the catcher must do, and the remedy is
-    ClaudeCode-specific (API drivers own their message list and would clean it
-    in place instead of restarting).
+    Deliberately local to this driver: the concrete cause is ClaudeCode-
+    specific (API drivers own their message list and would clean it in place
+    instead); the shared base ``Chat_Restart`` is what the except arms catch.
     """
 
 @agent_driver("ClaudeCode")
@@ -147,7 +137,6 @@ class ClaudeCode(LMDriver):
     _fork_index: int | None
 
     def __init__(self, *args, parent: 'ClaudeCode | None' = None,
-                 interactive_web_terminal: bool = False,
                  argument: str | None = None, **kwargs):
         super().__init__(*args, parent=parent, **kwargs)
         if parent is not None:
@@ -162,10 +151,6 @@ class ClaudeCode(LMDriver):
             self.YAML_path = parent.YAML_path
             self.root = parent.root
             self._http_server = parent._http_server
-            self._interactive_web_terminal = False
-            self._on_yaml_refresh = parent._on_yaml_refresh
-            self._on_operation_status = parent._on_operation_status
-            self._on_log_callback = parent._on_log_callback
             parent._fork_counter += 1
             self._fork_name = f"{parent._fork_name}.fork_{parent._fork_counter}"
         else:
@@ -176,7 +161,6 @@ class ClaudeCode(LMDriver):
                     f"The working directory {self.working_dir} is not readable and writable.")
             self.YAML_path = os.path.join(self.working_dir, "proof.yaml")
             self._http_server: ProofMCPHTTPServer | None = None
-            self._interactive_web_terminal = interactive_web_terminal
             self._fork_name = "main"
 
         # Common to both modes
@@ -191,14 +175,9 @@ class ClaudeCode(LMDriver):
         self._fork_index = None
         self._client: ClaudeSDKClient | None = None
         self._mcp_url: str | None = None
-        self._proof_complete: asyncio.Event | None = None
         # Detached interrupt tasks (see `interrupt`). Held so they aren't
         # garbage-collected mid-flight; auto-discarded on completion.
         self._interrupt_tasks: set[asyncio.Task] = set()
-        if parent is None:
-            self._on_yaml_refresh: Callable[[str], Any] | None = None
-            self._on_operation_status: Callable[[dict], Any] | None = None
-            self._on_log_callback: Callable[[dict], Any] | None = None
 
     @classmethod
     def _make_fork(cls, parent: 'ClaudeCode', role=None) -> 'ClaudeCode':
@@ -242,50 +221,43 @@ class ClaudeCode(LMDriver):
         # Seed proof.yaml. `refresh_YAML` -> `print_proof_scope`, which renders
         # the full `root` for a major (non-worker) and the scoped view for a
         # worker — so a single call covers both. Interaction forks are neither
-        # and intentionally write no YAML. (`_on_yaml_refresh` is still None here
-        # — it is set later in `_run_standalone` — so no UI push fires at init.)
+        # and intentionally write no YAML.
         if self.is_major or self.is_worker:
             self.refresh_YAML()
 
-        if not self._interactive_web_terminal:
-            # Embedded mode: Agent SDK connects to HTTP server via URL
-            main_model = self._model
-            self.options = ClaudeAgentOptions(
-                model=main_model,
-                # `display` is required to get thinking TEXT back: Opus 4.7+
-                # defaults to "omitted", which returns signature-only blocks whose
-                # `.thinking` is empty — so `log_model_thinking` never fired.
-                thinking={"type": "adaptive", "display": "summarized"},
-                system_prompt=self.system_prompt(),
-                cwd=self.working_dir,
-                permission_mode="default",
-                allowed_tools=self._role_allowed_tools(),
-                mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-                env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
-                settings=json.dumps({"autoCompactWindow":
-                    _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
-                extra_args={"exclude-dynamic-system-prompt-sections": None},
-                hooks={
-                    "PreToolUse": [
-                        HookMatcher(matcher="*", hooks=[self.permission_control]),
-                    ],
-                    "PostToolUse": [
-                        HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
-                    ],
-                    "PostToolUseFailure": [
-                        HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
-                    ],
-                    "PreCompact": [
-                        HookMatcher(matcher="*", hooks=[self.on_compact]),
-                    ],
-                },
-            )
+        main_model = self._model
+        self.options = ClaudeAgentOptions(
+            model=main_model,
+            # `display` is required to get thinking TEXT back: Opus 4.7+
+            # defaults to "omitted", which returns signature-only blocks whose
+            # `.thinking` is empty — so `log_model_thinking` never fired.
+            thinking={"type": "adaptive", "display": "summarized"},
+            system_prompt=self.system_prompt(),
+            cwd=self.working_dir,
+            permission_mode="default",
+            allowed_tools=self._role_allowed_tools(),
+            mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
+            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            settings=json.dumps({"autoCompactWindow":
+                _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
+            extra_args={"exclude-dynamic-system-prompt-sections": None},
+            hooks={
+                "PreToolUse": [
+                    HookMatcher(matcher="*", hooks=[self.permission_control]),
+                ],
+                "PostToolUse": [
+                    HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
+                ],
+                "PostToolUseFailure": [
+                    HookMatcher(matcher="*", hooks=[self._resume_model_timer]),
+                ],
+                "PreCompact": [
+                    HookMatcher(matcher="*", hooks=[self.on_compact]),
+                ],
+            },
+        )
 
     async def interrupt(self):
-        if self._interactive_web_terminal and self._proof_complete is not None:
-            if self._on_operation_status is not None:
-                self._on_operation_status({"type": "proof_complete", "success": True})
-            self._proof_complete.set()
         if self._client is not None:
             # Fire-and-forget. The proof loop's exit is driven by the end-of-turn
             # gate, NOT by this interrupt: once `receive_response()` returns, the
@@ -311,10 +283,17 @@ class ClaudeCode(LMDriver):
         except Exception as e:
             self.debug_info(f"[INTERRUPT] control request failed (ignored): {e}")
 
+    async def _deep_restart(self):
+        # BEFORE the teardown awaits: `_conversation_id` is written only by
+        # the PreToolUse hook, so until the rebuilt chat's first tool call it
+        # still names the old poisoned CLI session — an in-flight tool handler
+        # spawning an inheriting fork (FORKING_WITH_CTXT) during the teardown
+        # would resume the poison. While it is None a fork gets `resume=None`,
+        # i.e. an effectively context-free fresh conversation.
+        self._conversation_id = None
+        await super()._deep_restart()
+
     async def _run_agent_loop(self):
-        if self._interactive_web_terminal:
-            await self._run_standalone()
-            return
         await self._with_retry(self._sdk_loop)
 
     async def close(self):
@@ -530,25 +509,17 @@ class ClaudeCode(LMDriver):
         self._model_time_start = time()
         return {}
 
-    async def _list_tools(self, client):
-        """List all available tools to verify MCP tools are discoverable."""
-        await client.query("List all available tools you have access to.")
-        async for message in client.receive_response():
-            content = getattr(message, "content", None)
-            if isinstance(content, list):
-                for block in content:
-                    text = getattr(block, "text", None)
-                    if isinstance(text, str) and text:
-                        self.debug_info(f"[TOOLS LIST] {text}")
-
     def _check_error_text(self, text: str) -> None:
-        # Sole remaining caller: _check_result_error (gated on is_error, i.e.
-        # structural). AssistantMessages go through _classify_message instead —
-        # never pattern-match real model prose.
+        # THE failure-pattern table — the single place a failure text is
+        # recognised. Both callers are structurally gated (synthetic
+        # AssistantMessages via _classify_message; is_error ResultMessages via
+        # _check_result_error), so real model prose never reaches it.
         if text.startswith("You've hit your limit"):
             raise _QuotaError(text)
         if "Rate limit" in text or "Request rejected (429)" in text:
             raise _TransientError(text)
+        if _CORRUPTED_HISTORY_RE.search(text):
+            raise _CorruptedHistoryError(text)
 
     def _check_rate_limit_event(self, event) -> None:
         if event.rate_limit_info.status == "rejected":
@@ -572,11 +543,11 @@ class ClaudeCode(LMDriver):
         Classified failures, each on its existing rail:
           - ``authentication_failed`` -> ``LMUnreachable`` (give up cleanly;
             retrying cannot authenticate us);
-          - quota / rate-limit texts -> ``_QuotaError`` / ``_TransientError``
-            (the two patterns moved here verbatim from the per-block calls);
-          - the API's 400 "no low/high surrogate" rejection ->
-            ``_CorruptedHistoryError`` (the session history is poisoned; the
-            except-branch in the caller restarts the context).
+          - everything else delegates PER TEXT BLOCK to ``_check_error_text``
+            (quota -> ``_QuotaError``, rate limit -> ``_TransientError``,
+            the API's 400 "no low/high surrogate" rejection ->
+            ``_CorruptedHistoryError``, whose except arms trigger the deep
+            restart).
         Any other synthetic error (e.g. ConnectionRefused) keeps the old
         behaviour: it falls through to the log — an unrecognised signal must
         not become a terminal verdict.
@@ -598,7 +569,7 @@ class ClaudeCode(LMDriver):
         # "<synthetic>" is a CLI implementation constant (the model name it
         # stamps on fabricated messages) — a boundary adaptation to a closed
         # upstream, same as the regex above.
-        if err is None and getattr(message, "model", None) != "<synthetic>":
+        if not err and getattr(message, "model", None) != "<synthetic>":
             return  # real model output — never classify
 
         if err == "authentication_failed":
@@ -611,13 +582,14 @@ class ClaudeCode(LMDriver):
                 + (f" The CLI reported: {detail!r}" if detail else "")
                 + "\nRead https://github.com/xqyww123/Isa-Mini/blob/main/IsaMini/AoA/Readme.md for more information")
 
-        text = self._model_error_detail(message)
-        if text.startswith("You've hit your limit"):
-            raise _QuotaError(text)
-        if "Rate limit" in text or "Request rejected (429)" in text:
-            raise _TransientError(text)
-        if _CORRUPTED_HISTORY_RE.search(text):
-            raise _CorruptedHistoryError(text)
+        # Per block, not on the joined text: joining could interleave two
+        # blocks' characters into a phantom pattern match.
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            for block in content:
+                text = getattr(block, "text", None)
+                if isinstance(text, str) and text:
+                    self._check_error_text(text)
 
     @staticmethod
     def _model_error_detail(message: Any) -> str:
@@ -635,6 +607,70 @@ class ClaudeCode(LMDriver):
     def _check_result_error(self, message: 'ResultMessage') -> None:
         if message.is_error and message.result:
             self._check_error_text(message.result)
+
+    async def _pump_response(self, client: 'ClaudeSDKClient', sink: 'ClaudeCode',
+                             tag: str = "",
+                             on_result: Callable[[ResultMessage], None] | None = None,
+                             ) -> None:
+        """Drain one turn's message stream — the single pump behind both
+        ``_sdk_loop`` and ``_run_fork``. Logging and model timing land on
+        *sink* (the fork, in the fork case); dollars and tokens accumulate on
+        *self* (the parent, in the fork case — as before). *on_result* runs
+        after each ResultMessage is accounted (the fork's "completed" log).
+
+        A ``Chat_Restart`` from ``_classify_message`` is DEFERRED: the
+        synthetic notice is skipped (never logged as model output), the rest
+        of the stream — crucially the trailing ResultMessage, which carries
+        the CLI session's whole accounting — is still drained, and the
+        exception is raised only after the stream ends, so it reaches the
+        callers' arms BEFORE any retry bookkeeping. A later quota/transient
+        text in the same stream must not displace it (the wait-and-rebuild it
+        asks for is doomed on a poisoned session); other classifications
+        (auth/quota/transient) raise immediately as before. No timeout on the
+        drain (R24): the loop has never had a per-turn timeout, and a CLI that
+        wedges without closing the stream is a pre-existing risk class with
+        zero observations."""
+        corrupted: Chat_Restart | None = None
+        async for message in client.receive_response():
+            try:
+                if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
+                    self._check_rate_limit_event(message)
+                    continue
+                # Structural check first: a synthetic error message also
+                # carries the failure text in its content, which would
+                # otherwise be logged as if the model had said it.
+                self._classify_message(message)
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    for block in content:
+                        text = getattr(block, "text", None)
+                        if isinstance(text, str) and text:
+                            sink.log_model_output(f"{tag} {text}" if tag else text)
+                        thinking = getattr(block, "thinking", None)
+                        if isinstance(thinking, str) and thinking:
+                            sink.log_model_thinking(
+                                f"{tag} {thinking}" if tag else thinking)
+                if isinstance(message, ResultMessage):
+                    if sink._model_time_start is not None:
+                        sink.total_model_time += time() - sink._model_time_start
+                        sink._model_time_start = None
+                    self._accumulate_cost(message)
+                    self._check_result_error(message)
+                    if on_result is not None:
+                        on_result(message)
+            except Chat_Restart as e:
+                corrupted = corrupted or e
+                continue
+            except (_QuotaError, _TransientError):
+                # Body-level, not classify-only: the result leg
+                # (_check_result_error) and the rate-limit leg can raise
+                # these too, and none of them may displace a cached
+                # corruption.
+                if corrupted is not None:
+                    raise corrupted
+                raise
+        if corrupted is not None:
+            raise corrupted
 
     async def _sdk_loop(self):
         """Run using the Claude Agent SDK (embedded mode)."""
@@ -658,29 +694,9 @@ class ClaudeCode(LMDriver):
                     await client.query(prompt)
                     self._model_time_start = time()
                     while True:
-                        async for message in client.receive_response():
-                            if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
-                                self._check_rate_limit_event(message)
-                                continue
-                            # Structural check first: a synthetic error message also
-                            # carries the failure text in its content, which would
-                            # otherwise be logged as if the model had said it.
-                            self._classify_message(message)
-                            content = getattr(message, "content", None)
-                            if isinstance(content, list):
-                                for block in content:
-                                    text = getattr(block, "text", None)
-                                    if isinstance(text, str) and text:
-                                        self.log_model_output(text)
-                                    thinking = getattr(block, "thinking", None)
-                                    if isinstance(thinking, str) and thinking:
-                                        self.log_model_thinking(thinking)
-                            if isinstance(message, ResultMessage):
-                                if self._model_time_start is not None:
-                                    self.total_model_time += time() - self._model_time_start
-                                    self._model_time_start = None
-                                self._accumulate_cost(message)
-                                self._check_result_error(message)
+                        # A deferred Chat_Restart raises out of the pump here,
+                        # BEFORE the retry bookkeeping below.
+                        await self._pump_response(client, self)
                         if self.check_budget():
                             break
                         unfinished_nodes = self.proof_scope_unfinished_nodes()
@@ -699,44 +715,50 @@ class ClaudeCode(LMDriver):
                 # spinning to the retry limit, which reported the infrastructure failure
                 # as ResourceExhausted -- a proof that ran out of budget. Mirrors
                 # the ``except LMUnreachable`` handler in ``driver_api._api_loop``.
-                # Terminal => the outer loop breaks.
-                # Never clobber an already-terminal verdict: a tool handler may have set
-                # Surrender/Refute and called interrupt(), which is fire-and-forget (see
-                # the ``TechnicalFailure`` comment in model.py), so the CLI can still
-                # emit one more turn. A
-                # non-terminal Restart/Refresh IS overwritten on purpose -- we must stop,
-                # not loop again.
-                if self.quit_info is None or not self.quit_info.is_terminal:
-                    self.quit_info = ResourceUnavailable(detail=str(e))
+                # Terminal => the outer loop breaks. ``settle_quit`` keeps a
+                # concurrent terminal verdict and overwrites a non-terminal
+                # Restart/Refresh on purpose -- we must stop, not loop again.
+                if isinstance(self.quit_info, DeepRestart):
+                    # This arm always breaks, so the pending deep restart can
+                    # never happen; clear it or settle_quit would refuse the
+                    # terminal verdict and the run would end labelled
+                    # "deep_restart" (ML: unrecognized reason).
+                    self.quit_info = None
+                self.settle_quit(ResourceUnavailable(detail=str(e)))
                 self.warn_AoA_opr(f"LM unreachable: {e}", to_isabelle=True)
                 break
-            except _CorruptedHistoryError as e:
-                # The CLI session history is poisoned (see the exception's
-                # docstring); discard it and restart the context. The proof
-                # tree survives — only the chat history is lost. A restart
-                # spends one retry: it sends a fresh full attempt, so it is
-                # priced like one; the old behaviour (8 x 400 burning the whole
-                # retry budget on a doomed session) cannot recur because the
-                # notice now raises inside the message loop and never reaches
-                # the turn-end _retry_count bookkeeping.
-                self._retry_count += 1
-                self.warn_AoA_opr(f"API error, restarting context: {e}",
-                                  to_isabelle=True)
-                self._log_meta("CORRUPTED_HISTORY_RESTART",
-                               cli_record=str(self._cli_project_dir()))
-                if self.check_budget():
-                    # Retry limit / shared budget exhausted, or a concurrent
-                    # terminal verdict stands (check_budget never overwrites
-                    # quit_info) — stop, keeping the existing verdict.
-                    break
-                self._reset_view_state()
-                self.log_AoA_opr("Context restarted")
-                continue
+            except Chat_Restart as e:
+                # Signal only — the loop-bottom DeepRestart branch is the sole
+                # performer (retry charge, budget check, warning, teardown).
+                await self.request_deep_restart(
+                    detail=str(e), cli_record=str(self._cli_project_dir()))
+                # No break, no continue: fall through to the bottom dispatcher.
+                #   major:  quit_info is now DeepRestart -> bottom branch runs
+                #   worker: own quit_info is terminal TechnicalFailure -> break
+                #   major with a standing terminal verdict: settle_quit
+                #     refused the signal -> break, verdict kept
             finally:
                 self._client = None
 
-            if not isinstance(self.quit_info, (Restart, Refresh)):
+            if not isinstance(self.quit_info, (Restart, Refresh, DeepRestart)):
                 break
+
+            if isinstance(self.quit_info, DeepRestart):
+                # The sole performer of a deep restart. Must sit BEFORE the
+                # unlabelled Restart tail below, which clears quit_info without
+                # an isinstance test and would swallow the signal. Clear the
+                # signal FIRST — check_budget short-circuits on any pending
+                # quit_info (the C-F2 fix).
+                qi, self.quit_info = self.quit_info, None
+                self._retry_count += 1
+                if self.check_budget():
+                    break
+                self.warn_AoA_opr(f"API error, restarting context: {qi.detail}",
+                                  to_isabelle=True)
+                await self._deep_restart()
+                if self.check_budget():
+                    break     # a terminal verdict landed during the teardown
+                continue
 
             if isinstance(self.quit_info, Refresh):
                 self._refresh_summary = self.quit_info.briefing
@@ -754,149 +776,6 @@ class ClaudeCode(LMDriver):
 
         self.log_proof()
 
-    async def _run_standalone(self):
-        """Run Claude Code CLI in a tmux session (standalone/interactive mode)."""
-        assert self._session_id is not None, "_run_standalone called before initialize()"
-        import uuid
-        # Claude CLI requires a UUID for --session-id
-        claude_session_id = str(uuid.uuid4())
-        self._conversation_id = claude_session_id
-        self._proof_complete = asyncio.Event()
-        tmux_session = f"proof_{self._session_id}"
-
-        # Write MCP config file
-        assert self._http_server is not None
-        config_path = os.path.join(self.working_dir, "mcp_config.json")
-        with open(config_path, "w") as f:
-            json.dump(self._http_server.mcp_config_json(self._session_id), f)
-
-        # Write launcher script with permission settings mirroring embedded mode:
-        # - proof.yaml: Read/Grep only (Write/Edit denied — must use proof edit tool)
-        # - .claude/plans/: all operations allowed
-        # - Bash: denied
-        # - Interaction state: handled by _check_tool_permission in mcp_http_server
-        yaml_path_abs = os.path.abspath(self.YAML_path)
-        reset_url = f"http://127.0.0.1:{self._http_server.port}/reset_cache/{self._session_id}"
-        settings = json.dumps({
-            "autoCompactWindow": _auto_compact_window(self._model, self.COMPACT_THRESHOLD),
-            "permissions": {
-                "allow": [
-                    f"Read(//{yaml_path_abs})",
-                    f"Grep(//{yaml_path_abs})",
-                    "Read(//.claude/plans/**)",
-                    "Write(//.claude/plans/**)",
-                    "Edit(//.claude/plans/**)",
-                    "Grep(//.claude/plans/**)",
-                    "Read(//.claude/skills/**)",
-                ],
-                "deny": [
-                    "Bash",
-                    "Write",
-                    "Edit",
-                ]
-            },
-            "hooks": {
-                "PreCompact": [{
-                    "matcher": "",
-                    "hooks": [{
-                        "type": "command",
-                        "command": f"curl -s {reset_url}",
-                    }],
-                }],
-            },
-        })
-        allowed = ",".join(self._role_allowed_tools())
-        launcher_path = os.path.join(self.working_dir, "launch_claude.sh")
-        error_log = os.path.join(self.working_dir, "claude_error.log")
-        initial_prompt = await self.initial_prompt()
-        with open(launcher_path, "w") as f:
-            f.write("#!/bin/bash\n")
-            f.write(f"cd {shlex.quote(self.working_dir)}\n")
-            f.write("unset CLAUDECODE\n")  # prevent nesting protection
-            f.write(f"claude --session-id {shlex.quote(claude_session_id)} "
-                    f"--model {shlex.quote(self._model)} "
-                    f"--mcp-config {shlex.quote(config_path)} "
-                    f"--strict-mcp-config "
-                    f"--allowed-tools {shlex.quote(allowed)} "
-                    f"--settings {shlex.quote(settings)} "
-                    f"-- {shlex.quote(initial_prompt)} "
-                    f"2>{shlex.quote(error_log)}\n")
-            f.write(f"echo \"EXIT CODE: $?\" >> {shlex.quote(error_log)}\n")
-        os.chmod(launcher_path, 0o755)
-
-        # Kill any stale tmux session with the same name (from a previous run)
-        await (await asyncio.create_subprocess_exec(
-            'tmux', 'kill-session', '-t', tmux_session,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)).wait()
-
-        # Launch tmux session
-        proc = await asyncio.create_subprocess_exec(
-            'tmux', 'new-session', '-d', '-x', '300', '-y', '80',
-            '-s', tmux_session, launcher_path,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await proc.wait()
-        self.log_AoA_opr(f"Launched tmux session '{tmux_session}'")
-
-        # Start web terminal server, register YAML path, and set up push notifications
-        from .web_terminal import WebTerminalServer
-        web_terminal = await WebTerminalServer.get_or_create()
-        web_terminal.register_yaml(tmux_session, self.YAML_path)
-        self._on_yaml_refresh = lambda qv: asyncio.create_task(
-            web_terminal.notify_yaml_update(tmux_session, qv))
-        self._on_operation_status = lambda msg: asyncio.create_task(
-            web_terminal.notify_status(tmux_session, msg))
-        self._on_log_callback = lambda msg: asyncio.create_task(
-            web_terminal.notify_status(tmux_session, msg))
-        # Push initial YAML + quickview so the web page shows content before any operation
-        self.refresh_YAML()
-        web_terminal_url = web_terminal.session_url(tmux_session)
-        await self.root.ml_state.connection.writeln(
-            f"Interactive proof session started. Open web terminal: {web_terminal_url}")
-
-        # Wait for either proof completion, tmux death, or budget timeout.
-        # Guarded: shared Runtime field, see _sdk_loop.
-        if self._budget_start_time is None:
-            self._budget_start_time = time()
-        proof_task = asyncio.create_task(self._proof_complete.wait())
-        monitor_task = asyncio.create_task(self._monitor_tmux(tmux_session))
-
-        try:
-            done, pending = await asyncio.wait(
-                [proof_task, monitor_task],
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=self.timeout_seconds)
-            for t in pending:
-                t.cancel()
-            if not done:
-                self.quit_info = ResourceExhausted(
-                    f"timeout ({self.timeout_seconds}s)")
-                self.log_budget_exhausted(f"timeout ({self.timeout_seconds}s)")
-        finally:
-            self._proof_complete = None
-            self._on_yaml_refresh = None
-            self._on_operation_status = None
-            self._on_log_callback = None
-            web_terminal.unregister_yaml(tmux_session)
-            # Send proof_complete if not already sent (e.g., tmux died)
-            if not self.root.is_proof_finished():
-                await web_terminal.notify_status(tmux_session,
-                    {"type": "proof_complete", "success": False})
-            # Kill tmux session
-            await (await asyncio.create_subprocess_exec(
-                'tmux', 'kill-session', '-t', tmux_session,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)).wait()
-
-        # Read error log if it exists
-        error_log = os.path.join(self.working_dir, "claude_error.log")
-        if os.path.exists(error_log):
-            with open(error_log) as f:
-                error_content = f.read().strip()
-            if error_content:
-                self.warn_AoA_opr(f"Claude error log:\n{error_content}")
-
-        self._read_cost_from_session_log()
-        self.log_proof()
-
     def _pricing(self) -> dict[str, float]:
         # `_pricing_key` strips a context-window suffix (e.g. `[1m]`); unknown
         # Claude versions fall back to the opus default. See docs/COST_ACCOUNTING.md.
@@ -906,76 +785,6 @@ class ClaudeCode(LMDriver):
         """Where the Claude Code CLI stores this working dir's session JSONLs."""
         return (Path.home() / ".claude" / "projects"
                 / re.sub(r'[^a-zA-Z0-9]', '-', self.working_dir))
-
-    def _read_cost_from_session_log(self) -> None:
-        """Read token usage from Claude Code JSONL session logs (standalone mode).
-
-        Reads ALL .jsonl files in the project directory to capture costs from
-        both the main CLI session and any fork sub-sessions (which the Agent SDK
-        writes to separate .jsonl files in the same project directory).
-
-        Claude Code writes multiple assistant records per API call (one per
-        streamed content block), each carrying the same ``usage`` of that call.
-        We deduplicate by ``requestId`` so each API call is counted once, keeping
-        the last record (which has the final ``output_tokens``).
-        """
-        if self._conversation_id is None:
-            return
-        project_dir = self._cli_project_dir()
-        if not project_dir.exists():
-            self.log_cost(f"Project directory not found: {project_dir}")
-            return
-        jsonl_files = list(project_dir.glob("*.jsonl"))
-        if not jsonl_files:
-            self.log_cost(f"No session logs found in: {project_dir}")
-            return
-
-        # Deduplicate by requestId alone — fork_session=True copies parent
-        # history into the fork JSONL, so the same requestId appears in multiple
-        # files.  Keep the last record per requestId (final output_tokens).
-        usage_by_request: dict[str, dict] = {}
-        for session_log in jsonl_files:
-            try:
-                with open(session_log) as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        record = json.loads(line)
-                        if record.get("type") != "assistant":
-                            continue
-                        rid = record.get("requestId")
-                        usage = (record.get("message") or {}).get("usage")
-                        if rid and usage:
-                            usage_by_request[rid] = usage
-            except Exception as e:
-                self.log_cost(f"Failed to read session log {session_log.name}: {e}")
-
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cache_creation_input_tokens = 0
-        self.total_cache_read_input_tokens = 0
-
-        # Anthropic-native usage: input_tokens already excludes cache → from_uncached.
-        for usage in usage_by_request.values():
-            self._accumulate_usage(Usage.from_uncached(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_read=usage.get("cache_read_input_tokens", 0),
-                cache_creation=usage.get("cache_creation_input_tokens", 0)))
-
-        self._compute_cost()
-
-    async def _monitor_tmux(self, session_name: str):
-        """Poll tmux session status. Returns when session dies."""
-        while True:
-            await asyncio.sleep(2)
-            proc = await asyncio.create_subprocess_exec(
-                'tmux', 'has-session', '-t', session_name,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            if (await proc.wait()) != 0:
-                self.warn_AoA_opr(f"tmux session '{session_name}' exited")
-                return
 
     def _accumulate_cost(self, message: ResultMessage) -> None:
         """Per-turn accounting from a ResultMessage. Cost is the REMOTE-reported
@@ -989,7 +798,12 @@ class ClaudeCode(LMDriver):
         double-counted earlier turns whenever one session emitted several
         ResultMessages (retry prompts, fork nudges). ``total_cost_usd`` must
         stay an accumulator (+=) because ``_settle_costs`` merges worker costs
-        into it — never assign to it wholesale."""
+        into it — never assign to it wholesale.
+
+        Always called on the session that OWNS the client loop — the parent,
+        for fork pumps — so ``_cost_by_session`` sees every CLI session's
+        running total on one ledger; a deep restart keeps that dict, and the
+        rebuilt chat simply appears under its new CLI session id."""
         self.log_cost(f"session={message.session_id} usage={message.usage} "
                       f"total_cost_usd={message.total_cost_usd}")
         seen = self._cost_by_session.get(message.session_id, 0.0)
@@ -1015,6 +829,12 @@ class ClaudeCode(LMDriver):
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
         task = loop.create_task(self._run_fork(interaction, prompt_text), context=ctx)
+        # Live-fork registry: lets a deep restart cancel forks whose host task
+        # nothing else owns (e.g. `query` runs inline in an ASGI request task).
+        # Done-callback, not a finally in _run_fork: a task cancelled before
+        # its first step never runs the body's finally and would leak.
+        self.runtime._live_forks.add(task)
+        task.add_done_callback(self.runtime._live_forks.discard)
         return await task
 
     async def _run_fork(self, interaction: Interaction, prompt_text: str) -> Any:
@@ -1055,6 +875,9 @@ class ClaudeCode(LMDriver):
             fork_session=fork_session,
             cwd=self.working_dir,
             permission_mode="default",
+            # Parent's list ON PURPOSE: the tool roster is part of the resumed
+            # conversation's cached prefix; fork narrowing happens in
+            # permission_control instead.
             allowed_tools=self._role_allowed_tools(),
             mcp_servers={"proof": {"type": "http", "url": fork_url}},
             env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
@@ -1096,27 +919,10 @@ class ClaudeCode(LMDriver):
                 await fork_client.query(fork_prompt)
                 fork._model_time_start = time()
                 while True:
-                    async for message in fork_client.receive_response():
-                        if RateLimitEvent is not None and isinstance(message, RateLimitEvent):
-                            self._check_rate_limit_event(message)
-                            continue
-                        self._classify_message(message)
-                        content = getattr(message, "content", None)
-                        if isinstance(content, list):
-                            for block in content:
-                                text = getattr(block, "text", None)
-                                if isinstance(text, str) and text:
-                                    fork.log_model_output(f"{tag} {text}")
-                                thinking = getattr(block, "thinking", None)
-                                if isinstance(thinking, str) and thinking:
-                                    fork.log_model_thinking(f"{tag} {thinking}")
-                        if isinstance(message, ResultMessage):
-                            if fork._model_time_start is not None:
-                                fork.total_model_time += time() - fork._model_time_start
-                                fork._model_time_start = None
-                            self._accumulate_cost(message)
-                            self._check_result_error(message)
-                            fork.log_interaction("fork", f"{tag} completed: subtype={message.subtype}")
+                    await self._pump_response(
+                        fork_client, fork, tag=tag,
+                        on_result=lambda m: fork.log_interaction(
+                            "fork", f"{tag} completed: subtype={m.subtype}"))
                     assert fork.fork_pending is not None
                     if fork.fork_pending.answer.done():
                         break
@@ -1127,6 +933,9 @@ class ClaudeCode(LMDriver):
                     fork._model_time_start = time()
               fork._client = None
               break
+            # No LMUnreachable arm on purpose: it propagates out of this fork
+            # into the caller's declared arm (ToolExecutor.execute), which
+            # settles a terminal ResourceUnavailable on the calling session.
             except _QuotaError as e:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
                                   + (f" ({e})" if str(e) else ""), to_isabelle=True)
@@ -1134,30 +943,22 @@ class ClaudeCode(LMDriver):
             except _TransientError as e:
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
-            except _CorruptedHistoryError as e:
-                # Under FORKING_WITH_CTXT the fork resumes the parent's session,
-                # so every rebuild replays the poisoned prefix — retrying as-is
-                # is doomed. Degrade to a context-free rebuild (the existing
-                # FORKING_NO_CTXT configuration): the fork prompt carries all
-                # the information the answer needs, which is why that mode
-                # works at all. For the NO_CTXT modes these two assignments are
-                # no-ops. Counter and verdict live on the FORK, never on self
-                # (the parent): a terminal fork verdict is copied onto the
-                # parent by the SessionQuit rail and would kill the proof.
-                fork._retry_count += 1
-                self.warn_AoA_opr(f"{tag} API error, restarting context: {e}",
-                                  to_isabelle=True)
-                fork._log_meta("CORRUPTED_HISTORY_RESTART",
-                               cli_record=str(self._cli_project_dir()))
-                if fork.check_budget():
-                    # Terminal ResourceExhausted on the fork: the quit_info
-                    # setter settles the answer future with SessionQuit — the
-                    # existing terminal path for any fork ending.
-                    break
-                fork_options.resume = None
-                fork_options.fork_session = False
-                continue
+            except Chat_Restart as e:
+                # Abandon (弃子): the corruption may live in the parent prefix
+                # this fork resumed, so no local rebuild is trustworthy — the
+                # fork gives up its work and signals the deep restart. Its
+                # self-judgment (a terminal quit_info) settles the answer
+                # future via the SessionQuit rail, so the tail assert holds;
+                # the parent's settle_quit refuses that terminal verdict while
+                # its own DeepRestart is pending.
+                assert fork.fork_pending is not None
+                if fork.fork_pending.answer.done():
+                    break                       # answer already delivered
+                await fork.request_deep_restart(
+                    detail=str(e), cli_record=str(self._cli_project_dir()))
+                break
         finally:
+            fork._client = None      # never leave it pointing at a dead client
             if self._http_server is not None and fork._session_id is not None:
                 await self._http_server.unregister_session(fork._session_id)
             self.total_isabelle_time += fork.total_isabelle_time
@@ -1175,49 +976,3 @@ class ClaudeCode(LMDriver):
     def refresh_YAML(self):
         with open(self.YAML_path, 'w', encoding="utf-8") as f:
             self.print_proof_scope(0, MyIO(f), update_line=True, show_warnings=True)
-        if self._on_yaml_refresh is not None:
-            buf = StringIO()
-            self.quickview_proof_scope(0, MyIO(buf))
-            self._on_yaml_refresh(buf.getvalue())
-
-    _SKIP_STATUS_OPS = frozenset({"SKIP", "SORRY", "NEXT", "END"})
-
-    _SKIP_RETRIEVAL = frozenset({"none selected", "unfound"})
-
-    def log_retrieval(self, query: str, results: list[str], *, quiet: bool = False):
-        super().log_retrieval(query, results, quiet=quiet)
-        if self._on_operation_status is not None:
-            if results and not any(r in self._SKIP_RETRIEVAL for r in results):
-                self._on_operation_status({
-                    "type": "retrieval", "query": query, "results": results})
-
-    def on_log(self, event_type: str, data: dict[str, Any]):
-        if self._on_log_callback is not None:
-            self._on_log_callback({
-                "type": "log", "event": event_type, **data})
-
-    def on_operation_start(self, step_id: str, operation: str, args: Any):
-        if self._on_operation_status is not None and operation not in self._SKIP_STATUS_OPS:
-            self._on_operation_status({
-                "type": "status", "step": step_id,
-                "operation": operation, "args": _serialize_args(args),
-                "state": "running"})
-
-    def on_operation_end(self, step_id: str, operation: str, args: Any, status: EvaluationStatus):
-        super().on_operation_end(step_id, operation, args, status)
-        if self._on_operation_status is not None and operation not in self._SKIP_STATUS_OPS:
-            msg: dict[str, Any] = {
-                "type": "status", "step": step_id,
-                "operation": operation, "args": _serialize_args(args),
-                "state": "done",
-                "time": status.time,
-                "success": status.status == EvaluationStatus.Status.SUCCESS}
-            if status.reason is not None:
-                msg["error"] = str(status.reason)
-            self._on_operation_status(msg)
-
-
-@agent_driver("ClaudeCode_Interactive")
-def _claude_code_interactive(logger, log_dir, *, argument=None, **kwargs):
-    return ClaudeCode(logger, log_dir, interactive_web_terminal=True,
-                      argument=argument, **kwargs)

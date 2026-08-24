@@ -23,8 +23,8 @@ from claude_agent_sdk import ResultMessage
 from claude_agent_sdk.types import AssistantMessage, TextBlock
 
 from IsaMini.AoA.driver_claude_code import ClaudeCode, _CorruptedHistoryError
-from IsaMini.AoA.language_model_driver import _QuotaError, _TransientError
-from IsaMini.AoA.model import LMUnreachable
+from IsaMini.AoA.language_model_driver import Chat_Restart, _QuotaError, _TransientError
+from IsaMini.AoA.model import AoA_Error, LMUnreachable
 
 # The incident's verbatim notice (log 0233B0025_ECFBF4, 8 identical turns).
 CORRUPT_400 = ("API Error: 400 The request body is not valid JSON: "
@@ -45,8 +45,11 @@ def _result(**kw):
     return ResultMessage(**base)
 
 
-def _assistant(error=None, text=None, model="m"):
-    content = [TextBlock(text=text)] if text else []
+def _assistant(error=None, text=None, model="m", blocks=None):
+    if blocks is not None:
+        content = [TextBlock(text=t) for t in blocks]
+    else:
+        content = [TextBlock(text=text)] if text else []
     return AssistantMessage(content=content, model=model, error=error)
 
 
@@ -152,3 +155,48 @@ def test_unrecognised_result_message_is_left_alone(drv):
     """No is_error fail-safe on ResultMessage in AoA — see the docstring on
     _classify_message for why an is_error result is normal here."""
     drv._classify_message(_result(is_error=True, result="something novel"))
+
+
+# --- the v4 single-table shape ----------------------------------------------
+
+def test_corruption_is_a_chat_restart_not_an_aoa_error():
+    """R9/R18: control flow, not a failure report — an AoA_Error base would let
+    the whole-body `except AoA_Error` tool handlers swallow the signal."""
+    assert issubclass(_CorruptedHistoryError, Chat_Restart)
+    assert not issubclass(Chat_Restart, AoA_Error)
+
+
+def test_empty_error_field_is_not_synthetic(drv):
+    """The gate is `not err`: err='' (falsy, no signal) on a real model name
+    must not push the message into pattern matching."""
+    drv._classify_message(_assistant(error="", text=CORRUPT_400))
+
+
+def test_patterns_checked_per_block_not_joined(drv):
+    """Quota sentence living whole in the SECOND block must still be seen
+    (delegation is per text block, never on a joined string)."""
+    with pytest.raises(_QuotaError):
+        drv._classify_message(_assistant(
+            error="unknown",
+            blocks=["Something went wrong.", "You've hit your limit until 3pm"]))
+
+
+def test_multiline_notice_still_matches(drv):
+    """re.S insurance: a future CLI wrapping the notice must not defeat it."""
+    with pytest.raises(_CorruptedHistoryError):
+        drv._classify_message(_assistant(
+            error="unknown",
+            text=("API Error: 400 The request body\nis not valid JSON: "
+                  "no low surrogate in string: line 1 column 3 (char 2)")))
+
+
+def test_result_leg_recognises_corruption(drv):
+    """_check_result_error shares the pattern table, so a CLI that reports the
+    400 only on the ResultMessage still triggers the deep restart."""
+    with pytest.raises(_CorruptedHistoryError):
+        drv._check_result_error(_result(is_error=True, result=CORRUPT_400))
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main([__file__, "-q"]))

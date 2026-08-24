@@ -26,11 +26,13 @@ from Isabelle_Semantic_Embedding.semantics import (
 EXACT_NAME_BUNDLE_LIMIT = 20
 
 if TYPE_CHECKING:
-    # `LMDriver` (the session/driver base) lives in `language_model_driver`, which
-    # imports `Session` from this module — so a runtime import would be circular.
-    # The annotations that reference it are string forward-refs; this guarded
-    # import only feeds the type checker and runs no code at import time.
+    # `LMDriver` (the session/driver base) lives in `language_model_driver`, and
+    # `ToolExecutor` in `mcp_http_server` — both of which import `Session` from
+    # this module, so a runtime import would be circular. The annotations that
+    # reference them are string forward-refs; this guarded import only feeds
+    # the type checker and runs no code at import time.
     from .language_model_driver import LMDriver
+    from .mcp_http_server import ToolExecutor
 
 AGENT_EXPR_LIMIT = 200
 AGENT_GOAL_CHAR_LIMIT = 400
@@ -727,8 +729,18 @@ class Refresh:
     briefing: str = ""
     detail: str | None = None
 
+@dataclass
+class DeepRestart:
+    # The signal that the major session must deep-restart (corrupted CLI chat
+    # history — see Session.request_deep_restart / Session._deep_restart).
+    # Standalone, NOT a Restart subclass: the drivers' isinstance((Restart,
+    # Refresh)) branches would silently route it into the light restart path.
+    reason: ClassVar[str] = "deep_restart"
+    is_terminal: ClassVar[bool] = False
+    detail: str | None = None
+
 QuitInfo = (ResourceExhausted | ResourceUnavailable | Surrender | Refute
-            | TechnicalFailure | Restart | Refresh)
+            | TechnicalFailure | Restart | Refresh | DeepRestart)
 
 
 class DriverArgumentError(AoA_Error):
@@ -11890,6 +11902,14 @@ class Runtime:
         self._depth_limit_exceeded: bool = False
         self.total_tool_calls: int = 0
         self._budget_start_time: float | None = None
+        # Budget-exempt spans (quota waits, missing-lemma surveys): time that
+        # does not count against the wall-clock budget. Depth-counted so
+        # overlapping spans record their union and nested ones count once.
+        # Runtime-wide on purpose: all sessions share one deadline, so while
+        # ANY session sits in an exempt span the clock freezes for everyone.
+        self._exempt_depth: int = 0
+        self._exempt_t0: float | None = None
+        self._total_exempt_time: float = 0.0
         self.worker_max_tool_calls: int = 500
         self.deleted_archive: list[DeletedEntry] = []
         # Every missing-lemma item reported this invocation (survey answers +
@@ -11919,6 +11939,56 @@ class Runtime:
         # interaction is a no-op; experience RETRIEVAL (`query kinds:["experience"]`)
         # is unaffected. Tree-wide (like task): forks inherit it via this runtime.
         self.enable_write_memory: bool = True
+        # Live interaction-fork tasks, tree-wide. Needed by the deep restart:
+        # an interaction fork's host may be an ASGI request task (`query` runs
+        # inline in `execute`) that no session owns, so nothing else can reach
+        # it. Registered in the driver's `_do_fork`; deregistration is a
+        # done-callback installed there (a finally in the fork body would leak
+        # tasks cancelled before their first step).
+        self._live_forks: 'set[asyncio.Task]' = set()
+
+    async def cancel_live_forks(self) -> None:
+        """Cancel and await every registered live interaction fork.
+        Snapshot first: the done-callbacks deregister concurrently."""
+        tasks = [t for t in list(self._live_forks) if not t.done()]
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            with contextlib.suppress(BaseException):
+                await t
+
+    @contextlib.contextmanager
+    def budget_exempt(self):
+        """Mark the enclosed span exempt from the wall-clock budget.
+
+        CONTRACT (do not "improve"): this must stay a SYNC @contextmanager
+        with the depth increment BEFORE the yield — no await means no
+        cancellation point, so the increment cannot be skipped; and `with`
+        runs the finally on EVERY exit including CancelledError out of an
+        inner await, so the depth cannot leak. Never make this an async CM
+        and never move the increment after an await."""
+        if self._exempt_depth == 0:
+            self._exempt_t0 = time()
+        self._exempt_depth += 1
+        try:
+            yield
+        finally:
+            self._exempt_depth -= 1
+            if self._exempt_depth == 0:
+                assert self._exempt_t0 is not None
+                self._total_exempt_time += time() - self._exempt_t0
+                self._exempt_t0 = None
+
+    def elapsed_working_time(self) -> float | None:
+        """Wall-clock time worked so far, excluding budget-exempt spans (an
+        open span counts up to now, so the clock is frozen while it runs).
+        None before the budget clock has started."""
+        if self._budget_start_time is None:
+            return None
+        exempt = self._total_exempt_time
+        if self._exempt_t0 is not None:
+            exempt += time() - self._exempt_t0
+        return time() - self._budget_start_time - exempt
 
     def next_pit_name(self) -> str:
         i = self._pit_counter
@@ -12093,6 +12163,13 @@ class Session:
         self._subagent_extstep_bypass: 'set[str]' = set()
         self._nf_pending_interaction: 'Interaction | None' = None
         self._channel: 'InteractionChannel | None' = None
+        # This session's ToolExecutor, when one exists (every creation path
+        # registers here, via ToolExecutor's own __init__). The parked-task
+        # state of a non-forking interaction lives on the executor; this
+        # back-reference is what lets the deep restart's
+        # `discard_parked_interaction` reach and reset it (under ClaudeCode
+        # the executor is otherwise a closure local of `_create_mcp_server`).
+        self._executor: 'ToolExecutor | None' = None
         # Background tasks owned by this session (e.g. a tool task suspended on
         # a non-forking interaction); still-pending ones are cancelled by
         # `close()` so they never outlive the session (see `adopt_task`).
@@ -12233,6 +12310,10 @@ class Session:
     @_budget_start_time.setter
     def _budget_start_time(self, v: float | None):
         self.runtime._budget_start_time = v
+    def budget_exempt(self):
+        return self.runtime.budget_exempt()
+    def elapsed_working_time(self) -> float | None:
+        return self.runtime.elapsed_working_time()
     @property
     def worker_max_tool_calls(self) -> int:
         return self.runtime.worker_max_tool_calls
@@ -12264,8 +12345,37 @@ class Session:
                 # interaction.yaml from a fork that really answered. Say so here.
                 self.log_interaction("fork", f"settled without an answer: {q.reason}")
 
+    def settle_quit(self, q: 'QuitInfo') -> None:
+        """Guarded verdict write, for writers that may RACE a standing verdict
+        (the fire-and-forget interrupt can let one more turn's writes in).
+        Precedence: terminal > DeepRestart > everything else. A few sites
+        write ``quit_info`` raw ON PURPOSE — their write must land
+        unconditionally (``_wind_down_worker``, ``check_budget``'s and the
+        refresh tool's structurally-guarded writes, and the driver loops' own
+        clear/consume steps).
+        A terminal verdict is never overwritten (the fire-and-forget interrupt
+        can let one more turn race in — the original clobbering bug); a pending
+        DeepRestart is not displaced by a child's terminal verdict either (the
+        restart re-dispatches that child's work) nor degraded to a light
+        Restart/Refresh (which would skip the _conversation_id reset and leave
+        a re-poisoning window). Non-terminal values overwrite freely (R20)."""
+        cur = self.quit_info
+        if cur is not None and (cur.is_terminal or isinstance(cur, DeepRestart)):
+            return
+        self.quit_info = q
+
     def next_pit_name(self) -> str:
         return self.runtime.next_pit_name()
+
+    @property
+    def major(self) -> 'Session':
+        """The major (planner) session of this proof tree, reached by walking
+        the parent chain. NOT ``Session.root`` (the Root TREE NODE) and NOT
+        ``Root.session`` (a contextvar returning the CURRENT session)."""
+        s = self
+        while s.parent is not None:
+            s = s.parent
+        return s
 
     @property
     def is_major(self) -> bool:
@@ -12381,10 +12491,12 @@ class Session:
         self.missing_lemmas_log_path = self.log_dir / "missing_lemmas.yaml"
 
         # Open log files in append mode, keep them open.
-        # errors="backslashreplace": diagnostic sinks must survive lone UTF-16
-        # surrogates (corrupted upstream model output) instead of raising
-        # UnicodeEncodeError and killing the whole command. proof.yaml stays
-        # strict — the tree is protected at the tool-dispatch entry instead.
+        # errors="backslashreplace" is defence in depth only: the sole writer
+        # is _append_yaml -> yaml.dump, and PyYAML itself escapes lone UTF-16
+        # surrogates (losslessly, into a double-quoted scalar), so this never
+        # fires today. The path that really crashed on them was _log_meta —
+        # fixed there. proof.yaml stays strict — the tree is protected at the
+        # tool-dispatch entry instead.
         self.interaction_log_file = open(self.interaction_log_path, 'a', encoding='utf-8', errors='backslashreplace')
         self.proofs_log_file = open(self.proofs_log_path, 'a', encoding='utf-8', errors='backslashreplace')
         self.proof_oprs_log_file = open(self.proof_oprs_log_path, 'a', encoding='utf-8', errors='backslashreplace')
@@ -12446,10 +12558,13 @@ class Session:
         # COMPACTION, …) — is attributable. A caller-supplied role in **data wins.
         entry = {"event": event_type, "ts": datetime.now().isoformat(),
                  "role": self.role_label, **data}
-        # ensure_ascii=True: escapes lone surrogates to \udXXX literals
-        # (lossless, reversible) instead of raising on .encode below.
-        line = json.dumps(entry, ensure_ascii=True, default=str) + "\n"
-        self._meta_log_writer.write(line.encode("utf-8"))
+        # Normal Unicode is written as-is (greppable); a lone surrogate cannot
+        # be UTF-8-encoded, so backslashreplace writes it as the \udXXX
+        # literal — the same lossless, reversible bytes ensure_ascii=True
+        # would have produced for it.
+        line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+        self._meta_log_writer.write(
+            line.encode("utf-8", errors="backslashreplace"))
         self._meta_log_writer.flush(zstandard.FLUSH_FRAME)
 
     def _atexit_close_meta(self):
@@ -12779,6 +12894,57 @@ class Session:
         task.add_done_callback(self._owned_tasks.discard)
         return task
 
+    async def _cancel_owned_tasks(self):
+        """Cancel and await every still-pending owned task (see ``adopt_task``).
+        Shared by ``close()`` and ``_deep_restart``."""
+        pending = [t for t in self._owned_tasks if not t.done()]
+        for t in pending:
+            t.cancel()
+        for t in pending:
+            with contextlib.suppress(BaseException):
+                await t
+
+    async def discard_parked_interaction(self):
+        """Discard a tool task parked on a non-forking interaction. The state
+        lives on the ToolExecutor — see its ``discard_parked_interaction`` for
+        the unsplittable three-step reset. No executor (e.g. the by-hand test
+        harness) means nothing can be parked, so there is nothing to do."""
+        if self._executor is not None:
+            await self._executor.discard_parked_interaction()
+
+    async def _deep_restart(self):
+        """Deep restart (深度重启): the unified remedy once a corrupted CLI chat
+        history is detected anywhere in the tree (see ``request_deep_restart``).
+        Keeps the major Session + Runtime — proof tree, budget, retry count,
+        ledger, log handles — and tears down everything conversational: all CLI
+        chats, all workers (their tree work stays), parked and in-flight
+        interactions, owned tasks, view state. Runs on the MAJOR session, from
+        its driver loop's DeepRestart branch, between two chat sessions.
+
+        NEVER construct a new Session or Runtime here: a new Session renames
+        the log directory away and loses the ledger; a new Runtime zeroes the
+        budget — corruption would grant free time.
+        """
+        assert self.is_major, "_deep_restart runs only on the major session"
+        self._log_meta("DEEP_RESTART")   # performances, distinct from the
+                                         # CORRUPTED_HISTORY_RESTART detections
+        # Order matters: tool tasks first, workers after — a worker cancelled
+        # under a still-live suspended tool task raises CancelledError through
+        # the tool task into the ASGI layer; a cancelled live fork likewise
+        # surfaces CancelledError in its ASGI request task — both are the
+        # deliberate, pre-existing shape of killing in-flight MCP work.
+        await self._cancel_owned_tasks()
+        await self.discard_parked_interaction()
+        await self.runtime.cancel_live_forks()
+        await self.root.aclose_all_subagents()
+        self._reset_view_state()
+        self.log_AoA_opr("Deep restart: rebuilt the chat session "
+                         "and released all sub-agents")
+        if isinstance(self.quit_info, DeepRestart):
+            # Drain a signal that arrived DURING the teardown: it asked for
+            # exactly what just happened, so it is already served.
+            self.quit_info = None
+
     async def close(self):
         """Clean up the session and release resources.
         Subsessions do not close shared log files — only major sessions do."""
@@ -12786,12 +12952,7 @@ class Session:
         # a tool task suspended on a non-forking interaction (e.g. the
         # large-delete gate) must not outlive its session, and such tasks
         # mostly belong to worker sub-sessions.
-        pending = [t for t in self._owned_tasks if not t.done()]
-        for t in pending:
-            t.cancel()
-        for t in pending:
-            with contextlib.suppress(BaseException):
-                await t
+        await self._cancel_owned_tasks()
         if not self.is_major:
             return
         # Tear down any worker sub-agents still attached to the tree (running or
@@ -13088,10 +13249,9 @@ class Session:
         per-session ``_retry_count`` is deliberately NOT included: a fork starts
         it at 0, so a parent that hit its retry limit can still get a perfectly
         good answer."""
-        if self._budget_start_time is not None:
-            elapsed = time() - self._budget_start_time
-            if elapsed > self.timeout_seconds:
-                return f"timeout ({elapsed:.0f}s > {self.timeout_seconds}s)"
+        elapsed = self.elapsed_working_time()
+        if elapsed is not None and elapsed > self.timeout_seconds:
+            return f"timeout ({elapsed:.0f}s > {self.timeout_seconds}s)"
         if self.total_tool_calls >= self.max_tool_calls:
             return f"tool call limit ({self.total_tool_calls} >= {self.max_tool_calls})"
         return None
@@ -13158,11 +13318,23 @@ class Session:
         # purpose — see _shared_budget_exhausted_reason.)
         if self._shared_budget_exhausted_reason() is not None:
             return
+        # A pending deep restart is about to tear every fork down — don't burn
+        # a doomed LLM round trip. DeepRestart ONLY: on a terminal quit_info
+        # (surrender, retry limit, failed run) the survey MUST still run.
+        # Covers only the pending window (the performer clears the signal
+        # before tearing down); a fork racing the teardown itself self-heals
+        # via the SessionQuit rail — this gate is a pure optimization.
+        if isinstance(self.major.quit_info, DeepRestart):
+            return
         self._query_calls_since_survey = 0
-        _t0 = time()
         try:
-            lemmas = await self.launch_interaction(
-                Interaction_MissingLemmaSurvey(trigger))
+            # The survey is instrumentation, not proof work: its wall-clock is
+            # budget-exempt (用户拍板 2026-06-11), else every survey eats into
+            # timeout_seconds and confounds the before/after comparison the
+            # loop exists to make.
+            with self.budget_exempt():
+                lemmas = await self.launch_interaction(
+                    Interaction_MissingLemmaSurvey(trigger))
         except SessionQuit as e:
             self.warn_AoA_opr(f"Missing-lemma survey skipped: {e}")
             return
@@ -13170,13 +13342,6 @@ class Session:
             self.warn_AoA_opr(
                 f"Missing-lemma survey fork failed: {type(e).__name__}: {e}")
             return
-        finally:
-            # The survey is instrumentation, not proof work: exclude its
-            # wall-clock from the session budget (用户拍板 2026-06-11), else
-            # every survey eats into timeout_seconds and confounds the
-            # before/after comparison the loop exists to make.
-            if self._budget_start_time is not None:
-                self._budget_start_time += time() - _t0
         self.log_missing_lemmas(trigger, lemmas)
 
     async def maybe_run_memorize_interaction(self, trigger: str) -> None:
@@ -13203,8 +13368,10 @@ class Session:
             return
         if self.is_interaction:
             return
-        # Same "don't even ask" test as run_missing_lemma_survey.
+        # Same "don't even ask" tests as run_missing_lemma_survey.
         if self._shared_budget_exhausted_reason() is not None:
+            return
+        if isinstance(self.major.quit_info, DeepRestart):
             return
         try:
             await self.launch_interaction(Interaction_Memorize(trigger))
@@ -13986,13 +14153,40 @@ class Session:
             self._consuming_subagent_hints = False
 
     async def request_restart(self):
-        """Request a context restart.  Sets ``self.quit_info = Restart()`` to
-        break this session's driver loop, then interrupts.  The loop's restart
-        branch detects the ``Restart`` variant, clears ``quit_info`` and
-        re-enters with the (memoized) ``initial_prompt()``."""
+        """Request a context restart.  Posts ``Restart()`` to break this
+        session's driver loop, then interrupts.  The loop's restart branch
+        detects the ``Restart`` variant, clears ``quit_info`` and re-enters
+        with the (memoized) ``initial_prompt()``.  Via ``settle_quit``: a
+        pending ``DeepRestart`` absorbs the request (the deep restart delivers
+        a fresh context anyway) instead of being degraded to a light one."""
         self._reset_view_state()
-        self.quit_info = Restart()
+        self.settle_quit(Restart())
         await self.interrupt()
+
+    async def request_deep_restart(self, detail: str, **meta_fields) -> None:
+        """The single detection funnel for a corrupted CLI chat history: log
+        the forensic meta event, post ``DeepRestart`` to the MAJOR session's
+        mailbox, self-judge if this is a child session (abandon), and interrupt
+        the major.  Differs from ``request_restart`` in exactly three ways: the
+        target is the major rather than self; the writes go through
+        ``settle_quit``'s guard; and no view reset happens here — that is
+        ``_deep_restart``'s job.
+
+        All writes complete inside an await-free window (atomicity currently
+        holds because every driver's ``interrupt`` never suspends — verified;
+        writing BEFORE the interrupt is the spec, guarding against a future
+        suspending ``interrupt``)."""
+        m = self.major
+        self._log_meta("CORRUPTED_HISTORY_RESTART", detail=detail, **meta_fields)
+        m.settle_quit(DeepRestart(detail=detail))   # must precede self-judgment
+        if self is not m:
+            self.settle_quit(TechnicalFailure(
+                detail="corrupted CLI chat history; the proof context is restarting"))
+            # Role_Interaction -> the quit_info setter settles the answer
+            #                     future (SessionQuit);
+            # Role_Worker      -> _wait_next_event carries the real reason to
+            #                     the planner via .detail.
+        await m.interrupt()
 
     def _note_repeat(self, sig: str) -> bool:
         """Advance the runaway-loop counter for call signature *sig* and return
