@@ -2154,8 +2154,13 @@ async def _test_Query_BundleBareName(root: Root, file: MyIO):
     Asserts:
       - exact_name='demo_bundle' (bare) -> 2 members (was: 0 results + Undefined).
       - key_of_theorems returns total=2 and the INTERNED qualified member names.
-      - the rendered query-tool output lists demo_bundle(1)/(2) with statements,
-        NO per-member declaring definition (suppressed for bundle members), and —
+      - the rendered query-tool output lists the members with statements. The
+        members show under their STORED names (conjI/disjI1): demo_bundle is an
+        alias bundle over already-declared theorems, whose records carry real
+        names (from_collection is None), and DYNAMIC_MEMBER_NAMING_PLAN.md
+        §2.1's conditional rule (apply_live_name_if_member) substitutes the
+        manufactured demo_bundle(i) ref-name only over dynamic-collection
+        member records. Per-member declaring definition still suppressed, and —
         since N=2<=20 — NO truncation note.
       - the OLD single-resolver key_of_theorem STILL errors on the bare name (by
         design; key_of_theorems is the new sibling, not a replacement)."""
@@ -2224,9 +2229,15 @@ async def _test_Query_BundleBareName(root: Root, file: MyIO):
 @model_test("Query_BundleTruncate", "Test_Query_BundleTruncate.thy", 12)
 async def _test_Query_BundleTruncate(root: Root, file: MyIO):
     """A >20-member fact (`lemmas big_bundle = refl x21`) exercises the
-    truncation path: exact_name shows the first EXACT_NAME_BUNDLE_LIMIT (=20)
+    truncation path: exact_name expands the first EXACT_NAME_BUNDLE_LIMIT (=20)
     members and appends a 'has N theorems - showing the first 20; use ...'
-    warning. Drives the full render path via _semantic_search_direct."""
+    warning. Drives the full render path via _semantic_search_direct.
+
+    All 21 members are the SAME stored record (HOL.refl, a declared theorem,
+    from_collection is None), so under DYNAMIC_MEMBER_NAMING_PLAN.md §2.1's
+    conditional rule they all display as `refl` — one deduplicated line, and
+    the summary counts that one line (not 20 records). The truncation warning
+    still names big_bundle, unaffected."""
     from IsaMini.AoA.retrieval import _semantic_search_direct
     from Isabelle_RPC_Host.universal_key import key_of_theorems
 

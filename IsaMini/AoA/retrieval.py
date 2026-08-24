@@ -661,6 +661,11 @@ async def _semantic_search_direct(
         is_exact = bool(q.get("exact_name"))
         new = 0
         before_names: list[short_name] = []
+        # Names this query has already counted. A repeat of the same name within
+        # ONE query's fetched list (e.g. a bundle whose members share one stored
+        # record, so all render under one name) is one shown line, so it must be
+        # one count: `new` reports the deduplicated lines, not the raw records.
+        counted: set[short_name] = set()
         # An exact_name lookup of a multi-theorem fact (bundle) is already capped
         # at EXACT_NAME_BUNDLE_LIMIT members by key_of_theorems; show them all
         # rather than re-truncating to the semantic-query default k.
@@ -670,11 +675,13 @@ async def _semantic_search_direct(
                 if is_exact and sn not in force_names:
                     new_items.append(f)
                     force_names.add(sn)
+                    counted.add(sn)
                     new += 1
                 elif sn in seen_before:
                     if sn not in before_names:
                         before_names.append(sn)
-                else:
+                elif sn not in counted:
+                    counted.add(sn)
                     new += 1
                 continue
             encountered.add(sn)
@@ -686,6 +693,7 @@ async def _semantic_search_direct(
             seen.add(sn)
             if is_exact:
                 force_names.add(sn)
+            counted.add(sn)
             new += 1
         verbose = (session.search_summary_count + len(summary_lines)) < 15
         summary_lines.append(_format_search_summary(q, total, k, new, before_names, verbose))
