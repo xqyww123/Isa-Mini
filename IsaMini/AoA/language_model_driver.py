@@ -18,6 +18,18 @@ class _TransientError(AoA_Error):
     pass
 
 
+class _CorruptedSampleError(_TransientError):
+    """A model response containing a lone UTF-16 surrogate (a *corrupted
+    sample*) was rejected at the ingestion boundary, before it could enter the
+    message list — once in history it would crash every later request
+    client-side (httpx serializes with strict UTF-8). Subclassing
+    ``_TransientError`` gets a free re-roll wherever a real inner retry layer
+    exists; ``_api_loop``'s dedicated arm catches it before it can reach
+    ``_with_retry`` (which retries unboundedly and silently rebuilds the
+    context — see BUG_OPENAI_TRANSIENT_SILENT_CONTEXT_LOSS)."""
+    pass
+
+
 class _QuotaError(AoA_Error):
     """Quota / billing exhausted.  Long wait then retry at the outer layer."""
     pass

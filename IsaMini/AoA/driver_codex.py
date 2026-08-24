@@ -15,7 +15,7 @@ from time import time
 import platformdirs
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
+from .language_model_driver import LMDriver, _TransientError, _CorruptedSampleError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
 from .mcp_http_server import ProofMCPHTTPServer, _cc_edit_schema_codex
 
@@ -458,6 +458,10 @@ class Codex_Driver(LMDriver):
 
     def _raise_codex_failure(self, message: str):
         lower = message.lower()
+        # Insurance only: the codex kernel is structurally immune to lone
+        # surrogates (Rust String / serde_json), so this should never fire.
+        if "surrogate" in lower and "400" in lower:
+            raise _CorruptedSampleError(message)
         if "rate limit" in lower or "429" in lower:
             raise _TransientError(message)
         if ("insufficient_quota" in lower or "quota" in lower

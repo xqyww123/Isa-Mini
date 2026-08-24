@@ -2401,10 +2401,12 @@ async def _write_memory_tool_logic(session: Session, args: dict) -> tuple[str, b
 
 def _find_lone_surrogate(obj, path: str = "") -> tuple[str, str] | None:
     """(JSON path, string) of the first string containing a lone UTF-16
-    surrogate (code point in U+D800–U+DFFF), or None. A paired surrogate never
-    reaches a Python str — json.loads merges valid pairs into one non-BMP
-    character — so presence of any code point in that range is an exact
-    corruption criterion. Dict KEYS are scanned too, not just values."""
+    surrogate (code point in U+D800–U+DFFF), or None. Any code point in that
+    range in a Python str cannot be UTF-8-encoded, so its presence is an
+    exact corruption criterion. (Within ONE document json.loads merges a valid
+    escape pair into one non-BMP character — but a streaming decode that
+    parses each delta separately can split the pair, which is how lone
+    surrogates actually arise.) Dict KEYS are scanned too, not just values."""
     if isinstance(obj, str):
         if any(0xD800 <= ord(c) <= 0xDFFF for c in obj):
             return (path or "$", obj)
@@ -2634,12 +2636,15 @@ class ToolExecutor:
         bind_session_context(session)
 
         # Corruption gate, BEFORE any logging or bookkeeping: a lone UTF-16
-        # surrogate in tool input (a CLI streaming bug halves a non-BMP char)
+        # surrogate in tool input (a streaming decode halves a non-BMP char)
         # must never reach the proof tree — a corrupted Statement would poison
         # proof.yaml on every later render. The content is semantically damaged,
-        # so we only reject, never repair. Recovery is not our job here: the
-        # poisoned CLI history 400s on the next request and the driver's
-        # Chat_Restart arms trigger the deep restart.
+        # so we only reject, never repair. Recovery is not our job here: under
+        # ClaudeCode the poisoned CLI history 400s on the next request and the
+        # driver's Chat_Restart arms trigger the deep restart; the API drivers
+        # reject corrupted samples at the ingestion boundary (_checked_chat),
+        # so here this gate only sees poison that hid inside an ASCII-escaped
+        # arguments string and surfaced when it was parsed.
         if (hit := _find_lone_surrogate(arguments)) is not None:
             corrupt_path, corrupt_value = hit
             session._log_meta("CORRUPTED_TOOL_INPUT", tool=name,

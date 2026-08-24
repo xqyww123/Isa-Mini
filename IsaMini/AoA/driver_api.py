@@ -20,7 +20,8 @@ from time import time
 from typing import Any, Callable
 
 from .model import *
-from .language_model_driver import LMDriver, _TransientError, _QuotaError, Usage
+from .language_model_driver import (
+    LMDriver, _TransientError, _CorruptedSampleError, _QuotaError, Usage)
 
 from .mcp_http_server import ToolExecutor
 from .helper import MyIO
@@ -343,6 +344,49 @@ class APIDriver(LMDriver):
             cache_creation=usage.cache_creation_tokens)
         return usage, prompt_total
 
+    # --- Entry validation: the message list must never contain a lone surrogate ---
+
+    def _validate_sample(self, response: ProviderResponse) -> None:
+        """Reject a corrupted sample (a response containing a lone UTF-16
+        surrogate — typically a surrogate pair split by per-delta streaming
+        decode) BEFORE it can enter any message list; once in history it
+        crashes every later request client-side (httpx serializes with strict
+        UTF-8). Encoding is the ground truth, so probe the three raw string
+        fields. Tool-call ``arguments`` accumulate raw JSON text and are parsed
+        once, so a split pair cannot arise there — the probe still covers them
+        for free. Poison that hides in a *parsed native* payload behind an
+        ASCII-escaped raw string is invisible here by construction; the
+        ``UnicodeEncodeError`` leg of ``_api_loop``'s dedicated arm bounds
+        that residue."""
+        fields = [("content", response.content), ("thinking", response.thinking)]
+        fields += [(f"tool_calls[{i}].arguments", tc.arguments)
+                   for i, tc in enumerate(response.tool_calls)]
+        for field, s in fields:
+            if s is None:
+                continue
+            try:
+                s.encode("utf-8")
+            except UnicodeEncodeError as e:
+                i = e.start
+                split_pair = (i + 1 < len(s)
+                              and '\ud800' <= s[i] <= '\udbff'
+                              and '\udc00' <= s[i + 1] <= '\udfff')
+                shape = "split_pair" if split_pair else "lone_half"
+                self._log_meta("CORRUPTED_SAMPLE", field=field, position=i,
+                               shape=shape,
+                               excerpt=ascii(s[max(0, i - 60):i + 60]))
+                raise _CorruptedSampleError(
+                    f"corrupted sample: lone surrogate in {field} "
+                    f"at position {i} ({shape})") from e
+
+    async def _checked_chat(self, provider: Provider, messages: list[Msg],
+                            tools: list[dict], **kwargs) -> ProviderResponse:
+        """``Provider.chat`` behind entry validation — every chat seam that
+        appends the response to a message list must go through here."""
+        response = await provider.chat(messages, tools, **kwargs)
+        self._validate_sample(response)
+        return response
+
     async def _api_loop(self):
         assert self._executor is not None
         if self._budget_start_time is None:
@@ -377,8 +421,8 @@ class APIDriver(LMDriver):
                 try:
                     async with asyncio.timeout(_budget_left):
                         response = await self._retry_transient(
-                            lambda: self._provider.chat(
-                                msgs_to_send, tools,
+                            lambda: self._checked_chat(
+                                self._provider, msgs_to_send, tools,
                                 previous_response_id=self._last_response_id))
                 except LMUnreachable as e:
                     # Proxy down / creds expired (subscription mode): give up
@@ -395,6 +439,21 @@ class APIDriver(LMDriver):
                     if not self.check_budget():
                         self.settle_quit(ResourceExhausted(
                             detail="model turn exceeded the remaining time budget"))
+                    break
+                except (_CorruptedSampleError, UnicodeEncodeError) as e:
+                    # A corrupted sample survived _retry_transient's re-rolls
+                    # (in the no-op-override family it gets none at all), or —
+                    # the UnicodeEncodeError leg — poison hidden in a parsed
+                    # native payload hit the HTTP client's strict UTF-8 encode.
+                    # Neither may fall through to _with_retry (unbounded,
+                    # silently rebuilds the context): charge one retry and
+                    # restart the context, capped by max_retries. The restart
+                    # branch below deliberately does not reset _retry_count.
+                    self.warn_AoA_opr(
+                        f"Corrupted sample, restarting context: {e}")
+                    self._retry_count += 1
+                    if not self.check_budget():
+                        await self.request_restart()
                     break
 
                 if response.response_id is not None:
@@ -556,9 +615,15 @@ class APIDriver(LMDriver):
 
         messages.append(UserMsg(COMPACTION_PROMPT))
         try:
-            summary_resp = await self._provider.chat(messages, [])
-        except Exception:
-            self.warn_AoA_opr("Compaction summary request failed, continuing without compaction")
+            summary_resp = await self._retry_transient(
+                lambda: self._checked_chat(self._provider, messages, []))
+        except Exception as e:
+            # A corrupted summary (or any other failure) degrades to skipping
+            # this compaction: same list object back, cache state untouched.
+            # str(e), not repr: UnicodeEncodeError's repr embeds the whole
+            # unencodable payload (here: the full serialized prompt).
+            self.warn_AoA_opr("Compaction summary request failed "
+                              f"({e}), continuing without compaction")
             messages.pop()
             return messages
         summary = summary_resp.content or ""
@@ -706,8 +771,8 @@ class APIDriver(LMDriver):
 
                 fork._model_time_start = time()
                 resp = await self._retry_transient(
-                    lambda: fork_provider.chat(
-                        fork_msgs_to_send, fork_tools,
+                    lambda: fork._checked_chat(
+                        fork_provider, fork_msgs_to_send, fork_tools,
                         previous_response_id=fork_response_id,
                         allowed_tools=_fork_allowed))
 

@@ -38,7 +38,8 @@ class AnthropicProvider(Provider):
         self._last_response: Any = None
 
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
         system_blocks: list[dict] | None = None
         api_messages: list[dict] = []
 

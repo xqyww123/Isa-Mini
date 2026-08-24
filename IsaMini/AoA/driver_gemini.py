@@ -44,7 +44,8 @@ class GeminiProvider(Provider):
         self._call_id_counter = 0
 
     async def chat(self, messages: list[Msg], tools: list[dict],
-                   *, previous_response_id: str | None = None) -> ProviderResponse:
+                   *, previous_response_id: str | None = None,
+                   allowed_tools: list[str] | None = None) -> ProviderResponse:
         system_instruction: str | None = None
         contents: list[genai_types.Content] = []
         for m in messages:
