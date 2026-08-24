@@ -2416,7 +2416,6 @@ class Minilang_State:
                    if rec.kind != EntityKind.EXPERIENCE]
         diagnosed = await self._retrieve_entity_with_diagnostics(
             [(scored_recs[i][1].kind, scored_recs[i][1].name) for i in ent_idx])
-        info_by_idx = dict(zip(ent_idx, [d[0] for d in diagnosed]))
         # Drop what the agent cannot cite.  `Name_Space.extern` returns
         # "??." ^ name when no access path resolves to the entity in this
         # context, so such a name is unusable in a proof; and an entity
@@ -2433,29 +2432,30 @@ class Minilang_State:
         # a name the agent cannot write is useless however it was asked for.  The
         # CAP does not: exact_name never over-fetched, and a bundle expansion
         # legitimately returns more than k members.
-        cap = k if exact_name is None else len(scored_recs)
-        drop_idx: set[int] = set()
+        cap = k if exact_name is None else None
+        # One container: an index is in `info_by_idx` iff its entity survived —
+        # dropped or unresolved entries are simply absent, so the kept-filter
+        # below cannot disagree with the log.
+        info_by_idx = {}
         dropped_log: list[str] = []
         for i, (info, diag) in zip(ent_idx, diagnosed):
             if info is None:
-                drop_idx.add(i)
                 dropped_log.append(f"{scored_recs[i][1].name}: unresolved"
                                    + (f" ({diag})" if diag else ""))
             elif info[0].unicode.startswith("??."):
-                drop_idx.add(i)
                 dropped_log.append(f"{scored_recs[i][1].name}: inaccessible ({info[0].unicode})")
+            else:
+                info_by_idx[i] = info
         if dropped_log:
             # Not surfaced to the agent: an unresolvable entity may be the symptom
             # of a defect elsewhere, and silently dropping it would hide that.
             logging.getLogger(__name__).info(
                 "semantic_knn dropped %d uncitable of %d: %s",
                 len(dropped_log), len(ent_idx), "; ".join(dropped_log))
+        kept = [(i, sr) for i, sr in enumerate(scored_recs)
+                if sr[1].kind == EntityKind.EXPERIENCE or i in info_by_idx]
         out: list[RetrievedEntity] = []
-        for i, (score, rec, override) in enumerate(scored_recs):
-            if len(out) >= cap:
-                break
-            if i in drop_idx:
-                continue
+        for i, (score, rec, override) in kept[:cap]:
             if rec.kind == EntityKind.EXPERIENCE:
                 entity = IsabelleEntity(
                     full_name=rec.name, short_name=IsaTerm.from_isabelle(rec.name),
@@ -2467,7 +2467,7 @@ class Minilang_State:
                 continue
             heading, interp = override if override is not None else (None, rec.interpretation)
             out.append(self._make_retrieved_entity(
-                rec.kind, rec.name, info_by_idx.get(i), score,
+                rec.kind, rec.name, info_by_idx[i], score,
                 ' '.join(interp.split()) if interp else None,
                 semantics_heading=heading,
                 suppress_def=rec.name in bundle_member_names))

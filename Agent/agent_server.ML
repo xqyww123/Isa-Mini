@@ -674,11 +674,6 @@ fun restore_concl orig th =
   Conv.fconv_rule (Phi_Conv.alpha_beta_eta_inst_conv orig) th
   handle THM _ => th
 
-(* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
-   segments, then the agent RPC.  NO store or cache logic anywhere in here.
-   Synchronous: returns the four by-products (xcmds, cost, replay time, proof
-   text) beside the theorem.  run_AoA feeds it to async_prove, which is where
-   futures come into existence. *)
 (*** IsaMini.retrieve_entity — renders entities against a caller-chosen context.
      Lifted out of raw_AoA (2026-08-23) so the query_by_name RPC can install it
      too; the context arrives through a context_unpacker, the standard idiom of
@@ -699,7 +694,9 @@ fun abbreviations_in_term ctxt consts term =
 
 (* Builds the system-rule membership tables for ctxt and returns the role
    classifier over them.  raw_AoA calls this once per run (its init-time
-   context); the query_by_name RPC builds it per call. *)
+   context) and hands the cached result in; the query_by_name RPC passes this
+   function itself, so its tables are built from the unpacked context, lazily,
+   only when a theorem-kind entity is actually retrieved. *)
 fun make_thm_roles ctxt =
   let
     (* All three rule sets use iNet keyed by proposition + aconv post-filter.
@@ -742,8 +739,8 @@ fun make_thm_roles ctxt =
       end
   end
 
-fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpacker)
-    (thm_roles : thm list -> string list) : Remote_Procedure_Calling.callback' =
+fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> string list)
+    (ctxt_unpack : Context_Callbacks.context_unpacker) : Remote_Procedure_Calling.callback' =
   Remote_Procedure_Calling.mk_callback {
   name = "IsaMini.retrieve_entity",
   arg_schema = unpackPair (ctxt_unpack,
@@ -753,8 +750,11 @@ fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpac
                                packList packString, packList packString, packBool)),
        packOption packString)),
   function = (fn (gctx, entities) =>
-    let val ctxt = Context.cases Proof_Context.init_global I gctx
+    let val ctxt = Context.proof_of gctx
         val thy = Proof_Context.theory_of ctxt
+        (* built at most once per invocation, and only if a theorem-kind
+           entity is actually retrieved *)
+        val roles = Lazy.lazy (fn () => mk_roles ctxt)
         val SOT = MiniLang_Agent.string_of_term ctxt
         val SOTy = MiniLang_Agent.string_of_type ctxt
         val facts = Proof_Context.facts_of ctxt
@@ -796,7 +796,7 @@ fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpac
                                           global_facts full_name))
                     in (SOME (short_name,
                               map (SOT o Thm.prop_of) thms',
-                              thm_roles thms',
+                              Lazy.force roles thms',
                               abbrevs,
                               is_local),
                         NONE)
@@ -817,9 +817,13 @@ fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpac
           | retrieve (Universal_Key.InductionRuleK, name) = retrieve_thm name
           | retrieve (Universal_Key.CaseSplitRuleK, name) = retrieve_thm name
           | retrieve (Universal_Key.ConstantK, name) =
-              if Name_Space.declared const_space (Consts.intern consts name) then
-                let val cname = Consts.intern consts name
-                    val short = Name_Space.extern ctxt const_space cname
+              (* intern_declared, not plain intern: a declared-but-shadowed full
+                 internal name must resolve here too, so its "??." extern short
+                 name reaches the display step's suppression instead of silently
+                 degrading to the stored rendering (ruled 2026-08-24). *)
+              let val cname = Universal_Key.intern_declared const_space name in
+              if Name_Space.declared const_space cname then
+                let val short = Name_Space.extern ctxt const_space cname
                     val T = Consts.the_constraint consts cname
                     val abbrevs = if is_some (try (Consts.the_abbreviation consts) cname)
                                   then [cname] else []
@@ -833,6 +837,7 @@ fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpac
                        | NONE => []),
                       [], [], true), NONE)
                 | NONE => (NONE, NONE))
+              end
           | retrieve (Universal_Key.TypeK, name) =
               (SOME (Name_Space.extern ctxt type_space name, [], [], [], false), NONE)
           | retrieve (Universal_Key.ClassK, name) =
@@ -860,6 +865,12 @@ fun make_retrieve_entity_callback (ctxt_unpack : Context_Callbacks.context_unpac
 }
 
 end (*local*)
+
+(* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
+   segments, then the agent RPC.  NO store or cache logic anywhere in here.
+   Synchronous: returns the four by-products (xcmds, cost, replay time, proof
+   text) beside the theorem.  run_AoA feeds it to async_prove, which is where
+   futures come into existence. *)
 
 
 fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
@@ -1763,7 +1774,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
           mk_callback reset_state_callback,
           mk_callback set_replay_mode_callback,
           mk_callback lookup_fact_callback,
-          make_retrieve_entity_callback au thm_roles,
+          make_retrieve_entity_callback (fn _ => thm_roles) au,
           mk_callback compute_bindings_callback,
           mk_callback need_intro_callback,
           mk_callback check_term_callback,
@@ -2163,8 +2174,7 @@ fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind,
       arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
       ret_schema = unpackPair (unpackString, unpackBool),
       callback = [Universal_Key.make_universal_key_callback su,
-                  make_retrieve_entity_callback su
-                    (make_thm_roles (Context.cases Proof_Context.init_global I context))],
+                  make_retrieve_entity_callback make_thm_roles su],
       timeout = NONE
     }
   in Remote_Procedure_Calling.call_command cmd (kind, name) end

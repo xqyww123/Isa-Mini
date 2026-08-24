@@ -947,52 +947,71 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
     except IsabelleError as e:
         return (str(e), True, None)
 
-    rec = Semantic_DB[uk]
-    if rec is not None:
-        rec = apply_live_name_if_member(rec, live_name)
     # The record's name and expression are re-rendered against the live query
     # context (ruled 2026-08-23); only the English interpretation is the stored
-    # string.  `retrieve_entity` externs the name and pretty-prints the
-    # propositions (theorems) / type (constants) in ctxt.  `live_name` is fully
-    # qualified, so it interns to itself — both the direct branch and the
-    # short-name retry normalize here.  Kinds whose live expression list is
-    # empty (types, classes, locales) keep the stored expression.
-    live_info, _ = (await retrieve_entities_with_diagnostics(
-        connection, ctxt, [(tag, live_name)]))[0]
+    # string.  `live_name` is fully qualified, so it interns to itself — the
+    # direct branch and the short-name retry normalize here.
+    try:
+        live_info, _ = (await retrieve_entities_with_diagnostics(
+            connection, ctxt, [(tag, live_name)]))[0]
+    except IsabelleError as e:
+        return (str(e), True, None)
+    if live_info is not None and live_info[0].unicode.startswith("??."):
+        # No spelling resolves to this entity here (extern's last fallback
+        # already tried the fully qualified name).  Ruled 2026-08-24: suppress —
+        # the same delete-don't-display policy as the search listing's drop;
+        # nothing of the entity is shown, not even the stored record.
+        return (f'"{name}" is not accessible in the current proof context.',
+                True, None)
+    rec = Semantic_DB[uk]
     buf = StringIO()
     buf.write(prefix)
     kind_label = rec.kind.label if rec is not None else tag.label
     if live_info is not None:
-        live_short, live_exprs = live_info[0], live_info[1]
-        _format_record(buf, f"{kind_label} {live_short.unicode}", rec,
-                       expr="\n".join(trunc_expr(t.unicode) for t in live_exprs)
-                            if live_exprs else None)
+        # The live name wins here, unconsulted by §2.1's member-name guard
+        # (ruled 2026-08-24): name and expression come from the same live
+        # enumeration, so citing the shown name reproduces the shown content —
+        # the mismatch that guard exists to prevent cannot arise.  The kinds
+        # with no live expression renderer keep the stored expression (ruled
+        # 2026-08-24: exactly these three); a live empty list on any other
+        # kind is the honest current state and shows as empty.
+        heading_name = live_info[0].unicode
+        exprs = (None if tag in (EntityKind.TYPE, EntityKind.CLASS, EntityKind.LOCALE)
+                 else live_info[1])
     else:
-        _format_record(buf,
-                       f"{kind_label} {rec.name}" if rec is not None else f"{tag.label} {name}",
-                       rec)
+        # No live rendering (a kind without a retrieve branch): stored
+        # rendering, still under §2.1's guarded member-name substitution.
+        if rec is not None:
+            rec = apply_live_name_if_member(rec, live_name)
+        heading_name = rec.name if rec is not None else name
+        exprs = None
+    _format_record(buf, f"{kind_label} {heading_name}", rec, exprs=exprs)
 
     return (buf.getvalue().rstrip('\n'), False, uk)
 
 
-def _format_record(buf, heading: str, rec, expr: 'str | None' = None) -> None:
-    """Write one entity-semantics block: ``{heading}:`` plus the record's type
-    and interpretation. ``heading`` must already contain the entity name (a
-    ``{kind.label} {name}`` pair, or an abbreviation heading like
-    ``Abbreviation constant …`` / ``Raw constant …``). ``expr`` overrides the
-    record's stored expression (already truncated by the caller); it lets a
-    live-rendered expression be shown even without a record. With neither a
-    record nor an ``expr`` there is nothing to write beyond the heading."""
-    if expr is None and rec is not None:
-        expr = trunc_expr(rec.expr) if rec.expr else ""
-    if rec is not None or expr is not None:
+def _format_record(buf, heading: str, rec, exprs: 'list | None' = None) -> None:
+    """Write one entity-semantics block: ``{heading}:`` plus an expression and
+    the record's interpretation. ``heading`` must already contain the entity
+    name (a ``{kind.label} {name}`` pair, or an abbreviation heading like
+    ``Abbreviation constant …`` / ``Raw constant …``). ``exprs`` is the
+    live-rendered expression list, shown via ``print_expression_list`` — the
+    same renderer as search listings, so truncation lives in one place;
+    ``None`` falls back to the record's stored expression (the kinds with no
+    live renderer, and the no-live-info path). With neither a record nor
+    ``exprs`` there is nothing to write beyond the heading."""
+    if exprs is not None:
         buf.write(f"{heading}:")
-        print_paragraph(2, buf, expr or "")
-        if rec is not None and rec.interpretation:
-            buf.write(rec.interpretation)
-            buf.write('\n')
+        print_expression_list(2, buf, exprs)
+    elif rec is not None:
+        buf.write(f"{heading}:")
+        print_paragraph(2, buf, trunc_expr(rec.expr) if rec.expr else "")
     else:
         buf.write(f"{heading}\n")
+        return
+    if rec is not None and rec.interpretation:
+        buf.write(rec.interpretation)
+        buf.write('\n')
 
 
 async def _handle_exact_term_query(

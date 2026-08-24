@@ -43,7 +43,7 @@
   raw: Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat) ..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
 === query output: nested ===
 ∀ₘ x ∈ {(1 :: nat), (2 :: nat), (3 :: nat)}. (0 :: nat) < (Σₘ y ∈ {(0 :: nat) ..<x}. y ⊕ x) ≡ Test_UnfoldSyntax.my_forall {(1 :: nat), (2 :: nat), (3 :: nat)} (λ(x :: nat). (0 :: nat) < Test_UnfoldSyntax.my_sum {(0 :: nat) ..<x} (λ(y :: nat). Test_UnfoldSyntax.my_op y x))
-Head constant Test_UnfoldSyntax.my_forall
+Head constant my_forall: ?'a set ⇒ (?'a ⇒ bool) ⇒ bool
 === query head: my_conj (expansion-head fallback) ===
 Head Raw constant HOL.conj (head of the unfolded abbreviation Test_UnfoldSyntax.my_conj)
 === query head: x ≠ y (abbreviation's own semantics) ===

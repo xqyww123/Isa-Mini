@@ -4,14 +4,14 @@ Result (is_error=False):
 - iffE [manual]: ?P = ?Q ⟶ ((?P ⟶ ?Q) ⟶ (?Q ⟶ ?P) ⟶ ?R) ⟶ ?R
 - iffD1 [manual]: ?Q = ?P ⟶ ?Q ⟶ ?P
 - iffD2 [manual]: ?P = ?Q ⟶ ?Q ⟶ ?P
-- rev_iffD2 [manual]: ?Q ⟶ ?P = ?Q ⟶ ?P
 - rev_iffD1 [manual]: ?Q ⟶ ?Q = ?P ⟶ ?P
+- rev_iffD2 [manual]: ?Q ⟶ ?P = ?Q ⟶ ?P
 - iffCE: ?P = ?Q ⟶ (?P ⟶ ?Q ⟶ ?R) ⟶ (¬ ?P ⟶ ¬ ?Q ⟶ ?R) ⟶ ?R
 - cnf.iff_trans [manual]: ?P = ?Q ⟶ ?Q = ?R ⟶ ?P = ?R
-- cnf.iff_refl [manual]: ?P = ?P
-- iffI_np [manual]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
-- imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
 - Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
+- iffI_np [manual]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
+- cnf.iff_refl [manual]: ?P = ?P
+- imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
 - eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
 - pred_iffI [manual]: (∀(x :: ?'a). pred.eval ?A x ⟶ pred.eval ?B x) ⟶ (∀(x :: ?'a). pred.eval ?B x ⟶ pred.eval ?A x) ⟶ ?A = ?B
 - bool.expand [manual]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'

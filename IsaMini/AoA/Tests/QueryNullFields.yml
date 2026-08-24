@@ -9,64 +9,64 @@ Result (is_error=False):
 - power2_nat_le_imp_le [manual]: ?m² ≤ ?n ⟶ ?m ≤ ?n
 - real_root_divide [manual]: root ?n (?x / ?y) = root ?n ?x / root ?n ?y
 - le_square [manual]: ?m ≤ ?m * ?m
+- power2_eq_iff [manual]: (?x² = ?y²) = (?x = ?y ∨ ?x = - ?y)
 - real_divide_square_eq: ?r * ?a / (?r * ?r) = ?a / ?r
 - real_sqrt_four: sqrt (4 :: real) = (2 :: real)
 - div_nat_eqI [manual]: ?n * ?q ≤ ?m ⟶ ?m < ?n * Suc ?q ⟶ ?m div ?n = ?q
+- square_eq_iff [manual]: (?a * ?a = ?b * ?b) = (?a = ?b ∨ ?a = - ?b)
 - power2_nat_le_eq_le [manual]: (?m² ≤ ?n²) = (?m ≤ ?n)
 - real_sqrt_eq_1_iff: (sqrt ?x = (1 :: real)) = (?x = (1 :: real))
-- power2_eq_iff [manual]: (?x² = ?y²) = (?x = ?y ∨ ?x = - ?y)
-- square_eq_iff [manual]: (?a * ?a = ?b * ?b) = (?a = ?b ∨ ?a = - ?b)
 - real_sqrt_sum_squares_mult_squared_eq: (sqrt ((?x² + ?y²) * (?xa² + ?ya²)))² = (?x² + ?y²) * (?xa² + ?ya²)
+- quotient_of_def [manual]: quotient_of ?x = (THE (pair :: int × int). ?x = Fract (fst pair) (snd pair) ∧ (0 :: int) < snd pair ∧ coprime (fst pair) (snd pair))
+  definition quotient_of :: "rat ⇒ int × int"
+    where "quotient_of x =
+      (THE pair. x = Fract (fst pair) (snd pair) ∧ snd pair > 0 ∧ coprime (fst pair) (snd pair))"
 - sqr.simps(1): Num.sqr num.One = num.One
   primrec sqr :: ‹num ⇒ num›
     where
       ‹sqr One = One›
     | ‹sqr (Bit0 n) = Bit0 (Bit0 (sqr n))›
     | ‹sqr (Bit1 n) = Bit1 (Bit0 (sqr n + n))›
-- quotient_of_def [manual]: quotient_of ?x = (THE (pair :: int × int). ?x = Fract (fst pair) (snd pair) ∧ (0 :: int) < snd pair ∧ coprime (fst pair) (snd pair))
-  definition quotient_of :: "rat ⇒ int × int"
-    where "quotient_of x =
-      (THE pair. x = Fract (fst pair) (snd pair) ∧ snd pair > 0 ∧ coprime (fst pair) (snd pair))"
 - lemma_real_divide_sqrt_less [manual]: (0 :: real) < ?u ⟶ ?u / sqrt (2 :: real) < ?u
-- sqr_conv_mult [manual]: Num.sqr ?x = ?x * ?x
-- real_sqrt_pow2: (0 :: real) ≤ ?x ⟶ (sqrt ?x)² = ?x
 - div_eq_dividend_iff [manual]: (0 :: nat) < ?m ⟶ (?m div ?n = ?m) = (?n = (1 :: nat))
+- real_sqrt_pow2: (0 :: real) ≤ ?x ⟶ (sqrt ?x)² = ?x
 - quotient_of_number(3): quotient_of (numeral ?k) = (numeral ?k, (1 :: int))
-- sqrt_divide_self_eq [manual]: (0 :: real) ≤ ?x ⟶ sqrt ?x / ?x = inverse (sqrt ?x)
-- real_sqrt_one: sqrt (1 :: real) = (1 :: real)
-- real_sqrt_zero: sqrt (0 :: real) = (0 :: real)
 - split_div' [manual]: ?P (?m div ?n) = (?n = (0 :: nat) ∧ ?P (0 :: nat) ∨ (∃(q :: nat). (?n * q ≤ ?m ∧ ?m < ?n * Suc q) ∧ ?P q))
+- sqr_conv_mult [manual]: Num.sqr ?x = ?x * ?x
+- sqrt_divide_self_eq [manual]: (0 :: real) ≤ ?x ⟶ sqrt ?x / ?x = inverse (sqrt ?x)
 - four_x_squared [manual]: (4 :: real) * ?x² = ((2 :: real) * ?x)²
 - real_sqrt_pow2_iff: ((sqrt ?x)² = ?x) = ((0 :: real) ≤ ?x)
-- quotient_of_denom_pos [manual]: quotient_of ?r = (?p, ?q) ⟶ (0 :: int) < ?q
-- power2_eq_imp_eq [manual]: ?x² = ?y² ⟶ (0 :: ?'a) ≤ ?x ⟶ (0 :: ?'a) ≤ ?y ⟶ ?x = ?y
-- div_le_dividend: ?m div ?n ≤ ?m
-- abs_power2: ¦?a²¦ = ?a²
 - dvd_div_eq_mult [manual]: ?a ≠ (0 :: ?'a) ⟶ ?a dvd ?b ⟶ (?b div ?a = ?c) = (?b = ?c * ?a)
   where `x ≠ y` abbreviates `¬ x = y`
-- less_eq_div_iff_mult_less_eq [manual]: (0 :: nat) < ?q ⟶ (?m ≤ ?n div ?q) = (?m * ?q ≤ ?n)
-- real_sqrt_unique [manual]: ?y² = ?x ⟶ (0 :: real) ≤ ?y ⟶ sqrt ?x = ?y
-- Quotient3I [manual]: (∀(a :: ?'a). ?Abs (?Rep a) = a) ⟶ (∀(a :: ?'a). ?R (?Rep a) (?Rep a)) ⟶ (∀r (s :: ?'b). ?R r s = (?R r r ∧ ?R s s ∧ ?Abs r = ?Abs s)) ⟶ Quotient3 ?R ?Abs ?Rep
+- power2_eq_imp_eq [manual]: ?x² = ?y² ⟶ (0 :: ?'a) ≤ ?x ⟶ (0 :: ?'a) ≤ ?y ⟶ ?x = ?y
+- quotient_of_denom_pos [manual]: quotient_of ?r = (?p, ?q) ⟶ (0 :: int) < ?q
+- real_sqrt_one: sqrt (1 :: real) = (1 :: real)
 - int_div_pos_eq [manual]: ?a = ?b * ?q + ?r ⟶ (0 :: int) ≤ ?r ⟶ ?r < ?b ⟶ ?a div ?b = ?q
-- quotient_of_denom_pos' [manual]: (0 :: int) < snd (quotient_of ?r)
+- div_le_dividend: ?m div ?n ≤ ?m
+- real_sqrt_zero: sqrt (0 :: real) = (0 :: real)
+- Quotient3I [manual]: (∀(a :: ?'a). ?Abs (?Rep a) = a) ⟶ (∀(a :: ?'a). ?R (?Rep a) (?Rep a)) ⟶ (∀r (s :: ?'b). ?R r s = (?R r r ∧ ?R s s ∧ ?Abs r = ?Abs s)) ⟶ Quotient3 ?R ?Abs ?Rep
+- abs_power2: ¦?a²¦ = ?a²
+- real_sqrt_unique [manual]: ?y² = ?x ⟶ (0 :: real) ≤ ?y ⟶ sqrt ?x = ?y
 - sqrt_le_D [manual]: sqrt ?x ≤ ?y ⟶ ?x ≤ ?y²
+- less_eq_div_iff_mult_less_eq [manual]: (0 :: nat) < ?q ⟶ (?m ≤ ?n div ?q) = (?m * ?q ≤ ?n)
 - div_mult2_eq [manual]: ?m div (?n * ?q) = ?m div ?n div ?q
 - real_inv_sqrt_pow2 [manual]: (0 :: real) < ?x ⟶ (inverse (sqrt ?x))² = inverse ?x
-- real_sqrt_eq_0_iff: (sqrt ?x = (0 :: real)) = (?x = (0 :: real))
-- real_of_nat_div [manual]: ?d dvd ?n ⟶ real (?n div ?d) = real ?n / real ?d
-  where `real` abbreviates `of_nat`
-- power2_eq_square [manual]: ?a² = ?a * ?a
-- abs_square_eq_1 [manual]: (?x² = (1 :: ?'a)) = (¦?x¦ = (1 :: ?'a))
-- div_pos_geq [manual]: (0 :: int) < ?l ⟶ ?l ≤ ?k ⟶ ?k div ?l = (?k - ?l) div ?l + (1 :: int)
-- quotient_of_div [manual]: quotient_of ?r = (?n, ?d) ⟶ ?r = rat_of_int ?n / rat_of_int ?d
-  where `rat_of_int` abbreviates `of_int`
+- quotient_of_denom_pos' [manual]: (0 :: int) < snd (quotient_of ?r)
 - split_div [manual]: ?P (?m div ?n) = ((?n = (0 :: nat) ⟶ ?P (0 :: nat)) ∧ (?n ≠ (0 :: nat) ⟶ (∀i (j :: nat). j < ?n ∧ ?m = ?n * i + j ⟶ ?P i)))
-- nat_of_num_sqr [manual]: nat_of_num (Num.sqr ?x) = nat_of_num ?x * nat_of_num ?x
-- quotientI [manual]: ?x ∈ ?A ⟶ ?r `` {?x} ∈ ?A // ?r
-  where `({} :: ?'a set)` abbreviates `(⊥ :: ?'a set)`
-- real_sqrt_abs2: sqrt (?x * ?x) = ¦?x¦
 - sqrt_even_pow2 [manual]: even ?n ⟶ sqrt ((2 :: real) ^ ?n) = (2 :: real) ^ (?n div (2 :: nat))
   where `even a` abbreviates `(2 :: ?'a) dvd a`
+- quotientI [manual]: ?x ∈ ?A ⟶ ?r `` {?x} ∈ ?A // ?r
+  where `({} :: ?'a set)` abbreviates `(⊥ :: ?'a set)`
+- real_of_nat_div [manual]: ?d dvd ?n ⟶ real (?n div ?d) = real ?n / real ?d
+  where `real` abbreviates `of_nat`
+- real_sqrt_eq_0_iff: (sqrt ?x = (0 :: real)) = (?x = (0 :: real))
+- quotient_of_div [manual]: quotient_of ?r = (?n, ?d) ⟶ ?r = rat_of_int ?n / rat_of_int ?d
+  where `rat_of_int` abbreviates `of_int`
+- div_pos_geq [manual]: (0 :: int) < ?l ⟶ ?l ≤ ?k ⟶ ?k div ?l = (?k - ?l) div ?l + (1 :: int)
+- quotient_of_coprime [manual]: quotient_of ?r = (?p, ?q) ⟶ coprime ?p ?q
+- power2_eq_square [manual]: ?a² = ?a * ?a
+- abs_square_eq_1 [manual]: (?x² = (1 :: ?'a)) = (¦?x¦ = (1 :: ?'a))
+- less_mult_imp_div_less [manual]: ?m < ?i * ?n ⟶ ?m div ?n < ?i
 Query: divisibility and square result; term patterns: _ dvd _ + _; type patterns: nat; name contains: dvd
   3 entities match the filters — 3 new, 0 shown earlier are not shown again.
 Query: quotient is a perfect square
