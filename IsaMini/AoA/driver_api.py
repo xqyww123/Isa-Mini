@@ -176,6 +176,19 @@ facts discovered, type information, etc.
 What to do next based on current progress.
 ```"""
 
+
+class _CompactionFailed(Exception):
+    """The compaction summary request failed; ``__cause__`` carries the real
+    error. Purely local control flow: raised by ``_compact`` and caught by
+    ``_api_loop``'s two compaction call sites, two frames away with nothing in
+    between — so it takes no family base. NOT an ``AoA_Error`` (whole-body
+    ``except AoA_Error`` tool handlers would swallow it), and NOT a
+    ``Chat_Restart``: that base asserts the context MUST restart, whereas here
+    the restart is ``_restart_after``'s decision and on the capped and
+    wall-clock legs no restart happens. Local to this driver — compaction is
+    an ``APIDriver`` mechanism; ClaudeCode has none."""
+
+
 class APIDriver(LMDriver):
     """Agent driver that owns the chat loop, calling Provider.chat() directly."""
 
@@ -392,6 +405,29 @@ class APIDriver(LMDriver):
         self._validate_sample(response)
         return response
 
+    def _budget_left(self) -> float | None:
+        """Seconds left on the wall-clock budget, for ``asyncio.timeout``.
+        None while the budget clock has not started (no cap); negative once
+        overshot (fires immediately)."""
+        elapsed = self.elapsed_working_time()
+        return None if elapsed is None else self.timeout_seconds - elapsed
+
+    async def _restart_after(self, e: BaseException) -> None:
+        """Charge one retry; restart the context unless max_retries (or another
+        budget dimension) ended the session instead. Postcondition either way:
+        this session is interrupted, so the inner loop cannot run another turn —
+        callers decide only where to go, never whether to stop. request_restart
+        interrupts on its own; the trailing call covers the CAPPED path: the
+        Refresh caller sits in the OUTER loop and would otherwise `continue` into
+        `while not self._interrupted` and spend one more turn on a context that
+        could not be compacted. Same shape as ToolExecutor.execute's budget gate."""
+        self._retry_count += 1
+        if not self.check_budget():
+            self.warn_AoA_opr(f"{type(e).__name__} on the model turn; "
+                              f"restarting context: {e}")
+            await self.request_restart()
+        await self.interrupt()
+
     async def _api_loop(self):
         assert self._executor is not None
         if self._budget_start_time is None:
@@ -418,13 +454,8 @@ class APIDriver(LMDriver):
                 # asyncio.timeout injects CancelledError (NOT the TimeoutError
                 # that chat() maps to a retriable stall), so it propagates out
                 # of _retry_transient and surfaces here as TimeoutError.
-                # _budget_left is None in test mode (no budget set) =>
-                # asyncio.timeout(None) imposes no cap.
-                _elapsed = self.elapsed_working_time()
-                _budget_left = (None if _elapsed is None
-                                else self.timeout_seconds - _elapsed)
                 try:
-                    async with asyncio.timeout(_budget_left):
+                    async with asyncio.timeout(self._budget_left()):
                         response = await self._retry_transient(
                             lambda: self._checked_chat(
                                 self._provider, msgs_to_send, tools,
@@ -457,11 +488,7 @@ class APIDriver(LMDriver):
                     # would kill the whole run. Charge one retry and restart
                     # the context, capped by max_retries; the restart branch
                     # below deliberately does not reset _retry_count.
-                    self._retry_count += 1
-                    if not self.check_budget():
-                        self.warn_AoA_opr(f"{type(e).__name__} on the model "
-                                          f"turn; restarting context: {e}")
-                        await self.request_restart()
+                    await self._restart_after(e)
                     break
 
                 if response.response_id is not None:
@@ -506,13 +533,15 @@ class APIDriver(LMDriver):
                     self.log_retry(unfinished, retry)
 
                 if self._should_compact(response.usage):
-                    compacted = await self._compact(self._messages, tools)
-                    if compacted is not self._messages:
-                        self._last_response_id = None
-                        self._msgs_sent_through = 0
-                        self._prev_prompt_total = 0  # compaction = full cache miss
-                        self._prev_output_tokens = 0
-                    self._messages = compacted
+                    try:
+                        self._messages = await self._compact(self._messages, tools)
+                    except _CompactionFailed as e:
+                        await self._restart_after(e.__cause__)
+                        break
+                    self._last_response_id = None
+                    self._msgs_sent_through = 0
+                    self._prev_prompt_total = 0  # compaction = full cache miss
+                    self._prev_output_tokens = 0
 
             if not isinstance(self.quit_info, (Restart, Refresh)):
                 break
@@ -521,11 +550,17 @@ class APIDriver(LMDriver):
                 refresh_info = self.quit_info
                 self._interrupted = False
                 self.quit_info = None
+                try:
+                    self._messages = await self._compact(
+                        self._messages, tools,
+                        recent_rounds=0,
+                        append_briefing=refresh_info.briefing)
+                except _CompactionFailed as e:
+                    # Nothing below happened: no age bump, no cooldown
+                    # consumed, briefing dropped (logged by _compact).
+                    await self._restart_after(e.__cause__)
+                    continue
                 self.runtime.age += 1
-                self._messages = await self._compact(
-                    self._messages, tools,
-                    recent_rounds=0,
-                    append_briefing=refresh_info.briefing)
                 self._last_response_id = None
                 self._msgs_sent_through = 0
                 self._prev_prompt_total = 0  # refresh = full cache miss
@@ -611,7 +646,7 @@ class APIDriver(LMDriver):
 
         # LearningTask reflection at the compaction seam (mirrors ClaudeCode
         # on_compact): distil experience before the context is summarized away.
-        # No-op for a UsualTask / interaction fork; best-effort (swallows failures).
+        # No-op for a UsualTask / interaction fork; fail-fast (errors propagate).
         await self.maybe_run_memorize_interaction("pre_compact")
 
         effective_rounds = recent_rounds if recent_rounds is not None else self.COMPACTION_RECENT_ROUNDS
@@ -621,23 +656,29 @@ class APIDriver(LMDriver):
             recent_start = await self._find_recent_start(messages)
             recent_messages = messages[recent_start:]
 
-        messages.append(UserMsg(COMPACTION_PROMPT))
+        # A fresh list, not append/pop: on the capped path the session ends
+        # with self._messages as-is, and the session_end survey fork reads it
+        # whole — a leftover COMPACTION_PROMPT must be impossible, not undone.
+        request = messages + [UserMsg(COMPACTION_PROMPT)]
+        # The guarded region is exactly the summary request: everything before
+        # (memorize hook, recent-window search) and after propagates as usual.
         try:
-            # No _retry_transient here: this call sits outside _api_loop's
-            # wall-clock cap, and a skipped compaction re-fires next turn
-            # (occupancy is unchanged), inside the cap.
-            summary_resp = await self._checked_chat(self._provider, messages, [])
+            async with asyncio.timeout(self._budget_left()):
+                summary_resp = await self._retry_transient(
+                    lambda: self._checked_chat(self._provider, request, []))
+        except _QuotaError:
+            raise  # _with_retry's 20-minute wait, as on the main turn
         except Exception as e:
-            # A corrupted summary (or any other failure) degrades to skipping
-            # this compaction: same list object back. The _should_compact
-            # caller's identity test then keeps the cache state; the Refresh
-            # caller has no such test and resets it regardless.
+            # Broad on purpose: providers re-raise non-transient 4xx (e.g.
+            # context length exceeded — the request most likely to hit it)
+            # as their own types. Classified by which call failed, not by
+            # type. CancelledError is a BaseException and passes through.
             # str(e), not repr: UnicodeEncodeError's repr embeds the whole
             # unencodable payload (here: the full serialized prompt).
-            self.warn_AoA_opr("Compaction summary request failed "
-                              f"({e}), continuing without compaction")
-            messages.pop()
-            return messages
+            self._log_meta("COMPACTION_FAILED", error=type(e).__name__,
+                           detail=str(e),
+                           briefing_dropped=append_briefing is not None)
+            raise _CompactionFailed(str(e)) from e
         summary = summary_resp.content or ""
         self._accumulate_usage(summary_resp.usage)
 

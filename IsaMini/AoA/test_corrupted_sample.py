@@ -4,7 +4,8 @@ samples (lone UTF-16 surrogates in a model response): ``_validate_sample`` /
 ``_checked_chat``, the ``(_CorruptedSampleError, UnicodeEncodeError)`` arm in
 ``_api_loop`` (charged, capped, context-restarting — and never reaching
 ``_with_retry``), the fork loop's existing transient arm, and the compaction
-degrade path.
+seam (a failed summary request = the same charged, capped light restart, on
+both the automatic and the Refresh call site).
 
 No Isabelle / no REPL / no LLM. Run directly from anywhere (it puts the
 package root on ``sys.path``): ``python test_corrupted_sample.py``. Exits
@@ -20,19 +21,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from IsaMini.AoA.driver_api import (
-    APIDriver, Provider, ProviderResponse, ToolCall,
-    SystemMsg, UserMsg, AssistantMsg, ToolResultMsg)
+    APIDriver, Provider, ProviderResponse, ToolCall, COMPACTION_PROMPT,
+    _CompactionFailed, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg)
 from IsaMini.AoA.language_model_driver import (
-    _CorruptedSampleError, _TransientError, Usage)
+    _CorruptedSampleError, _TransientError, _QuotaError, Usage)
 from IsaMini.AoA.model import (
     Runtime, Role_Major, ResourceExhausted, SessionQuit, Interaction,
-    ForkingMode, TOOL_ANSWER_INDEX)
+    ForkingMode, Refresh, TOOL_ANSWER_INDEX)
 
 LONE = "\ud83d"            # lone high surrogate (孤悬半)
 SPLIT = "\ud83d" + "\ude00"  # surrogate pair split into two code points (劈开对)
 PAIRED = "\U0001F600"      # the same emoji as ONE real non-BMP character
 
 ZERO_USAGE = Usage(0, 0, 0, 0)
+BRIEFING = "BRIEF"        # what the fake refresh tool hands to the Refresh branch
 
 # The wording of _with_retry's transient arm (the fork loop's own transient
 # arm shares it, but no fork runs in the main-loop scenarios): its presence
@@ -73,10 +75,12 @@ class FakeProvider(Provider):
     def __init__(self, script):
         self.script = list(script)
         self.calls = 0
+        self.requests = []   # a snapshot of every request's message list
 
     async def chat(self, messages, tools, *, previous_response_id=None,
                    allowed_tools=None):
         self.calls += 1
+        self.requests.append(list(messages))
         item = self.script.pop(0)
         if isinstance(item, BaseException):
             raise item
@@ -115,6 +119,9 @@ class FakeExecutor:
         p = self.session.fork_pending
         if name == TOOL_ANSWER_INDEX and p is not None and not p.answer.done():
             p.answer.set_result("ANSWERED")
+        if name == "refresh":   # the real refresh tool's structural effect
+            self.session.settle_quit(Refresh(briefing=BRIEFING))
+            await self.session.interrupt()
         return ("ok", False)
 
 
@@ -150,6 +157,7 @@ def make_driver(provider, *, max_retries=5):
     d.total_quota_wait_time = 0.0
     d._fork_counter = 0
     d._fork_name = "main"
+    d._total_calls_at_last_refresh = 0
     d.logged = []
     d.meta = []
     d._executor = FakeExecutor(d)
@@ -436,24 +444,233 @@ async def test_fork_unicode_error_escapes_by_design():
 
 
 # ---------------------------------------------------------------------------
-# 4. compaction degrades to a skip (§5.4)
+# 4. compaction: a failed summary request is a charged, capped light restart
+#    (COMPACTION_FAILURE_RESTART_PLAN.md §3)
 # ---------------------------------------------------------------------------
 
-async def test_compaction_degrades_to_skip():
-    # No retry at this seam (it sits outside the wall-clock cap): one
-    # corrupted summary is one skipped compaction.
-    p = FakeProvider([resp(content="ab" + SPLIT)])
+# A turn WITH a tool call: the no-tool-call branch charges _retry_count on
+# every turn while the proof is unfinished, which would silently turn the
+# "capped on the 5th failure / charged 1" assertions into something else.
+TOOL_CALL = resp(tool_calls=[ToolCall("1", "edit", "{}")])
+REFRESH_CALL = resp(tool_calls=[ToolCall("1", "refresh", "{}")])
+CORRUPTED = resp(content="ab" + SPLIT)
+DONE = resp(content="done")
+
+
+def make_compaction_driver(script, *, automatic, noop_family=False):
+    """A driver whose proof stays unfinished until the script's last item is
+    served (so tool-call turns reach the compaction point and the final turn
+    ends the run clean). ``automatic`` forces _should_compact (the host's
+    context window is 10M and usage all zero: it would never trigger);
+    ``noop_family`` installs the "OpenAI"/"Codex-API" no-op _retry_transient."""
+    p = FakeProvider(script)
     d = make_driver(p)
+    d.proof_scope_unfinished_nodes = lambda: {"x"} if p.script else set()
+    if automatic:
+        d._should_compact = lambda usage: True
+    if noop_family:
+        async def _direct(fn):
+            return await fn()
+        d._retry_transient = _direct
+    return d, p
+
+
+def assert_no_prompt_residue(d, p, where):
+    """Non-mutating construction: the compaction prompt appears only as the
+    LAST message of a summary request, never in the driver's own list and
+    never mid-request."""
+    check(not any(isinstance(m, UserMsg) and m.content == COMPACTION_PROMPT
+                  for m in d._messages),
+          f"{where}: COMPACTION_PROMPT must not remain in d._messages")
+    for req in p.requests:
+        check(not any(isinstance(m, UserMsg) and m.content == COMPACTION_PROMPT
+                      for m in req[:-1]),
+              f"{where}: COMPACTION_PROMPT may only be the last message sent")
+    assert_messages_encodable(d, where)
+
+
+def compaction_failed_events(d):
+    return [kw for e, kw in d.meta if e == "COMPACTION_FAILED"]
+
+
+# (1) automatic compaction ---------------------------------------------------
+
+async def test_auto_compaction_failure_restarts_after_rerolls():
+    d, p = make_compaction_driver([TOOL_CALL] + [CORRUPTED] * 10 + [DONE],
+                                  automatic=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 12,
+          "10 re-rolls of the summary, restart, then one turn after it")
+    check(d._retry_count == 1, "one failed compaction charges exactly one retry")
+    check("CONTEXT_RESTART" in meta_events(d), "the failure must light-restart")
+    check("COMPACTION" not in meta_events(d), "no COMPACTION for a failed one")
+    [ev] = compaction_failed_events(d)
+    check(ev["error"] == "_CorruptedSampleError" and ev["briefing_dropped"] is False,
+          "COMPACTION_FAILED must name the cause; no briefing on this path")
+    check(any("restarting context" in w for w in warns(d)), "restart is warned")
+    check(d.quit_info is None, "the run must end clean after the restart")
+    assert_no_prompt_residue(d, p, "auto compaction, real retry family")
+
+
+async def test_auto_compaction_failure_in_noop_family():
+    d, p = make_compaction_driver([TOOL_CALL, CORRUPTED, DONE],
+                                  automatic=True, noop_family=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 3,
+          "zero re-rolls in the no-op family: one corrupted summary = one restart")
+    check(d._retry_count == 1 and "CONTEXT_RESTART" in meta_events(d),
+          "charged once, restarted once")
+    assert_no_prompt_residue(d, p, "auto compaction, no-op family")
+
+
+async def test_auto_compaction_failure_is_capped():
+    d, p = make_compaction_driver([TOOL_CALL, CORRUPTED] * 5,
+                                  automatic=True, noop_family=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 10,
+          "after the cap no further model turn may be issued")
+    check(d._retry_count == 5, "the restart branch must not reset the counter")
+    check(meta_events(d).count("CONTEXT_RESTART") == 4,
+          "failures 1-4 restart; failure 5 trips max_retries")
+    check(len(compaction_failed_events(d)) == 5,
+          "COMPACTION_FAILED is logged on the capped failure too")
+    check(isinstance(d.quit_info, ResourceExhausted)
+          and "retry limit" in d.quit_info.detail,
+          "max_retries must end the run as ResourceExhausted")
+    assert_no_prompt_residue(d, p, "auto compaction, capped")
+
+
+# (2) the Refresh call site ---------------------------------------------------
+
+async def test_refresh_failure_restarts_and_leaves_no_trace():
+    d, p = make_compaction_driver([REFRESH_CALL, CORRUPTED, DONE],
+                                  automatic=False, noop_family=True)
+    age0 = d.runtime.age
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 3, "refresh, failed summary, restart, done")
+    check(d._retry_count == 1 and "CONTEXT_RESTART" in meta_events(d),
+          "a failed refresh is the same charged light restart")
+    check("REFRESH" not in meta_events(d)
+          and not any("Context refreshed" in m for _, m in d.logged),
+          "a refresh that did not happen must not be reported as done")
+    check(d.runtime.age == age0, "no age bump for a failed refresh")
+    check(d._total_calls_at_last_refresh == 0,
+          "a failed refresh must not consume the refresh cooldown")
+    [ev] = compaction_failed_events(d)
+    check(ev["briefing_dropped"] is True,
+          "the dropped briefing must be visible in COMPACTION_FAILED")
+    check(not any(isinstance(m, UserMsg) and BRIEFING in m.content
+                  for m in d._messages), "the briefing is dropped with the restart")
+    check(d.quit_info is None, "the run must end clean after the restart")
+    assert_no_prompt_residue(d, p, "refresh failure")
+
+
+async def test_refresh_failure_is_capped():
+    # The load-bearing case: the Refresh caller sits in the OUTER loop; on the
+    # capped path only _restart_after's trailing interrupt stops it from
+    # `continue`-ing into one more model turn.
+    d, p = make_compaction_driver([REFRESH_CALL, CORRUPTED] * 5,
+                                  automatic=False, noop_family=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 10,
+          "after the cap no further model turn may be issued")
+    check(isinstance(d.quit_info, ResourceExhausted)
+          and "retry limit" in d.quit_info.detail,
+          "max_retries must end the run as ResourceExhausted")
+    check(meta_events(d).count("CONTEXT_RESTART") == 4
+          and "REFRESH" not in meta_events(d), "four restarts, no refresh")
+    assert_no_prompt_residue(d, p, "refresh failure, capped")
+
+
+# (3) quota passes through ---------------------------------------------------
+
+async def test_compaction_quota_error_escapes_uncharged():
+    d, p = make_compaction_driver([TOOL_CALL, _QuotaError("billing")],
+                                  automatic=True, noop_family=True)
+    try:
+        with fast_sleep():
+            await asyncio.wait_for(d._api_loop(), timeout=30)
+        check(False, "_QuotaError from the summary request must leave _api_loop")
+    except _QuotaError:
+        pass
+    check(d._retry_count == 0, "quota is _with_retry's business, not a retry")
+    check(compaction_failed_events(d) == [], "quota is not a compaction failure")
+    assert_no_prompt_residue(d, p, "compaction quota error")
+
+
+# (4) the wall clock --------------------------------------------------------
+
+class YieldingProvider(FakeProvider):
+    """Yields to the event loop once per chat() — asyncio.timeout can only
+    fire at a suspension point, and the plain FakeProvider never suspends."""
+
+    async def chat(self, messages, tools, **kw):
+        await asyncio.sleep(0)
+        return await super().chat(messages, tools, **kw)
+
+
+async def test_compaction_wall_clock_cap_fires():
+    p = YieldingProvider([DONE])
+    d = make_driver(p)
+    d.runtime._budget_start_time = time() - d.timeout_seconds - 1
     msgs = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT")]
-    result = await asyncio.wait_for(d._compact(msgs, []), timeout=30)
-    check(p.calls == 1, "a corrupted summary must not be re-rolled here")
-    check(result is msgs, "the degrade must return the SAME list object "
-          "(downstream identity test keeps the cache state)")
-    check(len(result) == 2, "the appended compaction prompt must be popped")
-    check(any("continuing without compaction" in w for w in warns(d)),
-          "the skip must be logged")
-    check("COMPACTION" not in meta_events(d),
-          "no COMPACTION event may be logged for a skipped compaction")
+    try:
+        await asyncio.wait_for(d._compact(msgs, []), timeout=30)
+        check(False, "an expired budget must abort the summary request")
+    except _CompactionFailed as e:
+        check(isinstance(e.__cause__, TimeoutError), "the cause is the wall clock")
+        await d._restart_after(e.__cause__)
+    check(isinstance(d.quit_info, ResourceExhausted)
+          and "timeout" in d.quit_info.detail,
+          "the wall clock leg must end as ResourceExhausted, not restart")
+    check(not any("restarting context" in w for w in warns(d)),
+          "no restart on the wall-clock leg")
+    check(len(msgs) == 2, "the caller's list is untouched")
+
+
+# (5) the UnicodeEncodeError leg ---------------------------------------------
+
+async def test_compaction_unicode_error_restarts():
+    poison = UnicodeEncodeError("utf-8", LONE, 0, 1, "surrogates not allowed")
+    d, p = make_compaction_driver([TOOL_CALL, poison, DONE], automatic=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 3, "not retried, restarted once, done")
+    check(d._retry_count == 1 and "CONTEXT_RESTART" in meta_events(d),
+          "the UnicodeEncodeError leg charges one retry and restarts")
+    check(compaction_failed_events(d)[0]["error"] == "UnicodeEncodeError",
+          "COMPACTION_FAILED names the leg")
+    assert_no_prompt_residue(d, p, "compaction UnicodeEncodeError")
+
+
+# (6) success paths -----------------------------------------------------------
+
+async def test_compaction_success_paths():
+    d, p = make_compaction_driver([TOOL_CALL, resp(content="SUMMARY"), DONE],
+                                  automatic=True)
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 3 and d._retry_count == 0,
+          "a successful compaction is free")
+    check("COMPACTION" in meta_events(d) and compaction_failed_events(d) == [],
+          "COMPACTION logged, no failure")
+    check(any(isinstance(m, UserMsg) and "SUMMARY" in m.content
+              for m in d._messages), "the new list carries the summary")
+    assert_no_prompt_residue(d, p, "auto compaction success")
+
+    d, p = make_compaction_driver([REFRESH_CALL, resp(content="SUMMARY"), DONE],
+                                  automatic=False)
+    age0 = d.runtime.age
+    entries = await run_loop(d)
+    check(entries == 1 and p.calls == 3 and d._retry_count == 0,
+          "a successful refresh is free")
+    check("REFRESH" in meta_events(d)
+          and any("Context refreshed" in m for _, m in d.logged),
+          "a real refresh is reported")
+    check(d.runtime.age == age0 + 1 and d._total_calls_at_last_refresh == 1,
+          "age and cooldown move only on a real refresh")
+    check(any(isinstance(m, UserMsg) and "SUMMARY" in m.content
+              and BRIEFING in m.content for m in d._messages),
+          "the new list carries summary and briefing")
+    assert_no_prompt_residue(d, p, "refresh success")
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +712,24 @@ def main():
     print("PASS: fork transient spin is bounded by the run-wide budget")
     asyncio.run(test_fork_unicode_error_escapes_by_design())
     print("PASS: fork UnicodeEncodeError escapes by design")
-    asyncio.run(test_compaction_degrades_to_skip())
-    print("PASS: compaction degrades to a skip")
+    asyncio.run(test_auto_compaction_failure_restarts_after_rerolls())
+    print("PASS: auto compaction failure restarts after re-rolls")
+    asyncio.run(test_auto_compaction_failure_in_noop_family())
+    print("PASS: auto compaction failure in the no-op family")
+    asyncio.run(test_auto_compaction_failure_is_capped())
+    print("PASS: auto compaction failure is capped")
+    asyncio.run(test_refresh_failure_restarts_and_leaves_no_trace())
+    print("PASS: refresh failure restarts and leaves no trace")
+    asyncio.run(test_refresh_failure_is_capped())
+    print("PASS: refresh failure is capped")
+    asyncio.run(test_compaction_quota_error_escapes_uncharged())
+    print("PASS: compaction quota error escapes uncharged")
+    asyncio.run(test_compaction_wall_clock_cap_fires())
+    print("PASS: compaction wall-clock cap fires")
+    asyncio.run(test_compaction_unicode_error_restarts())
+    print("PASS: compaction UnicodeEncodeError restarts")
+    asyncio.run(test_compaction_success_paths())
+    print("PASS: compaction success paths")
     asyncio.run(test_safety_net_leg())
     print("PASS: UnicodeEncodeError safety-net leg")
     print("ALL PASS")
