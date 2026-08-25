@@ -27,7 +27,7 @@ from IsaMini.AoA.language_model_driver import (
     _CorruptedSampleError, _TransientError, _QuotaError, Usage)
 from IsaMini.AoA.model import (
     Runtime, Role_Major, ResourceExhausted, SessionQuit, Interaction,
-    ForkingMode, Refresh, TOOL_ANSWER_INDEX)
+    ForkingMode, Refresh, TOOL_ANSWER_INDEX, TOOL_REFRESH)
 
 LONE = "\ud83d"            # lone high surrogate (孤悬半)
 SPLIT = "\ud83d" + "\ude00"  # surrogate pair split into two code points (劈开对)
@@ -60,6 +60,11 @@ def fast_sleep():
         yield
     finally:
         asyncio.sleep = real
+
+
+async def _no_retries(fn):
+    """The "OpenAI"/"Codex-API" family's _retry_transient override: no re-rolls."""
+    return await fn()
 
 
 def resp(content=None, thinking=None, tool_calls=()):
@@ -119,8 +124,8 @@ class FakeExecutor:
         p = self.session.fork_pending
         if name == TOOL_ANSWER_INDEX and p is not None and not p.answer.done():
             p.answer.set_result("ANSWERED")
-        if name == "refresh":   # the real refresh tool's structural effect
-            self.session.settle_quit(Refresh(briefing=BRIEFING))
+        if name == TOOL_REFRESH:   # the real tool's raw write, then interrupt
+            self.session.quit_info = Refresh(briefing=BRIEFING)
             await self.session.interrupt()
         return ("ok", False)
 
@@ -310,9 +315,7 @@ async def test_retry_cap_in_noop_family():
     # corrupted sample costs one charged light restart, max_retries caps it.
     p = FakeProvider([resp(content="ab" + LONE)] * 5)
     d = make_driver(p)
-    async def _direct(fn):
-        return await fn()
-    d._retry_transient = _direct
+    d._retry_transient = _no_retries
     entries = await run_loop(d)
     check(entries == 1 and p.calls == 5,
           "each corrupted sample must cost exactly one charged restart")
@@ -382,9 +385,7 @@ async def test_fork_rerolls_on_real_retry_path():
 async def test_fork_transient_arm_in_noop_family():
     p = FakeProvider([resp(content="ab" + LONE), ANSWER_CALL])
     parent = make_driver(p)
-    async def _direct(fn):
-        return await fn()
-    parent._retry_transient = _direct
+    parent._retry_transient = _no_retries
     answer, fork = await _drive_fork(parent)
     check(answer == "ANSWERED" and p.calls == 2,
           "the existing fork transient arm must re-roll in place")
@@ -452,7 +453,7 @@ async def test_fork_unicode_error_escapes_by_design():
 # every turn while the proof is unfinished, which would silently turn the
 # "capped on the 5th failure / charged 1" assertions into something else.
 TOOL_CALL = resp(tool_calls=[ToolCall("1", "edit", "{}")])
-REFRESH_CALL = resp(tool_calls=[ToolCall("1", "refresh", "{}")])
+REFRESH_CALL = resp(tool_calls=[ToolCall("1", TOOL_REFRESH, "{}")])
 CORRUPTED = resp(content="ab" + SPLIT)
 DONE = resp(content="done")
 
@@ -469,9 +470,7 @@ def make_compaction_driver(script, *, automatic, noop_family=False):
     if automatic:
         d._should_compact = lambda usage: True
     if noop_family:
-        async def _direct(fn):
-            return await fn()
-        d._retry_transient = _direct
+        d._retry_transient = _no_retries
     return d, p
 
 
@@ -507,7 +506,9 @@ async def test_auto_compaction_failure_restarts_after_rerolls():
     [ev] = compaction_failed_events(d)
     check(ev["error"] == "_CorruptedSampleError" and ev["briefing_dropped"] is False,
           "COMPACTION_FAILED must name the cause; no briefing on this path")
-    check(any("restarting context" in w for w in warns(d)), "restart is warned")
+    check(any("_CorruptedSampleError on the model turn; restarting context" in w
+              for w in warns(d)),
+          "the warn must name the cause, not the _CompactionFailed wrapper")
     check(d.quit_info is None, "the run must end clean after the restart")
     assert_no_prompt_residue(d, p, "auto compaction, real retry family")
 
@@ -615,11 +616,11 @@ async def test_compaction_wall_clock_cap_fires():
     d.runtime._budget_start_time = time() - d.timeout_seconds - 1
     msgs = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT")]
     try:
-        await asyncio.wait_for(d._compact(msgs, []), timeout=30)
+        await asyncio.wait_for(d._compact(msgs), timeout=30)
         check(False, "an expired budget must abort the summary request")
     except _CompactionFailed as e:
-        check(isinstance(e.__cause__, TimeoutError), "the cause is the wall clock")
-        await d._restart_after(e.__cause__)
+        check(isinstance(e.cause, TimeoutError), "the cause is the wall clock")
+        await d._restart_after(e.cause)
     check(isinstance(d.quit_info, ResourceExhausted)
           and "timeout" in d.quit_info.detail,
           "the wall clock leg must end as ResourceExhausted, not restart")
@@ -637,6 +638,9 @@ async def test_compaction_unicode_error_restarts():
     check(entries == 1 and p.calls == 3, "not retried, restarted once, done")
     check(d._retry_count == 1 and "CONTEXT_RESTART" in meta_events(d),
           "the UnicodeEncodeError leg charges one retry and restarts")
+    check(any("UnicodeEncodeError on the model turn; restarting context" in w
+              for w in warns(d)),
+          "the warn must name the cause, not the _CompactionFailed wrapper")
     check(compaction_failed_events(d)[0]["error"] == "UnicodeEncodeError",
           "COMPACTION_FAILED names the leg")
     assert_no_prompt_residue(d, p, "compaction UnicodeEncodeError")

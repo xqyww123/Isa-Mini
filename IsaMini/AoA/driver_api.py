@@ -178,7 +178,7 @@ What to do next based on current progress.
 
 
 class _CompactionFailed(Exception):
-    """The compaction summary request failed; ``__cause__`` carries the real
+    """The compaction summary request failed; ``cause`` carries the real
     error. Purely local control flow: raised by ``_compact`` and caught by
     ``_api_loop``'s two compaction call sites, two frames away with nothing in
     between — so it takes no family base. NOT an ``AoA_Error`` (whole-body
@@ -187,6 +187,10 @@ class _CompactionFailed(Exception):
     the restart is ``_restart_after``'s decision and on the capped and
     wall-clock legs no restart happens. Local to this driver — compaction is
     an ``APIDriver`` mechanism; ClaudeCode has none."""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(str(cause))
+        self.cause = cause
 
 
 class APIDriver(LMDriver):
@@ -405,6 +409,14 @@ class APIDriver(LMDriver):
         self._validate_sample(response)
         return response
 
+    def _reset_prompt_cache(self) -> None:
+        """The next request is a full prompt-cache miss on a fresh list: no
+        response id to continue from, nothing sent through, no prior totals."""
+        self._last_response_id = None
+        self._msgs_sent_through = 0
+        self._prev_prompt_total = 0
+        self._prev_output_tokens = 0
+
     def _budget_left(self) -> float | None:
         """Seconds left on the wall-clock budget, for ``asyncio.timeout``.
         None while the budget clock has not started (no cap); negative once
@@ -433,10 +445,7 @@ class APIDriver(LMDriver):
         if self._budget_start_time is None:
             self._budget_start_time = time()
         self._messages = await self._initial_messages()
-        self._last_response_id = None
-        self._msgs_sent_through = 0
-        self._prev_prompt_total = 0
-        self._prev_output_tokens = 0
+        self._reset_prompt_cache()
         tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while True:
@@ -534,37 +543,33 @@ class APIDriver(LMDriver):
 
                 if self._should_compact(response.usage):
                     try:
-                        self._messages = await self._compact(self._messages, tools)
+                        self._messages = await self._compact(self._messages)
                     except _CompactionFailed as e:
-                        await self._restart_after(e.__cause__)
+                        await self._restart_after(e.cause)
                         break
-                    self._last_response_id = None
-                    self._msgs_sent_through = 0
-                    self._prev_prompt_total = 0  # compaction = full cache miss
-                    self._prev_output_tokens = 0
+                    self._reset_prompt_cache()
 
             if not isinstance(self.quit_info, (Restart, Refresh)):
                 break
 
             if isinstance(self.quit_info, Refresh):
                 refresh_info = self.quit_info
+                # Consume the verdict BEFORE the fallible step: check_budget
+                # short-circuits on a standing quit_info, blinding the retry cap.
                 self._interrupted = False
                 self.quit_info = None
                 try:
                     self._messages = await self._compact(
-                        self._messages, tools,
+                        self._messages,
                         recent_rounds=0,
                         append_briefing=refresh_info.briefing)
                 except _CompactionFailed as e:
                     # Nothing below happened: no age bump, no cooldown
                     # consumed, briefing dropped (logged by _compact).
-                    await self._restart_after(e.__cause__)
+                    await self._restart_after(e.cause)
                     continue
                 self.runtime.age += 1
-                self._last_response_id = None
-                self._msgs_sent_through = 0
-                self._prev_prompt_total = 0  # refresh = full cache miss
-                self._prev_output_tokens = 0
+                self._reset_prompt_cache()
                 self._total_calls_at_last_refresh = self.total_tool_calls
                 self.log_AoA_opr("Context refreshed")
                 self._log_meta("REFRESH", briefing=refresh_info.briefing)
@@ -574,10 +579,7 @@ class APIDriver(LMDriver):
             self.quit_info = None
             self.refresh_YAML()
             self._messages = await self._initial_messages()
-            self._last_response_id = None
-            self._msgs_sent_through = 0
-            self._prev_prompt_total = 0  # restart = full cache miss
-            self._prev_output_tokens = 0
+            self._reset_prompt_cache()
             self.log_AoA_opr("Context restarted")
             self._log_meta("CONTEXT_RESTART")
 
@@ -636,7 +638,7 @@ class APIDriver(LMDriver):
                     return i
         return len(await self._initial_messages())
 
-    async def _compact(self, messages: list[Msg], tools: list[dict], *,
+    async def _compact(self, messages: list[Msg], *,
                        recent_rounds: int | None = None,
                        summary_label: str = "Previous progress",
                        append_briefing: str | None = None) -> list[Msg]:
@@ -675,10 +677,12 @@ class APIDriver(LMDriver):
             # type. CancelledError is a BaseException and passes through.
             # str(e), not repr: UnicodeEncodeError's repr embeds the whole
             # unencodable payload (here: the full serialized prompt).
+            self.warn_AoA_opr("Compaction summary request failed "
+                              f"({type(e).__name__}): {e}")
             self._log_meta("COMPACTION_FAILED", error=type(e).__name__,
                            detail=str(e),
                            briefing_dropped=append_briefing is not None)
-            raise _CompactionFailed(str(e)) from e
+            raise _CompactionFailed(e) from e
         summary = summary_resp.content or ""
         self._accumulate_usage(summary_resp.usage)
 
