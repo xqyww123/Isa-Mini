@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Standalone unit tests for the API drivers' entry validation of corrupted
-samples (lone UTF-16 surrogates in a model response): ``_validate_sample`` /
-``_checked_chat``, the ``(_CorruptedSampleError, UnicodeEncodeError)`` arm in
-``_api_loop`` (charged, capped, context-restarting — and never reaching
-``_with_retry``), the fork loop's existing transient arm, and the compaction
-seam (a failed summary request = the same charged, capped light restart, on
-both the automatic and the Refresh call site).
+samples (a lone UTF-16 surrogate in a model response, or malformed tool-call
+JSON): ``_validate_sample`` / ``validate_tool_call_json`` / ``_checked_chat``,
+the ``RETRY_TRANSIENT_ON`` narrowing of ``_retry_transient``, the
+``(_CorruptedSampleError, UnicodeEncodeError)`` arm in ``_api_loop`` (charged,
+capped, context-restarting — and never reaching ``_with_retry``), the fork
+loop's existing transient arm, and the compaction seam (a failed summary
+request = the same charged, capped light restart, on both the automatic and
+the Refresh call site).
 
 No Isabelle / no REPL / no LLM. Run directly from anywhere (it puts the
 package root on ``sys.path``): ``python test_corrupted_sample.py``. Exits
@@ -37,9 +39,10 @@ ZERO_USAGE = Usage(0, 0, 0, 0)
 BRIEFING = "BRIEF"        # what the fake refresh tool hands to the Refresh branch
 
 # The wording of _with_retry's transient arm (the fork loop's own transient
-# arm shares it, but no fork runs in the main-loop scenarios): its presence
-# there would mean a corrupted sample escaped to the outer layer (silent
-# context rebuild). The primary escape detector is run_loop's entry count.
+# arm shares the "retrying in 2s" core, but no fork runs in the main-loop
+# scenarios): its presence there would mean a corrupted sample escaped to the
+# outer layer (silent context rebuild). The primary escape detector is
+# run_loop's entry count.
 WITH_RETRY_MARK = "retrying in 2s"
 
 
@@ -63,7 +66,8 @@ def fast_sleep():
 
 
 async def _no_retries(fn):
-    """The "OpenAI"/"Codex-API" family's _retry_transient override: no re-rolls."""
+    """Strip the inner retry layer, so the merged arm's capped fallback is
+    exercised directly. No registered driver is shaped like this any more."""
     return await fn()
 
 
@@ -275,6 +279,45 @@ def test_validator():
           "adjacent high+low surrogates must classify as split_pair")
 
 
+def test_malformed_json_is_a_corrupted_sample():
+    Provider.validate_tool_call_json([ToolCall("1", "edit", '{"a": 1}')])
+    try:
+        Provider.validate_tool_call_json([ToolCall("1", "edit", '{"a":1}{"b":2}')])
+        check(False, "concatenated JSON objects must be rejected")
+    except _CorruptedSampleError:
+        pass
+
+
+async def test_retry_transient_on_narrows_to_corrupted_samples():
+    # The narrowed inner layer, called directly (through run_loop the outer
+    # layer would swallow the plain _TransientError and hide the contract).
+    d = make_driver(FakeProvider([]))
+    d.RETRY_TRANSIENT_ON = _CorruptedSampleError
+
+    calls = 0
+    async def once_corrupted():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _CorruptedSampleError("lone half")
+        return "ok"
+    with fast_sleep():
+        check(await d._retry_transient(once_corrupted) == "ok" and calls == 2,
+              "a corrupted sample must be re-rolled in place")
+
+    calls = 0
+    async def network():
+        nonlocal calls
+        calls += 1
+        raise _TransientError("529")
+    try:
+        await d._retry_transient(network)
+        check(False, "a plain _TransientError must propagate")
+    except _TransientError:
+        pass
+    check(calls == 1, "a plain _TransientError must not be re-rolled")
+
+
 # ---------------------------------------------------------------------------
 # 2. end to end: re-roll, then the bounded arm (§5.2)
 # ---------------------------------------------------------------------------
@@ -310,9 +353,10 @@ async def test_bounded_arm_after_retries_exhausted():
     assert_messages_encodable(d, "bounded-arm scenario")
 
 
-async def test_retry_cap_in_noop_family():
-    # The no-op _retry_transient override family ("OpenAI"/"Codex-API"): every
-    # corrupted sample costs one charged light restart, max_retries caps it.
+async def test_retry_cap_without_inner_layer():
+    # Without an inner retry layer every corrupted sample costs one charged
+    # light restart — the bounded fallback, not the preferred handling — and
+    # max_retries caps it.
     p = FakeProvider([resp(content="ab" + LONE)] * 5)
     d = make_driver(p)
     d._retry_transient = _no_retries
@@ -382,7 +426,7 @@ async def test_fork_rerolls_on_real_retry_path():
           "the fork's rejection must log on the fork")
 
 
-async def test_fork_transient_arm_in_noop_family():
+async def test_fork_transient_arm_without_inner_layer():
     p = FakeProvider([resp(content="ab" + LONE), ANSWER_CALL])
     parent = make_driver(p)
     parent._retry_transient = _no_retries
@@ -458,18 +502,18 @@ CORRUPTED = resp(content="ab" + SPLIT)
 DONE = resp(content="done")
 
 
-def make_compaction_driver(script, *, automatic, noop_family=False):
+def make_compaction_driver(script, *, automatic, without_inner_layer=False):
     """A driver whose proof stays unfinished until the script's last item is
     served (so tool-call turns reach the compaction point and the final turn
     ends the run clean). ``automatic`` forces _should_compact (the host's
     context window is 10M and usage all zero: it would never trigger);
-    ``noop_family`` installs the "OpenAI"/"Codex-API" no-op _retry_transient."""
+    ``without_inner_layer`` strips the inner retry layer (see _no_retries)."""
     p = FakeProvider(script)
     d = make_driver(p)
     d.proof_scope_unfinished_nodes = lambda: {"x"} if p.script else set()
     if automatic:
         d._should_compact = lambda usage: True
-    if noop_family:
+    if without_inner_layer:
         d._retry_transient = _no_retries
     return d, p
 
@@ -510,23 +554,23 @@ async def test_auto_compaction_failure_restarts_after_rerolls():
               for w in warns(d)),
           "the warn must name the cause, not the _CompactionFailed wrapper")
     check(d.quit_info is None, "the run must end clean after the restart")
-    assert_no_prompt_residue(d, p, "auto compaction, real retry family")
+    assert_no_prompt_residue(d, p, "auto compaction, with the inner retry layer")
 
 
-async def test_auto_compaction_failure_in_noop_family():
+async def test_auto_compaction_failure_without_inner_layer():
     d, p = make_compaction_driver([TOOL_CALL, CORRUPTED, DONE],
-                                  automatic=True, noop_family=True)
+                                  automatic=True, without_inner_layer=True)
     entries = await run_loop(d)
     check(entries == 1 and p.calls == 3,
-          "zero re-rolls in the no-op family: one corrupted summary = one restart")
+          "zero re-rolls without the inner layer: one corrupted summary = one restart")
     check(d._retry_count == 1 and "CONTEXT_RESTART" in meta_events(d),
           "charged once, restarted once")
-    assert_no_prompt_residue(d, p, "auto compaction, no-op family")
+    assert_no_prompt_residue(d, p, "auto compaction, without the inner retry layer")
 
 
 async def test_auto_compaction_failure_is_capped():
     d, p = make_compaction_driver([TOOL_CALL, CORRUPTED] * 5,
-                                  automatic=True, noop_family=True)
+                                  automatic=True, without_inner_layer=True)
     entries = await run_loop(d)
     check(entries == 1 and p.calls == 10,
           "after the cap no further model turn may be issued")
@@ -545,7 +589,7 @@ async def test_auto_compaction_failure_is_capped():
 
 async def test_refresh_failure_restarts_and_leaves_no_trace():
     d, p = make_compaction_driver([REFRESH_CALL, CORRUPTED, DONE],
-                                  automatic=False, noop_family=True)
+                                  automatic=False, without_inner_layer=True)
     age0 = d.runtime.age
     entries = await run_loop(d)
     check(entries == 1 and p.calls == 3, "refresh, failed summary, restart, done")
@@ -571,7 +615,7 @@ async def test_refresh_failure_is_capped():
     # capped path only _restart_after's trailing interrupt stops it from
     # `continue`-ing into one more model turn.
     d, p = make_compaction_driver([REFRESH_CALL, CORRUPTED] * 5,
-                                  automatic=False, noop_family=True)
+                                  automatic=False, without_inner_layer=True)
     entries = await run_loop(d)
     check(entries == 1 and p.calls == 10,
           "after the cap no further model turn may be issued")
@@ -587,7 +631,7 @@ async def test_refresh_failure_is_capped():
 
 async def test_compaction_quota_error_escapes_uncharged():
     d, p = make_compaction_driver([TOOL_CALL, _QuotaError("billing")],
-                                  automatic=True, noop_family=True)
+                                  automatic=True, without_inner_layer=True)
     try:
         with fast_sleep():
             await asyncio.wait_for(d._api_loop(), timeout=30)
@@ -702,24 +746,28 @@ async def test_safety_net_leg():
 def main():
     test_validator()
     print("PASS: validator")
+    test_malformed_json_is_a_corrupted_sample()
+    print("PASS: malformed tool-call JSON is a corrupted sample")
+    asyncio.run(test_retry_transient_on_narrows_to_corrupted_samples())
+    print("PASS: RETRY_TRANSIENT_ON narrows the inner layer to corrupted samples")
     asyncio.run(test_reroll_on_real_retry_path())
     print("PASS: re-roll on the real retry path")
     asyncio.run(test_bounded_arm_after_retries_exhausted())
     print("PASS: bounded arm after retries exhausted")
-    asyncio.run(test_retry_cap_in_noop_family())
-    print("PASS: retry cap in the no-op family")
+    asyncio.run(test_retry_cap_without_inner_layer())
+    print("PASS: retry cap without the inner retry layer")
     asyncio.run(test_fork_rerolls_on_real_retry_path())
     print("PASS: fork re-rolls on the real retry path")
-    asyncio.run(test_fork_transient_arm_in_noop_family())
-    print("PASS: fork existing transient arm (no-op family)")
+    asyncio.run(test_fork_transient_arm_without_inner_layer())
+    print("PASS: fork existing transient arm (without the inner retry layer)")
     asyncio.run(test_fork_transient_spin_is_bounded())
     print("PASS: fork transient spin is bounded by the run-wide budget")
     asyncio.run(test_fork_unicode_error_escapes_by_design())
     print("PASS: fork UnicodeEncodeError escapes by design")
     asyncio.run(test_auto_compaction_failure_restarts_after_rerolls())
     print("PASS: auto compaction failure restarts after re-rolls")
-    asyncio.run(test_auto_compaction_failure_in_noop_family())
-    print("PASS: auto compaction failure in the no-op family")
+    asyncio.run(test_auto_compaction_failure_without_inner_layer())
+    print("PASS: auto compaction failure without the inner retry layer")
     asyncio.run(test_auto_compaction_failure_is_capped())
     print("PASS: auto compaction failure is capped")
     asyncio.run(test_refresh_failure_restarts_and_leaves_no_trace())

@@ -17,14 +17,14 @@ import os
 import re
 import uuid
 from time import time
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import httpx
 import openai
 
 from .model import *
-from .language_model_driver import (_TransientError, _QuotaError, _T, PRICING,
-                                    pricing_for, _parse_effort_suffix, Usage)
+from .language_model_driver import (_TransientError, _CorruptedSampleError, _QuotaError,
+                                    PRICING, pricing_for, _parse_effort_suffix, Usage)
 
 from .mcp_http_server import _cc_edit_schema_flat, _cc_edit_schema_raw
 from .driver_api import (Provider, APIDriver, ToolCall, ProviderResponse,
@@ -538,10 +538,11 @@ class OpenAIResponsesProvider(OpenAIBase):
 
     Transient-error policy: this provider handles transient API errors
     (rate limits, network errors, timeouts) internally via retries and
-    background-mode fallback.  Callers do not need ``_retry_transient``
-    wrapping.  Only ``_QuotaError`` (insufficient quota), non-transient
-    request errors (4xx other than 429), and ``_TransientError`` after
-    exhausting the 1-hour background retry budget propagate.
+    background-mode fallback.  Callers narrow ``RETRY_TRANSIENT_ON`` to
+    corrupted samples: network-class failures never get a second
+    ``_retry_transient`` pass.  Only ``_QuotaError`` (insufficient quota),
+    non-transient request errors (4xx other than 429), and ``_TransientError``
+    after exhausting the 1-hour background retry budget propagate.
     """
 
     # --- Endpoint policy (overridable per subclass; the defaults match the
@@ -993,6 +994,13 @@ class APIDriver_OpenAI(APIDriver):
     DEFAULT_MODEL = "gpt-5.5"
     FORK_CHEAPER_MODEL = "gpt-5.5"
 
+    # Layer 2 (OpenAIResponsesProvider) already spends a 1-hour budget on
+    # network-class failures; re-rolling them here would only restart that
+    # budget — on the fork seam, which carries no wall-clock cap, ten times
+    # over. A corrupted sample is a content defect Layer 2 never sees, so it
+    # keeps the in-place re-rolls.
+    RETRY_TRANSIENT_ON = _CorruptedSampleError
+
     def __init__(self, *args, provider: Provider | None = None,
                  argument: str | None = None, **kwargs):
         if provider is None:
@@ -1003,14 +1011,6 @@ class APIDriver_OpenAI(APIDriver):
                 reasoning_effort=effort,
             )
         super().__init__(*args, provider=provider, **kwargs)
-
-    async def _retry_transient(self, fn: Callable[[], Awaitable[_T]]) -> _T:
-        """No-op override: ``OpenAIResponsesProvider`` already retries transient
-        errors internally and only raises ``_TransientError`` after its 1-hour
-        budget is exhausted. The base 10-attempt wrapper would just restart that
-        budget each time (~10h worst case), so we skip it and let the error go
-        straight to Layer 0 (``_with_retry`` / ``_run_fork``)."""
-        return await fn()
 
     def __str__(self) -> str:
         prov = self._provider

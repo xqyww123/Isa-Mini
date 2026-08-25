@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from time import time
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, ClassVar, TypeVar
 
 from .model import AoA_Error, Session
 
@@ -19,15 +19,20 @@ class _TransientError(AoA_Error):
 
 
 class _CorruptedSampleError(_TransientError):
-    """A model response containing a lone UTF-16 surrogate (a *corrupted
-    sample*) was rejected at the ingestion boundary, before it could enter the
-    message list — once in history it would crash every later request
-    client-side (httpx serializes with strict UTF-8). Subclassing
+    """A model sample rejected at the ingestion boundary for a content defect,
+    before it could enter the message list. Two instances, different failure
+    mechanisms, same remedy — drop the sample and ask again: a lone UTF-16
+    surrogate (once in history it would crash every later request
+    client-side: httpx serializes with strict UTF-8), and malformed tool-call
+    arguments (they would crash the downstream ``json.loads`` in
+    ``_execute_tool_calls``). New content defects should subclass this class,
+    so ``RETRY_TRANSIENT_ON`` names the whole family. Subclassing
     ``_TransientError`` gets a free re-roll wherever a real inner retry layer
     exists; ``APIDriver._api_loop``'s merged arm catches it before it can
     reach ``_with_retry`` (which retries unboundedly and silently rebuilds the
-    context — see BUG_OPENAI_TRANSIENT_SILENT_CONTEXT_LOSS). Only raise it
-    from code that loop covers."""
+    context). Only raise it from code that loop covers. Only the surrogate
+    instance emits a ``CORRUPTED_SAMPLE`` meta event: the JSON check is a
+    ``Provider`` static method with no session handle."""
     pass
 
 
@@ -151,6 +156,12 @@ class LMDriver(Session):
     ``_run_fork()`` (for fork interactions).
     """
 
+    # Which error class the inner retry layer re-rolls in place. A driver whose
+    # provider already retries network-class failures internally narrows this to
+    # the content-defect class, so those failures pass straight to _with_retry
+    # instead of restarting the provider's own budget over and over.
+    RETRY_TRANSIENT_ON: ClassVar[type[_TransientError]] = _TransientError
+
     def _on_start_run(self):
         """Called at the start of ``run()``.  Override to customise logging."""
         self.log_AoA_opr(
@@ -188,22 +199,24 @@ class LMDriver(Session):
                 return await fn()
             except _QuotaError as e:
                 self.warn_AoA_opr("Quota exhausted, waiting 20min to retry"
-                                  + (f" ({e})" if str(e) else ""), to_isabelle=True)
+                                  + (f" ({e})" if str(e) else "")
+                                  + " (the chat history is discarded)", to_isabelle=True)
                 await self._quota_pause()
             except _TransientError as e:
-                self.warn_AoA_opr(f"Transient API error, retrying in 2s: {e}")
+                self.warn_AoA_opr("Transient API error, retrying in 2s "
+                                  f"(the chat history is discarded): {e}")
                 await asyncio.sleep(2)
 
     async def _run_agent_loop(self):
         raise NotImplementedError
 
     async def _retry_transient(self, fn: Callable[[], Awaitable[_T]]) -> _T:
-        """Inner retry layer: call *fn()*, retrying ``_TransientError``
+        """Inner retry layer: call *fn()*, retrying ``RETRY_TRANSIENT_ON``
         with 1.5^n-second exponential backoff up to 10 attempts."""
         for attempt in range(10):
             try:
                 return await fn()
-            except _TransientError as e:
+            except self.RETRY_TRANSIENT_ON as e:
                 if attempt < 9:
                     wait = 1.5 ** attempt
                     self.warn_AoA_opr(

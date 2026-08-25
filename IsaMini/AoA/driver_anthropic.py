@@ -10,7 +10,8 @@ import anthropic
 import httpx
 
 from .model import *
-from .language_model_driver import _TransientError, _QuotaError, PRICING, pricing_for, Usage
+from .language_model_driver import (_TransientError, _CorruptedSampleError, _QuotaError,
+                                    PRICING, pricing_for, Usage)
 from .driver_api import (
     Provider, ToolCall, ProviderResponse,
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
@@ -140,12 +141,13 @@ class AnthropicProvider(Provider):
                 elif event.type == "content_block_stop":
                     if cur.get("type") == "tool_use" and json_parts:
                         # Malformed tool-call arguments (e.g. concatenated
-                        # objects) must re-request the turn via _retry_transient,
-                        # not crash the run. Mirrors Provider.validate_tool_call_json.
+                        # objects) are a corrupted sample: re-rolled in place, or
+                        # caught by _api_loop's merged arm. Mirrors
+                        # Provider.validate_tool_call_json.
                         try:
                             cur["input"] = json.loads("".join(json_parts))
                         except json.JSONDecodeError as e:
-                            raise _TransientError(
+                            raise _CorruptedSampleError(
                                 f"provider returned malformed tool-call arguments "
                                 f"for '{cur.get('name')}': {e}") from e
                     btype = cur.get("type")

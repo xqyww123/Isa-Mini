@@ -130,10 +130,11 @@ class Provider(ABC):
 
         A provider can occasionally emit malformed tool-call arguments — e.g.
         two concatenated objects when streaming deltas reuse a tool-call
-        ``index`` (decodes as "Extra data"). Raising ``_TransientError`` here
-        lets the caller's ``_retry_transient`` re-request the turn rather than
-        crashing the run on the downstream ``json.loads`` in
-        ``_execute_tool_calls``. The OpenAI Chat and Responses providers call
+        ``index`` (decodes as "Extra data"). Raising ``_CorruptedSampleError``
+        here puts a malformed sample on the same path as a lone surrogate: an
+        in-place re-roll wherever an inner retry layer exists, and
+        ``_api_loop``'s merged arm — charged and capped — where none does.
+        The OpenAI Chat and Responses providers call
         this before returning; ``driver_anthropic`` performs the equivalent
         check inline while accumulating ``input_json_delta``.
         """
@@ -141,7 +142,7 @@ class Provider(ABC):
             try:
                 json.loads(tc.arguments)
             except json.JSONDecodeError as e:
-                raise _TransientError(
+                raise _CorruptedSampleError(
                     f"provider returned malformed tool-call arguments for "
                     f"'{tc.name}': {e}") from e
 
@@ -487,8 +488,8 @@ class APIDriver(LMDriver):
                     break
                 except (_CorruptedSampleError, UnicodeEncodeError) as e:
                     # The merged arm. Two legs: a corrupted sample survived
-                    # _retry_transient's re-rolls (in the no-op-override
-                    # family it gets none at all); or — the UnicodeEncodeError
+                    # _retry_transient's re-rolls (or the driver's
+                    # RETRY_TRANSIENT_ON excludes it); or — the UnicodeEncodeError
                     # leg — poison hidden in a parsed native payload hit the
                     # HTTP client's strict UTF-8 encode. _CorruptedSampleError
                     # must not fall through to _with_retry (unbounded, silently
