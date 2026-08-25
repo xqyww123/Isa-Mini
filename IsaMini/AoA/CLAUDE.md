@@ -75,7 +75,7 @@ The Python `Session` is **not** an Isabelle session. Workers do not open a new I
 - **Worker scoped view**: `Session.print_proof_scope` — a non-worker prints the whole `root`; a worker prints the in-scope variables and type variables, then a unified `premises:` section (assumptions plus declared facts, standard-printed via the prefetched `_worker_premise_cache`), the bare target goal, and the target's own substeps. `Session.quickview_proof_scope` is the compressed analogue.
 
 ### Drivers
-- Base `LMDriver(Session)` (`language_model_driver.py`): `run()` dispatches by role; retry layers `_with_retry` (quota, 20-min wait) + `_retry_transient` (1.5ⁿ backoff).
+- Base `LMDriver(Session)` (`language_model_driver.py`): `run()` dispatches by role; retry layers `_with_retry` (quota, 20-min wait) + `_retry_transient` (1.5ⁿ backoff; the error class it re-rolls is the per-driver `RETRY_TRANSIENT_ON`).
 - `driver_claude_code.py` — **default** (`ClaudeCode`); uses the Claude Agent SDK pointed at the singleton HTTP MCP server (`mcp_servers={"proof": {type: http, url}}`).
 - `driver_api.py` — `APIDriver`: owns its own chat loop, calls `Provider.chat()`, executes tools via in-process `ToolExecutor`, compacts at ~80% context.
 - `driver_openai_api.py` / `driver_anthropic.py` / `driver_codex.py` — provider variants (lazy-imported in `toplevel.py`). `driver_gemini.py` is present but deliberately NOT registered (never exercised against the live API).

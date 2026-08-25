@@ -317,6 +317,21 @@ async def test_retry_transient_on_narrows_to_corrupted_samples():
         pass
     check(calls == 1, "a plain _TransientError must not be re-rolled")
 
+    # The real wiring (imported here: it drags in the openai/anthropic SDKs).
+    from IsaMini.AoA.language_model_driver import LMDriver
+    from IsaMini.AoA.driver_openai_api import APIDriver_OpenAI, APIDriver_OpenAICodex
+    import IsaMini.AoA.driver_anthropic  # noqa: F401  (registers "Claude")
+    from IsaMini.AoA.model import Session
+    check(APIDriver.RETRY_TRANSIENT_ON is _TransientError,
+          "the base default must cover every transient error")
+    check(APIDriver_OpenAI.RETRY_TRANSIENT_ON is _CorruptedSampleError
+          and APIDriver_OpenAICodex.RETRY_TRANSIENT_ON is _CorruptedSampleError,
+          "the OpenAI family must narrow to corrupted samples")
+    for name, drv in Session.Driver.items():
+        if isinstance(drv, type) and issubclass(drv, LMDriver):
+            check(issubclass(_CorruptedSampleError, drv.RETRY_TRANSIENT_ON),
+                  f"driver {name!r} must never exclude corrupted samples")
+
 
 # ---------------------------------------------------------------------------
 # 2. end to end: re-roll, then the bounded arm (§5.2)

@@ -488,8 +488,7 @@ class APIDriver(LMDriver):
                     break
                 except (_CorruptedSampleError, UnicodeEncodeError) as e:
                     # The merged arm. Two legs: a corrupted sample survived
-                    # _retry_transient's re-rolls (or the driver's
-                    # RETRY_TRANSIENT_ON excludes it); or — the UnicodeEncodeError
+                    # _retry_transient's re-rolls; or — the UnicodeEncodeError
                     # leg — poison hidden in a parsed native payload hit the
                     # HTTP client's strict UTF-8 encode. _CorruptedSampleError
                     # must not fall through to _with_retry (unbounded, silently

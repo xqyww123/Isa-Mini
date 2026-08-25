@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from time import time
-from typing import Awaitable, Callable, ClassVar, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from .model import AoA_Error, Session
 
@@ -30,7 +30,8 @@ class _CorruptedSampleError(_TransientError):
     ``_TransientError`` gets a free re-roll wherever a real inner retry layer
     exists; ``APIDriver._api_loop``'s merged arm catches it before it can
     reach ``_with_retry`` (which retries unboundedly and silently rebuilds the
-    context). Only raise it from code that loop covers. Only the surrogate
+    context). Only raise it from code ``_checked_chat`` covers: its three call
+    sites all bound the fall-through. Only the surrogate
     instance emits a ``CORRUPTED_SAMPLE`` meta event: the JSON check is a
     ``Provider`` static method with no session handle."""
     pass
@@ -160,7 +161,7 @@ class LMDriver(Session):
     # provider already retries network-class failures internally narrows this to
     # the content-defect class, so those failures pass straight to _with_retry
     # instead of restarting the provider's own budget over and over.
-    RETRY_TRANSIENT_ON: ClassVar[type[_TransientError]] = _TransientError
+    RETRY_TRANSIENT_ON: type[_TransientError] = _TransientError
 
     def _on_start_run(self):
         """Called at the start of ``run()``.  Override to customise logging."""
@@ -198,9 +199,9 @@ class LMDriver(Session):
             try:
                 return await fn()
             except _QuotaError as e:
-                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry"
-                                  + (f" ({e})" if str(e) else "")
-                                  + " (the chat history is discarded)", to_isabelle=True)
+                self.warn_AoA_opr("Quota exhausted, waiting 20min to retry "
+                                  "(the chat history is discarded)"
+                                  + (f": {e}" if str(e) else ""), to_isabelle=True)
                 await self._quota_pause()
             except _TransientError as e:
                 self.warn_AoA_opr("Transient API error, retrying in 2s "
