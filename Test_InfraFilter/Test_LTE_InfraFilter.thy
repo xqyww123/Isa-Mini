@@ -47,7 +47,7 @@ ML_file \<open>../../Semantic_Embedding/Tools/infra_filter.ML\<close>
 
 ML \<open>
 let
-  val out_path = Path.explode "~/.isabelle/Isabelle2024/log/infra_filter_pos_test.log"
+  val out_path = Path.explode "$ISABELLE_HOME_USER/log/infra_filter_pos_test.log"
   val lines : string list Synchronized.var = Synchronized.var "log_lines" []
   fun log s = Synchronized.change lines (fn ls => ls @ [s])
   fun flush () =
@@ -61,8 +61,10 @@ let
     ("Multiset.multiset.count", false),
     ("Finite_Map.fmap.fmlookup", false),
     ("Product_Type.prod.swap", false),
-    (* Should be filtered (BNF infrastructure, not in preserved_set) *)
-    ("List.list.size_list", true),
+    (* The size family is KEPT since the 2026-08-25 rulings -- `size_list` is
+       cited by ordinary induction proofs.  Its `instantiation` companion is
+       still machinery and dies on the `inst_infix` rule. *)
+    ("List.list.size_list", false),
     ("List.list.size_list_inst.size_list", true),
     (* Should pass (preserved: constructors, case, map, etc.) *)
     ("List.list.Nil", false),
@@ -70,13 +72,15 @@ let
     ("List.list.case_list", false),
     ("List.map", false),
     ("List.set", false),
-    (* Should be filtered (Abs_/Rep_ by name pattern) *)
-    ("Product_Type.prod.Abs_prod", true),
-    ("Product_Type.prod.Rep_prod", true),
-    ("Multiset.multiset.Abs_multiset", true),
+    (* Typedef morphisms are KEPT since the 2026-08-25 deletion of the
+       `abs_rep_name` rule: an Abs_/Rep_ name pattern is no longer a verdict on
+       its own.  `Rep_multiset` and `Rep_fset` are still rejected, but on the
+       `hidden` rule -- those two libraries `hide_const` the Rep morphism. *)
+    ("Product_Type.prod.Abs_prod", false),
+    ("Product_Type.prod.Rep_prod", false),
+    ("Multiset.multiset.Abs_multiset", false),
     ("Multiset.multiset.Rep_multiset", true),
-    (* Should be filtered (quotient typedef infra) *)
-    ("FSet.fset.Abs_fset", true),
+    ("FSet.fset.Abs_fset", false),
     ("FSet.fset.Rep_fset", true),
     (* Should pass (BNF preserved: map/pred/rel/sets) *)
     ("Multiset.image_mset", false),
@@ -107,7 +111,7 @@ in () end
 
 ML \<open>
 let
-  val out_path = Path.explode "~/.isabelle/Isabelle2024/log/infra_filter_broad_test.log"
+  val out_path = Path.explode "$ISABELLE_HOME_USER/log/infra_filter_broad_test.log"
   val lines : string list Synchronized.var = Synchronized.var "log_lines" []
   fun log s = Synchronized.change lines (fn ls => ls @ [s])
   fun flush () =
@@ -139,7 +143,6 @@ let
   (* Break down infra consts by reason *)
   val _ = log ""
   val _ = log "--- Infra constant breakdown (first matching reason) ---"
-  val fact_space = Facts.space_of (Global_Theory.facts_of thy)
   fun is_hidden space name =
     Long_Name.is_hidden (Name_Space.intern space name)
   val n_concealed = length (filter (fn n => Name_Space.is_concealed const_space n) all_const_names)
@@ -164,20 +167,28 @@ let
         val status = if result then "FILTERED (unexpected?)" else "pass"
     in log (String.concat ["  ", status, "  ", name]) end) lift_consts
 
-  (* Spot-check: BNF infra constants that SHOULD be filtered *)
+  (* Spot-check: the size plugin's constants.  The size functions themselves are
+     KEPT since the 2026-08-25 rulings; only their `instantiation` companions are
+     machinery.  The sum/prod size functions are declared in `HOL.Basic_BNF_LFPs`,
+     NOT under a `Sum_Type.sum.` / `Product_Type.prod.` qualifier -- querying the
+     latter spellings asks about names that do not exist in this distribution,
+     and a verdict on a non-existent name is meaningless. *)
   val _ = log ""
-  val _ = log "--- Spot-check: known BNF infra constants ---"
-  val bnf_infra_consts = [
-    "List.list.size_list",
-    "List.list.size_list_inst.size_list",
-    "Sum_Type.sum.size_sum",
-    "Product_Type.prod.size_prod",
-    "Option.option.size_option"
+  val _ = log "--- Spot-check: size-plugin constants ---"
+  val size_consts = [
+    ("List.list.size_list", false),
+    ("Basic_BNF_LFPs.sum.size_sum", false),
+    ("Basic_BNF_LFPs.prod.size_prod", false),
+    ("Option.option.size_option", false),
+    ("List.list.size_list_inst.size_list", true),
+    ("Basic_BNF_LFPs.size_sum_inst.size_sum", true),
+    ("Basic_BNF_LFPs.size_prod_inst.size_prod", true)
   ]
-  val _ = map (fn name =>
+  val _ = map (fn (name, expected) =>
     let val result = is_infra_const name
-        val status = if result then "filtered" else "PASS (unexpected?)"
-    in log (String.concat ["  ", status, "  ", name]) end) bnf_infra_consts
+        val status = if result = expected then (if result then "filtered" else "pass")
+                     else "UNEXPECTED"
+    in log (String.concat ["  ", status, "  ", name]) end) size_consts
 
   (* Spot-check: preserved BNF constants (names from BNF registration) *)
   val _ = log ""
@@ -204,20 +215,24 @@ let
         val status = if result then "FILTERED (unexpected?)" else "pass"
     in log (String.concat ["  ", status, "  ", name]) end) preserved_consts
 
-  (* Spot-check: Abs_/Rep_ constants that SHOULD be filtered *)
+  (* Spot-check: Abs_/Rep_ typedef morphisms.  Since the `abs_rep_name` rule was
+     deleted (2026-08-25) these are KEPT unless another rule reaches them -- the
+     `hide_const`ed Rep morphisms of Multiset/FSet on `hidden`, and the ones the
+     datatype package conceals (Option/List) on `concealed`. *)
   val _ = log ""
   val _ = log "--- Spot-check: Abs_/Rep_ typedef morphisms ---"
   val absrep_consts = [
-    "Product_Type.prod.Abs_prod", "Product_Type.prod.Rep_prod",
-    "Multiset.multiset.Abs_multiset", "Multiset.multiset.Rep_multiset",
-    "FSet.fset.Abs_fset", "FSet.fset.Rep_fset",
-    "Sum_Type.sum.Abs_sum", "Sum_Type.sum.Rep_sum",
-    "Option.option.Abs_option", "Option.option.Rep_option",
-    "List.list.Abs_list", "List.list.Rep_list"
+    ("Product_Type.prod.Abs_prod", false), ("Product_Type.prod.Rep_prod", false),
+    ("Multiset.multiset.Abs_multiset", false), ("Multiset.multiset.Rep_multiset", true),
+    ("FSet.fset.Abs_fset", false), ("FSet.fset.Rep_fset", true),
+    ("Sum_Type.sum.Abs_sum", false), ("Sum_Type.sum.Rep_sum", false),
+    ("Option.option.Abs_option", true), ("Option.option.Rep_option", true),
+    ("List.list.Abs_list", true), ("List.list.Rep_list", true)
   ]
-  val _ = map (fn name =>
+  val _ = map (fn (name, expected) =>
     let val result = is_infra_const name
-        val status = if result then "filtered" else "PASS (unexpected?)"
+        val status = if result = expected then (if result then "filtered" else "pass")
+                     else "UNEXPECTED"
     in log (String.concat ["  ", status, "  ", name]) end) absrep_consts
 
   (* --- Sample: passed constants under ADT prefixes --- *)
@@ -288,45 +303,10 @@ let
     "  Pass: ", Int.toString (length pass_locales),
     "  Ratio: ", Int.toString (if length all_locale_names > 0 then 100 * length infra_locales div length all_locale_names else 0), "%"])
 
-  (* --- Diagnostic: WHY are specific constants filtered? --- *)
+  (* --- Diagnostic: which constants die on the `hidden` rule --- *)
   val _ = log ""
-  val _ = log "=== DIAGNOSTIC: filter reasons for suspicious constants ==="
+  val _ = log "=== DIAGNOSTIC: hidden (non-concealed) constants rejected ==="
 
-  val internal_prefixes = ["Lifting.", "BNF_Def.", "Transfer.", "BNF_Cardinal_Order_Relation.",
-        "HOL.equal", "ATP.", "Code_Evaluation."]
-
-  fun diagnose_const name =
-    let
-      fun check tests =
-        case tests of
-          [] => "UNKNOWN"
-        | (label, test) :: rest => if test () then label else check rest
-      val reason = check [
-        ("concealed", fn () => Name_Space.is_concealed const_space name),
-        ("hidden", fn () => is_hidden const_space name),
-        ("internal_prefix", fn () => exists (fn pfx => String.isPrefix pfx name) internal_prefixes),
-        ("has_class_variant", fn () =>
-          let val all_cn = #constants (Consts.dest consts) |> map fst
-              val has_cv = exists (fn cname =>
-                if String.isSubstring "_class." cname then
-                  let val qual = Long_Name.qualifier cname
-                      val base = Long_Name.base_name cname
-                  in if String.isSuffix "_class" qual then
-                       String.concat [
-                         String.substring (qual, 0, size qual - 6), ".", base] = name
-                     else false
-                  end
-                else false) all_cn
-          in has_cv end),
-        ("quotient_typedef_infra", fn () => false),
-        ("Abs_Rep_name", fn () =>
-          let val base = Long_Name.base_name name
-          in String.isPrefix "Abs_" base orelse String.isPrefix "Rep_" base end),
-        ("adt_prefix+bnf_pos+not_preserved", fn () => false)
-      ]
-    in reason end
-
-  (* Diagnostic: hidden constants from Consts.dest that are filtered *)
   val hidden_filtered = filter (fn n =>
     is_infra_const n andalso is_hidden const_space n
     andalso not (Name_Space.is_concealed const_space n)) all_const_names
