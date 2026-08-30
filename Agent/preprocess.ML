@@ -84,7 +84,6 @@ fun custom_split_tac ctxt = SUBGOAL (fn (goal, i) =>
 fun try_tac_timeout time tac st =
   Timeout.apply time (fn () => SINGLE tac st) ()
   handle Timeout.TIMEOUT _ => NONE
-       | Exn.Interrupt_Breakdown => NONE
 
 (* The race itself, shared by the tactic and the recording entry. *)
 datatype split_outcome =

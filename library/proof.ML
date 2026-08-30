@@ -1806,12 +1806,10 @@ fun OPR_with_ret (f : stack -> 'a * stack) ((S,TAB,ID) : state) : 'a * state
 fun timed_OPR t f s
   = Timeout.apply (Time.fromSeconds t) (OPR f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
-         | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
 fun timed_OPR_with_ret t f s
   = Timeout.apply (Time.fromSeconds t) (OPR_with_ret f) s
     handle Timeout.TIMEOUT _ => raise OPR_FAIL (PROOF_FAIL, "Timeout")
-         | Exn.Interrupt_Breakdown => raise OPR_FAIL (PROOF_FAIL, "Timeout")
 
 val SPLIT_CONJS = timed_OPR 5 SPLIT_CONJS'
 val SPLIT_CONJS_CMD = Scan.succeed (timed_OPR 5 SPLIT_CONJS')
