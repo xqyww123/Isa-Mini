@@ -101,13 +101,25 @@ fun store_hit_replay {key, write_store} (ctxt, sequent) =
       val kws = Keyword.no_major_keywords (Thy_Header.get_keywords thy)
       val n = Thm.nprems_of sequent
       (* SOME th on success; NONE only on Auto_Fail (eval_prf_str's whole
-         failure vocabulary) — anything else is a bug and must escape. *)
+         failure vocabulary) — anything else is a bug and must escape.
+         Capture site (EVENT_LOG_PLAN 7): anything escaping the replay —
+         including a traceless Interrupt_Breakdown record — is logged before
+         it is re-raised unchanged; Auto_Fail is the ordinary miss and is
+         excluded from the record predicate.  The region is bounded by the
+         tolerant_time budget applied inside eval_prf_str. *)
       fun replay (std_time, prf_text) =
-        \<^try>\<open>
-          SOME (Phi_Sledgehammer_Solver.eval_prf_str kws n
-                  (Phi_Proof_Store.tolerant_time std_time) prf_text (ctxt, sequent)
-                |> (fn (_, (_, th)) => th))
-        catch Phi_Sledgehammer_Solver.Auto_Fail _ => NONE\<close>
+        (case Exn.capture_body (fn () =>
+                Exception_Log.capture
+                  {site = "store replay",
+                   record = fn Phi_Sledgehammer_Solver.Auto_Fail _ => false
+                             | e => Exception_Log.default_record e}
+                  (fn () =>
+                    Phi_Sledgehammer_Solver.eval_prf_str kws n
+                      (Phi_Proof_Store.tolerant_time std_time) prf_text (ctxt, sequent)
+                    |> (fn (_, (_, th)) => th))) of
+           Exn.Res th => SOME th
+         | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail _) => NONE
+         | Exn.Exn exn => Exn.reraise exn)
       fun try_l1 () =
         case l1_lookup key of
           NONE => NONE

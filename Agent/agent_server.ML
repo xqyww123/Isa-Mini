@@ -1993,7 +1993,23 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
       val (dcfg, dbudget) = MiniLang_Agent.default_cfg
       val config = (dcfg, dbudget, counters, MiniLang_Agent.REPLAY)
                      : MiniLang_Agent.config
-      val s1 = fold (MiniLang_Agent.interpret config) ops s0
+      (*record point (EVENT_LOG_PLAN 7): a breakdown escaping a replayed op is
+        attributed to the failing step; record_breakdown is a no-op otherwise*)
+      val step = Unsynchronized.ref 0
+      fun interpret1 cmd s =
+        (step := !step + 1;
+         case Exn.capture (MiniLang_Agent.interpret config cmd) s of
+           Exn.Res s' => s'
+         | Exn.Exn exn =>
+           (Exception_Log.record_breakdown
+              ("aoa_replay step " ^ string_of_int (!step) ^ "/" ^ string_of_int (length ops) ^
+               " op=" ^ (case cmd of MiniLang_Agent.HAMMER _ => "HAMMER"
+                                   | MiniLang_Agent.HAVE _ => "HAVE"
+                                   | MiniLang_Agent.INTRO _ => "INTRO"
+                                   | MiniLang_Agent.WITNESS _ => "WITNESS"
+                                   | _ => "other")) exn;
+            Exn.reraise exn))
+      val s1 = fold interpret1 ops s0
       (* 7 *)
       val th = Minilang.conclude ctxt' s1
                |> restore_concl orig_concl
@@ -2142,22 +2158,32 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
    already stored inside hammer_or_AoA; do not join it. *)
 fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
   if is_dummy sequent then NONE
-  else (hammer_or_AoA {fact_override = Sledgehammer_Fact.no_fact_override,
-                       proof_id = NONE, hammer_timeout = NONE,
-                       async_mode = Phi_Sledgehammer_Solver.Sync,
-                       read_store = NONE, write_store = NONE} ctxt sequent
-        |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)))
-       handle Agent_Give_Up (reason, detail, cost) =>
-              (tracing (string_of_cost cost);
-               error (banner_of reason ^ "\n" ^ detail))
-            (* The engine's Internal_Failure says the PROVER broke, not that the
-               goal is hard; hammer_or_AoA reraises it on purpose (§2.9) and
-               nothing between here and Isar renders it, so without this arm the
-               method leaks a bare structured exception.  The payload IS the
-               message — the same rendering the engine's own Isar method faces
-               give it.  No agent ran, so no cost line. *)
-            | Phi_Sledgehammer_Solver.Auto_Fail
-                (Phi_Sledgehammer_Solver.Internal_Failure msg) => error msg)
+  else
+    (* record point (EVENT_LOG_PLAN 7): written as a capture-and-dispatch rather
+       than a `handle` so that an Interrupt_Breakdown can be RECORDED at this last
+       station before Isar and then let through unchanged; a catch-all `handle` arm
+       is rejected by the ML compiler, and \<^try> would re-raise the interrupt
+       before any arm of ours ran. *)
+    (case Exn.capture_body (fn () =>
+            hammer_or_AoA {fact_override = Sledgehammer_Fact.no_fact_override,
+                           proof_id = NONE, hammer_timeout = NONE,
+                           async_mode = Phi_Sledgehammer_Solver.Sync,
+                           read_store = NONE, write_store = NONE} ctxt sequent) of
+       Exn.Res (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)
+     | Exn.Exn (Agent_Give_Up (reason, detail, cost)) =>
+         (tracing (string_of_cost cost);
+          error (banner_of reason ^ "\n" ^ detail))
+       (* The engine's Internal_Failure says the PROVER broke, not that the
+          goal is hard; hammer_or_AoA reraises it on purpose (§2.9) and
+          nothing between here and Isar renders it, so without this arm the
+          method leaks a bare structured exception.  The payload IS the
+          message — the same rendering the engine's own Isar method faces
+          give it.  No agent ran, so no cost line. *)
+     | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail
+                  (Phi_Sledgehammer_Solver.Internal_Failure msg)) => error msg
+     | Exn.Exn exn =>
+         (Exception_Log.record_breakdown "hammer_or_aoa_method (arrival at Isar)" exn;
+          Exn.reraise exn)))
 
 
 (*** Query by name RPC — reuses the AoA query tool's Python core ***)
