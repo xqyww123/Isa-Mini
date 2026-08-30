@@ -54,7 +54,7 @@ let
     File.write out_path (String.concatWith "\n" (Synchronized.value lines) ^ "\n")
 
   val context = Context.Proof \<^context>
-  val {is_infra_const, ...} = Infra_Filter.gen_infra_filters context
+  val {is_uninterpreted_const, ...} = Infra_Filter.gen_infra_filters context
 
   val test_consts = [
     (* Should NOT be filtered (lift_definition / user constants) *)
@@ -90,10 +90,10 @@ let
     ("FSet.fset_member", true) (* hidden name *)
   ]
 
-  val _ = log "====== is_infra_const verification test ======"
+  val _ = log "====== is_uninterpreted_const verification test ======"
   val all_pass = Synchronized.var "all_pass" true
   val _ = map (fn (name, expected) =>
-    let val result = is_infra_const name
+    let val result = is_uninterpreted_const name
         val status = if result = expected then "PASS" else "FAIL"
         val _ = if result <> expected then Synchronized.change all_pass (K false) else ()
     in log (status ^ "  " ^ name ^
@@ -119,7 +119,7 @@ let
 
   val context = Context.Proof \<^context>
   val thy = Proof_Context.theory_of \<^context>
-  val {is_infra_const, is_infra_thm, is_infra_type, is_infra_class, is_infra_locale, ...} =
+  val {is_uninterpreted_const, is_infra_thm, is_infra_type, is_infra_class, is_infra_locale, ...} =
     Infra_Filter.gen_infra_filters context
 
   val consts = Sign.consts_of thy
@@ -132,7 +132,7 @@ let
   (* --- Constants --- *)
   val _ = log "=== CONSTANTS ==="
   val total_consts = length all_const_names
-  val (infra_consts, pass_consts) = List.partition is_infra_const all_const_names
+  val (infra_consts, pass_consts) = List.partition is_uninterpreted_const all_const_names
   val n_infra = length infra_consts
   val n_pass = length pass_consts
   val _ = log (String.concat ["Total: ", Int.toString total_consts,
@@ -163,7 +163,7 @@ let
     "FSet.fset.fset"
   ]
   val _ = map (fn name =>
-    let val result = is_infra_const name
+    let val result = is_uninterpreted_const name
         val status = if result then "FILTERED (unexpected?)" else "pass"
     in log (String.concat ["  ", status, "  ", name]) end) lift_consts
 
@@ -185,7 +185,7 @@ let
     ("Basic_BNF_LFPs.size_prod_inst.size_prod", true)
   ]
   val _ = map (fn (name, expected) =>
-    let val result = is_infra_const name
+    let val result = is_uninterpreted_const name
         val status = if result = expected then (if result then "filtered" else "pass")
                      else "UNEXPECTED"
     in log (String.concat ["  ", status, "  ", name]) end) size_consts
@@ -211,7 +211,7 @@ let
     "FSet.fimage"
   ]
   val _ = map (fn name =>
-    let val result = is_infra_const name
+    let val result = is_uninterpreted_const name
         val status = if result then "FILTERED (unexpected?)" else "pass"
     in log (String.concat ["  ", status, "  ", name]) end) preserved_consts
 
@@ -230,7 +230,7 @@ let
     ("List.list.Abs_list", true), ("List.list.Rep_list", true)
   ]
   val _ = map (fn (name, expected) =>
-    let val result = is_infra_const name
+    let val result = is_uninterpreted_const name
         val status = if result = expected then (if result then "filtered" else "pass")
                      else "UNEXPECTED"
     in log (String.concat ["  ", status, "  ", name]) end) absrep_consts
@@ -308,7 +308,7 @@ let
   val _ = log "=== DIAGNOSTIC: hidden (non-concealed) constants rejected ==="
 
   val hidden_filtered = filter (fn n =>
-    is_infra_const n andalso is_hidden const_space n
+    is_uninterpreted_const n andalso is_hidden const_space n
     andalso not (Name_Space.is_concealed const_space n)) all_const_names
   val _ = log (String.concat ["  Hidden (non-concealed) constants filtered: ",
     Int.toString (length hidden_filtered)])
