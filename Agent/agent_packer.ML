@@ -56,17 +56,24 @@ fun unpack_raw_typ s =
              #> apfst (fn (n,i,s) => TVar ((n,i),s))
          | _ => raise Unpack) s
 
-fun pack_raw_term (Const data) =
+(*A runtime symbol (SSymb.thy) travels as its identifier (tag 9) and is re-interned
+  by the decoder: its numeral is allocated per process, so shipping the numeral
+  would make a recorded term differ from the same goal parsed in another session.*)
+fun pack_raw_term t =
+  case Phi_Tool_Symbol.dest_symbol t of
+    SOME id => packPair (packInt, packString) (9, id)
+  | NONE => pack_raw_term' t
+and pack_raw_term' (Const data) =
       packPair (packInt, packPair (packString, pack_raw_typ)) (3, data)
-  | pack_raw_term (Free data) =
+  | pack_raw_term' (Free data) =
       packPair (packInt, packPair (packString, pack_raw_typ)) (4, data)
-  | pack_raw_term (Var ((n,i),t)) =
+  | pack_raw_term' (Var ((n,i),t)) =
       packPair (packInt, packTuple3 (packString, packInt, pack_raw_typ)) (5, (n,i,t))
-  | pack_raw_term (Bound data) =
+  | pack_raw_term' (Bound data) =
       packPair (packInt, packInt) (6, data)
-  | pack_raw_term (Abs data) =
+  | pack_raw_term' (Abs data) =
       packPair (packInt, packTuple3 (packString, pack_raw_typ, pack_raw_term)) (7, data)
-  | pack_raw_term (A $ B) =
+  | pack_raw_term' (A $ B) =
       packPair (packInt, packPair (pack_raw_term, pack_raw_term)) (8, (A,B))
 
 fun unpack_raw_term s =
@@ -82,6 +89,7 @@ fun unpack_raw_term s =
              #> apfst Abs
          | 8 => unpackPair (unpack_raw_term, unpack_raw_term)
              #> apfst (fn (A,B) => A $ B)
+         | 9 => unpackString #> apfst Phi_Tool_Symbol.mk_symbol
          | _ => raise Unpack) s
 
 (* Bindings serialization using term packer *)
