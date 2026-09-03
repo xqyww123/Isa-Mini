@@ -28,17 +28,28 @@ signature PROOF_STORE_AoA = sig
      the L1 mirror of the L2 tombstone.  Failures are swallowed silently. *)
   val l1_invalidate : Phi_Proof_Store.proof_id -> unit
 
-  (* Level 0 (§2.3): the two-level lookup-and-replay brick, both levels before
-     any search and outside any fork.  Both levels return (std_time, text) and
-     both replay through the one generic channel eval_prf_str; a text of the
-     form `aoa_replay "…"` enters the pure-ML §2.7 flow through that method,
-     never through a second path.  L2 replay failure writes a tombstone and
-     falls to L1; L1 replay failure invalidates the row and reports a miss;
-     an L1 hit that replays while L2 is cold is upgraded into an L2 entry
-     (gated by write_store — invalidations are store maintenance and are NOT
-     gated).  Do not wrap another Timeout.apply around this: the replay budget
-     is tolerant_time of the recorded std_time, applied inside eval_prf_str. *)
-  val store_hit_replay : {key: Phi_Proof_Store.proof_id, write_store: bool}
+  (* Level 0 (§2.3): the lookup-and-replay brick, every level before any
+     search and outside any fork.  Three levels, in order:
+       1. L2 by proof id.  A hit that fails to replay is tombstoned
+          (invalidate_proof_cache) and the lookup falls through.
+       2. L2 by goal hash (skipped when no hash is given).  A hit that replays
+          is promoted: written to L2 under `key` with that hash (gated by
+          write_store; L2 only, never L1).  One that fails is forgotten in
+          memory only (invalidate_proof_cache_by_hash: no frame) and the
+          lookup falls through.
+       3. L1 by proof id.  A hit that replays while L2 is cold is upgraded
+          into an L2 entry (gated by write_store); one that fails is
+          invalidated (l1_invalidate) and the result is a miss.
+     Across all three: a record that already failed under an earlier level --
+     same time, same text -- is not replayed again but counted as failed
+     outright.  Invalidations are store maintenance and are NOT gated.
+     Every level returns (std_time, text) and replays through the one generic
+     channel eval_prf_str; a text of the form `aoa_replay "…"` enters the
+     pure-ML §2.7 flow through that method, never through a second path.  The
+     hash is computed by the caller: this brick holds no key recipe.  Do not
+     wrap another Timeout.apply around this: the replay budget is
+     tolerant_time of the recorded std_time, applied inside eval_prf_str. *)
+  val store_hit_replay : {key: Phi_Proof_Store.proof_id, hash: Hasher.digest option, write_store: bool}
                       -> Proof.context * thm
                       -> (Time.time * string * thm) option
 
@@ -96,7 +107,7 @@ fun l1_invalidate key =
 
 end (*local*)
 
-fun store_hit_replay {key, write_store} (ctxt, sequent) =
+fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
   let val thy = Proof_Context.theory_of ctxt
       val kws = Keyword.no_major_keywords (Thy_Header.get_keywords thy)
       val n = Thm.nprems_of sequent
@@ -120,28 +131,45 @@ fun store_hit_replay {key, write_store} (ctxt, sequent) =
            Exn.Res th => SOME th
          | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail _) => NONE
          | Exn.Exn exn => Exn.reraise exn)
-      fun try_l1 () =
+      (* `failed` holds the records earlier levels gave up on: one of them met
+         again is a failure without another replay. *)
+      fun replay_unless failed (s as (std_time, prf_text)) =
+        if member (op =) failed s then NONE
+        else Option.map (fn th => (std_time, prf_text, th)) (replay s)
+      (* L2 is cold under `key` on every route that writes here (miss, or
+         hit-then-tombstone): write the row as-is -- same time, same text. *)
+      fun write_l2 (std_time, prf_text, _) =
+        if write_store
+        then Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash} (std_time, prf_text)
+        else ()
+      fun try_l1 failed =
         case l1_lookup key of
           NONE => NONE
-        | SOME (std_time, prf_text) =>
-            (case replay (std_time, prf_text) of
-               SOME th =>
-                 (* L2 is cold on both routes here (miss, or hit-then-tombstone):
-                    upgrade-write the row as-is — same key, same time, same
-                    text, no format conversion. *)
-                 (if write_store
-                  then Phi_Proof_Store.update_cached_proof thy (key, (std_time, prf_text))
-                  else ()
-                  ; SOME (std_time, prf_text, th))
+        | SOME s =>
+            (case replay_unless failed s of
+               SOME hit => (write_l2 hit; SOME hit)
              | NONE => (l1_invalidate key; NONE))
+      fun try_hash failed =
+        case hash of
+          NONE => try_l1 failed
+        | SOME h =>
+            case Phi_Proof_Store.get_cached_proof_by_hash thy h of
+              NONE => try_l1 failed
+            | SOME s =>
+                (case replay_unless failed s of
+                   SOME hit => (write_l2 hit; SOME hit)   (*promotion*)
+                 | NONE =>
+                     (* ruling I: the hash entry is forgotten, no frame is written *)
+                     (Phi_Proof_Store.invalidate_proof_cache_by_hash h thy;
+                      try_l1 (s :: failed)))
    in case Phi_Proof_Store.get_cached_proof thy key of
-        SOME (std_time, prf_text) =>
-          (case replay (std_time, prf_text) of
-             SOME th => SOME (std_time, prf_text, th)   (*L2 hit: zero write-back*)
+        NONE => try_hash []
+      | SOME s =>
+          (case replay_unless [] s of
+             SOME hit => SOME hit   (*L2 hit: zero write-back*)
            | NONE =>
                (Phi_Proof_Store.invalidate_proof_cache true key thy;
-                try_l1 ()))
-      | NONE => try_l1 ()
+                try_hash [s]))
   end
 
 end

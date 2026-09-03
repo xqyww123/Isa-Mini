@@ -1879,9 +1879,11 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (D59): the all-goals key of the ORIGINAL,
          pre-preprocessing goal — the split race must not move the key. *)
-      val key = Hasher.hex (Hasher.all_goals (ctxt, sequent))
+      val hash = Hasher.all_goals (ctxt, sequent)
+      val key = Hasher.hex hash
    in case (if read
-            then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
+            then Proof_Store_AoA.store_hit_replay {key = key, hash = SOME hash, write_store = write}
+                                                  (ctxt, sequent)
             else NONE) of
         SOME (std_time, prf_text, sequent') =>
           (* Level-0 hit: the agent never ran — [] and zero_cost are statements
@@ -1920,7 +1922,7 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
                                  Exn.Res (_, _, replay_time, prf_text) =>
                                    let val thy = Proof_Context.theory_of ctxt
                                        val std = Phi_Proof_Store.standard_time replay_time
-                                    in Phi_Proof_Store.update_cached_proof thy (key, (std, prf_text))
+                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = SOME hash} (std, prf_text)
                                      ; Proof_Store_AoA.l1_write (key, std, prf_text)
                                    end
                                | Exn.Exn _ => () (*no proof came out: nothing to write*)))
@@ -2051,10 +2053,16 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
   let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (§2.3): a given id verbatim, else the all-goals key
-         of the ORIGINAL goal — the same formula run_AoA uses. *)
-      val key = case proof_id of SOME id => id | NONE => Hasher.hex (Hasher.all_goals (ctxt, sequent))
+         of the ORIGINAL goal — the same formula run_AoA uses.  The hash is
+         the second key of the same record; it is only computed when the
+         store is touched at all. *)
+      val (key, hash) =
+        case proof_id of
+          SOME id => (id, if read orelse write then SOME (Hasher.all_goals (ctxt, sequent)) else NONE)
+        | NONE => let val h = Hasher.all_goals (ctxt, sequent) in (Hasher.hex h, SOME h) end
    in case (if read
-            then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
+            then Proof_Store_AoA.store_hit_replay {key = key, hash = hash, write_store = write}
+                                                  (ctxt, sequent)
             else NONE) of
         SOME (_, prf_text, sequent') =>
           (* Level-0 hit: the stored text goes out verbatim.  An L2 hit writes
@@ -2136,7 +2144,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
                                  Exn.Res (time, prf_text) =>
                                    let val thy = Proof_Context.theory_of ctxt
                                        val std = Phi_Proof_Store.standard_time time
-                                    in Phi_Proof_Store.update_cached_proof thy (key, (std, prf_text))
+                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash} (std, prf_text)
                                      ; Proof_Store_AoA.l1_write (key, std, prf_text)
                                    end
                                | Exn.Exn _ => () (*no proof came out: nothing to write*)))
