@@ -2067,9 +2067,10 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
                                                   (ctxt, sequent)
             else NONE) of
         SOME (_, prf_text, sequent') =>
-          (* Level-0 hit: the stored text goes out verbatim.  An L2 hit writes
-             nothing; an L1 hit's upgrade write-back already happened inside
-             store_hit_replay (gated by the same write_store). *)
+          (* Level-0 hit: the stored text goes out verbatim.  A hit by id wrote
+             nothing; a hit by goal hash was promoted under `key`, and an L1 hit
+             was upgraded into L2 -- both inside store_hit_replay, both gated by
+             the same write_store. *)
           (Future.value prf_text, sequent')
       | NONE =>
           let (* The MISS path, run once inside the (single) fork: engine
