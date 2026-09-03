@@ -77,7 +77,7 @@ val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
            -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) * thm
 
 (* run_AoA — the caching wrapper around raw_AoA:
-   [read_store -> level-0 two-level lookup] -> raw_AoA -> [write_store ->
+   [read_store -> level-0 three-level lookup] -> raw_AoA -> [write_store ->
    write-back to L2 and L1].  bool option NONE follows the
    AoA_read_proof_store / AoA_write_proof_store configs.  On a level-0 hit the
    four by-products are ([], zero_cost, recorded time, stored text) in a
@@ -91,7 +91,7 @@ val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
-(* hammer_or_AoA — the phi ↔ AoA facade (§2.3): level-0 two-level lookup
+(* hammer_or_AoA — the phi ↔ AoA facade (§2.3): level-0 three-level lookup
    (store_hit_replay, synchronous, outside any fork), then ONE fork wrapping
    strictly the MISS path: all_auto (engine multi-way search) ORELSE run_AoA;
    both inner branches run read_store = write_store = SOME false — the one
@@ -106,10 +106,12 @@ val hammer_or_AoA :
                                  (*THE one fork of the whole chain: every inner
                                    call is Sync.  Async carries phi's failure-text
                                    composer (§2.2) as its failure_msg*)
-      read_store: bool option,   (*governs level 0's BOTH levels; NONE follows
+      read_store: bool option,   (*governs level 0's ALL THREE levels (L2 by id,
+                                   L2 by goal hash, L1 by id); NONE follows
                                    AoA_read_proof_store*)
-      write_store: bool option}  (*governs EVERY write: level 0's L1 upgrade and
-                                   the fork-end L2 + L1 writes; NONE follows
+      write_store: bool option}  (*governs EVERY write: level 0's by-hash
+                                   promotion and L1 upgrade, and the fork-end
+                                   L2 + L1 writes; NONE follows
                                    AoA_write_proof_store.  NOT forwarded to the
                                    inner branches — they are constant SOME false*)
   -> Proof.context -> thm
@@ -2042,7 +2044,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
 
 
 (*** hammer_or_AoA — the phi ↔ AoA facade (§2.3): [read_store -> level-0
-     two-level lookup] -> ONE fork [ all_auto ORELSE run_AoA ] -> write-back
+     three-level lookup] -> ONE fork [ all_auto ORELSE run_AoA ] -> write-back
      at the fork's end.  The fork wraps STRICTLY the MISS path; every lookup
      and hit-replay is synchronous, outside the fork.  hammer_or_AoA did the
      read, so hammer_or_AoA does the (one) write: both inner branches are

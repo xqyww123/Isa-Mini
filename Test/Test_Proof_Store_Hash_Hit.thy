@@ -31,7 +31,15 @@ val t1 = Time.fromMilliseconds 100
 fun goal_of ctxt s = Goal.init (Thm.cterm_of ctxt (Syntax.read_prop ctxt s))
 fun hit key hash w cs =
   Proof_Store_AoA.store_hit_replay {key = key, hash = hash, write_store = w} cs
+
+(*counted by the method below: a replay the skip rule suppresses shows as a
+  count that did not move*)
+val replays = Unsynchronized.ref 0
 \<close>
+
+method_setup count_fail =
+  \<open>Scan.succeed (fn _ => SIMPLE_METHOD (fn _ => (replays := !replays + 1; Seq.empty)))\<close>
+  "count the invocation, then fail"
 
 ML \<open>
 val _ = S.invalidate_store thy
@@ -47,6 +55,15 @@ val n20 = length (frames ())
 val r20' = hit "id3" (SOME h20) false (ctxt, g20)
 val _ = assert (Option.map #2 r20' = SOME "(simp)[1]") "test20 hit again"
 val _ = assert (length (frames ()) = n20) "test20 no frame without write_store"
+
+(*20b: a hit by id is handed back as it stands: nothing written.  The preset
+      has no hash while the call has one, so a stray promotion write would
+      differ from it and could not be short-circuited.*)
+val _ = S.update_cached_proof thy {id = "K20b", hash = NONE} (t1, "(simp)[1]")
+val n20b = length (frames ())
+val r20b = hit "K20b" (SOME h20) true (ctxt, g20)
+val _ = assert (Option.map #2 r20b = SOME "(simp)[1]") "test20b hit"
+val _ = assert (length (frames ()) = n20b) "test20b no frame"
 \<close>
 
 ML \<open>
@@ -81,7 +98,26 @@ val r22 = hit "K1" (SOME h22) true (ctxt, g22)
 val _ = assert (Option.map #2 r22 = SOME "(simp)[1]") "test22 verbatim"
 val _ = assert (tombs_of "K1" = 1 andalso map #hash (puts_of "K1") = [NONE, SOME h22]) "test22 frames"
 val _ = S.force_reload thy
-val _ = assert (Option.map snd (S.get_cached_proof thy "K1") = SOME "(simp)[1]") "test22 reload"
+val _ = assert (S.get_cached_proof thy "K1" = SOME (t1, "(simp)[1]")) "test22 reload: a copy"
+
+(*22b: the skip rule seen from the positive side: the record that failed
+      under the id is NOT replayed again under the hash.  One replay invokes
+      the method more than once (the [1] combinator backtracks), so the
+      yardstick is one replay's count, measured first.*)
+val kws = Keyword.no_major_keywords (Thy_Header.get_keywords (Proof_Context.theory_of ctxt))
+val g22b = goal_of ctxt "(u::nat) * 1 = u"
+val h22b = Hasher.all_goals (ctxt, g22b)
+val _ = replays := 0
+val _ = \<^try>\<open>ignore (Phi_Sledgehammer_Solver.eval_prf_str kws 1 t1 "(count_fail)[1]" (ctxt, g22b))
+                 catch Phi_Sledgehammer_Solver.Auto_Fail _ => ()\<close>
+val per_replay = !replays
+val _ = assert (per_replay > 0) "test22b count_fail is reached"
+val _ = S.update_cached_proof thy {id = "K22b", hash = SOME h22b} (t1, "(count_fail)[1]")
+val _ = replays := 0
+val r22b = hit "K22b" (SOME h22b) true (ctxt, g22b)
+val _ = assert (is_none r22b) "test22b miss"
+val _ = assert (!replays = per_replay) ("test22b replayed once, not twice: " ^ string_of_int (!replays))
+val _ = assert (tombs_of "K22b" = 1) "test22b tombstone"
 \<close>
 
 ML \<open>
