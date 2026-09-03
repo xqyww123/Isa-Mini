@@ -2184,7 +2184,7 @@ fun init_ctxt c st = c
                              Unique_Counter (Synchronized.var "fact_counter" 0))
               | "none" => (No_Counter, No_Counter)
               | _ => error ("Invalid counter_mode: " ^ mode ^ ". Must be one of: consecutive, unique, none")
-         in (premise_ctr, fact_ctr, Hasher.term (Thm.prop_of st))
+         in (premise_ctr, fact_ctr, Hasher.hex (Hasher.term (Thm.prop_of st)))
         end
       )
   |> Context.proof_map (

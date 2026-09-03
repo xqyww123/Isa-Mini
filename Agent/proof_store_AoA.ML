@@ -19,14 +19,14 @@ signature PROOF_STORE_AoA = sig
 
   (* L1 query RPC: SOME (standard-machine time, proof text) on a hit; a MISS
      and ANY failure (no Python, no module, dead host) both return NONE. *)
-  val l1_lookup : Hasher.digest -> (Time.time * string) option
+  val l1_lookup : Phi_Proof_Store.proof_id -> (Time.time * string) option
 
   (* L1 write RPC, paired with the query.  Failures are swallowed silently. *)
-  val l1_write : Hasher.digest * Time.time * string -> unit
+  val l1_write : Phi_Proof_Store.proof_id * Time.time * string -> unit
 
   (* L1 invalidation RPC: deletes the row after a hit whose replay failed —
      the L1 mirror of the L2 tombstone.  Failures are swallowed silently. *)
-  val l1_invalidate : Hasher.digest -> unit
+  val l1_invalidate : Phi_Proof_Store.proof_id -> unit
 
   (* Level 0 (§2.3): the two-level lookup-and-replay brick, both levels before
      any search and outside any fork.  Both levels return (std_time, text) and
@@ -38,7 +38,7 @@ signature PROOF_STORE_AoA = sig
      (gated by write_store — invalidations are store maintenance and are NOT
      gated).  Do not wrap another Timeout.apply around this: the replay budget
      is tolerant_time of the recorded std_time, applied inside eval_prf_str. *)
-  val store_hit_replay : {key: Hasher.digest, write_store: bool}
+  val store_hit_replay : {key: Phi_Proof_Store.proof_id, write_store: bool}
                       -> Proof.context * thm
                       -> (Time.time * string * thm) option
 

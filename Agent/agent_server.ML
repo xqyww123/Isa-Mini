@@ -1879,7 +1879,7 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (D59): the all-goals key of the ORIGINAL,
          pre-preprocessing goal — the split race must not move the key. *)
-      val key = Hasher.all_goals (ctxt, sequent)
+      val key = Hasher.hex (Hasher.all_goals (ctxt, sequent))
    in case (if read
             then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
             else NONE) of
@@ -2052,7 +2052,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (§2.3): a given id verbatim, else the all-goals key
          of the ORIGINAL goal — the same formula run_AoA uses. *)
-      val key = case proof_id of SOME id => id | NONE => Hasher.all_goals (ctxt, sequent)
+      val key = case proof_id of SOME id => id | NONE => Hasher.hex (Hasher.all_goals (ctxt, sequent))
    in case (if read
             then Proof_Store_AoA.store_hit_replay {key = key, write_store = write} (ctxt, sequent)
             else NONE) of
