@@ -77,7 +77,8 @@ val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
            -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) * thm
 
 (* run_AoA — the caching wrapper around raw_AoA:
-   [read_store -> level-0 three-level lookup] -> raw_AoA -> [write_store ->
+   [read_store -> level-0 three-level lookup, whose by-hash promotion and L1
+   upgrade are themselves gated by write_store] -> raw_AoA -> [write_store ->
    write-back to L2 and L1].  bool option NONE follows the
    AoA_read_proof_store / AoA_write_proof_store configs.  On a level-0 hit the
    four by-products are ([], zero_cost, recorded time, stored text) in a
@@ -1871,9 +1872,10 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
            | NONE => error "Agent gives up (protocol error: missing reason)")
   end
 
-(*** run_AoA — the caching wrapper: [read_store -> level-0 lookup] ->
-     raw_AoA -> [write_store -> write-back].  No gate here (it sits in
-     raw_AoA's entry). ***)
+(*** run_AoA — the caching wrapper: [read_store -> level-0 lookup, whose
+     by-hash promotion and L1 upgrade are gated by write_store] -> raw_AoA ->
+     [write_store -> write-back].  No gate here (it sits in raw_AoA's
+     entry). ***)
 
 fun run_AoA {driver, minilang_cfg, budget, invocation_id,
              read_store, write_store, async_mode, task} (ctxt, sequent) =
