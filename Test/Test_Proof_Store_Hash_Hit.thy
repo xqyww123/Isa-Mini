@@ -105,9 +105,9 @@ val _ = S.force_reload thy
 val _ = assert (S.get_cached_proof thy "TPSHH.K22" = SOME (t1, "(simp)[1]")) "test22 reload: a copy"
 
 (*22b: the skip rule seen from the positive side: the record that failed
-      under the id is NOT replayed again under the hash.  One replay invokes
-      the method more than once (the [1] combinator backtracks), so the
-      yardstick is one replay's count, measured first.*)
+      under the id is NOT replayed again under the hash.  The yardstick is one
+      replay's count, measured first through the same channel, so the test
+      does not depend on how often one replay invokes the method.*)
 val kws = Keyword.no_major_keywords (Thy_Header.get_keywords (Proof_Context.theory_of ctxt))
 val g22b = goal_of ctxt "(u::nat) * 1 = u"
 val h22b = Hasher.all_goals (ctxt, g22b)

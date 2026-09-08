@@ -1841,7 +1841,7 @@ val mini_single_cmd_timeout = Attrib.setup_config_int \<^binding>\<open>mini_sin
 fun gen_APPLY prep_thms timeout using text =
       OPR (fn SK as (ctxt, _) =>
         apply_method "Fail to apply the tactic"
-                     (prep_thms ctxt using) (Method.evaluate text ctxt) timeout SK)
+                     (prep_thms ctxt using) (Method.evaluate_runtime text ctxt) timeout SK)
 val APPLY   = gen_APPLY (K I)
 val APPLY'' = gen_APPLY Attrib.eval_thms
 

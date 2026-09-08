@@ -1961,7 +1961,7 @@ fun exec_split_script ctxt script st =
   let val kws = Keyword.no_major_keywords
                   (Thy_Header.get_keywords (Proof_Context.theory_of ctxt))
       val seq =
-        Method.evaluate
+        Method.evaluate_runtime
           (Parse.read_embedded ctxt kws (Method.parser 0) (Input.string script)
              |> fst |> Method.check_text ctxt)
           ctxt [] (ctxt, st)
