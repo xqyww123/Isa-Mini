@@ -118,23 +118,34 @@ val unpack_bindings =
 val pack_bindings =
   packPair (packList pack_var_name, packList pack_prem_name)
 
+(* A recorded proof on the wire: (method text, (cpu_ms, wall_ms)), the ms pair
+   nested in one slot as at every wire carrying a Phi_Proof_Store.times.  The
+   unpack side ALSO accepts the single-time (method, ms), lifting it to
+   cpu = wall = ms; mlmsgpack's `||` retries on the untouched instream, so the
+   fallback is safe.  Shared by FactInTime's recorded proof and HAMMER's
+   cached proof. *)
+fun pack_recorded_proof (prf, times) =
+  packPair (packString, packPair (packInt, packInt)) (prf, Phi_Proof_Store.ms_of_times times)
+
+val unpack_recorded_proof =
+  unpackPair (unpackString,
+              (unpackPair (unpackInt, unpackInt) || (unpackInt >> (fn ms => (ms, ms))))
+              >> Phi_Proof_Store.times_of_ms)
+
 (* Wire triple (name, stmt option, recorded proof option) — stage 3a, D37.
    The pack side always writes the triple; the unpack side ALSO accepts the
    pre-3a pair, lifting it with a NONE third field: the arity is part of the
-   wire format (packOption cannot express a missing field), and mlmsgpack's
-   `||` retries on the untouched instream, so the fallback is safe. *)
+   wire format (packOption cannot express a missing field), and `||` retries
+   as above. *)
 fun pack_extended_fact (FactByName name) =
-      packTuple3 (packString, packOption packString,
-                  packOption (packPair (packString, packInt)))
+      packTuple3 (packString, packOption packString, packOption pack_recorded_proof)
                  (name, NONE, NONE)
   | pack_extended_fact (FactInTime (assigned_name, stmt, recorded)) =
-      packTuple3 (packString, packOption packString,
-                  packOption (packPair (packString, packInt)))
+      packTuple3 (packString, packOption packString, packOption pack_recorded_proof)
                  (assigned_name, SOME stmt, recorded)
 
 val unpack_extended_fact =
-  (unpackTuple3 (unpackString, unpackOption unpackString,
-                 unpackOption (unpackPair (unpackString, unpackInt)))
+  (unpackTuple3 (unpackString, unpackOption unpackString, unpackOption unpack_recorded_proof)
    || (unpackPair (unpackString, unpackOption unpackString)
        >> (fn (name, stmt) => (name, stmt, NONE))))
   >> (fn (name, NONE, _) => FactByName name
@@ -198,7 +209,7 @@ val unpacker =
                           unpackList (unpackPair (unpackString, unpackOption unpackString)),
                           unpackList (unpackPair (unpackOption unpackString, unpackString)))
      | "HAMMER"   => apfst HAMMER o unpackTuple3 (unpackList unpack_extended_fact, unpackInt,
-                        unpackOption (unpackPair (unpackString, unpackInt)))
+                        unpackOption unpack_recorded_proof)
      | "INTRO"    => (fn s =>
             let val ((bindings, allow_standard_fallback), s') =
                     unpackPair (unpackOption unpack_bindings, unpackBool) s
@@ -298,7 +309,7 @@ fun packer (SIMPLIFY data) =
       packPair (packString, packUnit) ("SORRY_ONLY", ())
   | packer (HAMMER (facts, timeout, cached)) =
       packPair (packString, packTuple3 (packList pack_extended_fact, packInt,
-                packOption (packPair (packString, packInt))))
+                packOption pack_recorded_proof))
         ("HAMMER", (facts, timeout, cached))
   | packer (INTRO (bindings, allow_standard_fallback)) =
       packPair (packString, packPair (packOption pack_bindings, packBool))

@@ -243,11 +243,11 @@ val CONSIDER : (
           -> operation
 val CONSIDER_CMD : command
 
-val HAMMER : (string option -> Proof.context -> thm -> (Time.time * string) * thm) -> operation
+val HAMMER : (string option -> Proof.context -> thm -> (Phi_Proof_Store.times * string) * thm) -> operation
 val HAMMER_CMD : command
 val enable_cache_by_step : bool Config.T
 val default_prover : Time.time option -> Sledgehammer.fact_override -> Proof.context
-                  -> string option -> Proof.context -> thm -> (Time.time * string) * thm
+                  -> string option -> Proof.context -> thm -> (Phi_Proof_Store.times * string) * thm
 
 val END : Sledgehammer.fact_override -> operation
 val END_CMD : command
@@ -392,7 +392,7 @@ val MP : Proof.context -> thm -> thm -> thm
 (* Internal *)
 
 exception IH_MAP of (string * string list) list
-exception SH_PRF of string * Time.time
+exception SH_PRF of string * Phi_Proof_Store.times
 exception REPLACE_CMD of string * string
 
 (* Reporter signals fired by FUN / FUN_DEBUG / FUN'' when a residual
@@ -4337,7 +4337,7 @@ val COMPUTE = fn name => fn term => timed_OPR 95 (COMPUTE' name term)
 fun conclude_SK (ctxt, HHF (st, itms) :: S) = (ctxt, HHF (conclude_goal st, itms) :: S)
   | conclude_SK _ = raise BROKEN_INVARIANT
 
-exception SH_PRF of string * Time.time
+exception SH_PRF of string * Phi_Proof_Store.times
 exception REPLACE_CMD of string * string
 
 val enable_cache_by_step = Config.declare_bool ("enable_cache_by_step", \<^here>) (K true)
@@ -4367,17 +4367,19 @@ fun default_prover timeout_opt override ctxt =
                 error (Phi_Sledgehammer_Solver.error_message ctxt goal)
   end
 
-(*The time reported with the proof is the raw (undivided) time of whatever the
-  prover last measured: for Phi_Sledgehammer_Solver.auto, the verification
-  replay on a search, this replay's own measurement on a store hit.*)
-fun HAMMER_i (prover : string option -> Proof.context -> thm -> (Time.time * string) * thm)
+(*The times reported with the proof are the standard-machine times of whatever
+  the prover last measured: for Phi_Sledgehammer_Solver.auto, the verification
+  replay on a search, this replay's own measurement on a store hit.  `auto`
+  hands back a raw measurement on both routes, so the division happens here,
+  once, and every time inside a blob is standard-machine time like the store's.*)
+fun HAMMER_i (prover : string option -> Proof.context -> thm -> (Phi_Proof_Store.times * string) * thm)
              step_id (ctxt, HHF (s,facts) :: S) =
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
       val ID' = if Config.get ctxt enable_cache_by_step then SOME ID else NONE
       val ((time, prf), s') = prover ID' ctxt s
                               handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
-   in get_reporter () (Internal (SH_PRF (prf, time)))
+   in get_reporter () (Internal (SH_PRF (prf, Phi_Proof_Store.standard_time time)))
     ; (ctxt, HHF (s', facts) :: S)
    |> maintain
   end

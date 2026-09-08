@@ -7,6 +7,14 @@ import json
 import logging as _logging
 _logger = _logging.getLogger(__name__)
 
+# A per-op ML time on the wire is (thread CPU ms, wall ms), the pair nested in
+# one slot as at every wire carrying a Phi_Proof_Store.times.  Summed
+# element-wise: Python `+` on tuples concatenates.
+_ZERO_TIMES_MS: tuple[int, int] = (0, 0)
+
+def _add_times_ms(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    return (a[0] + b[0], a[1] + b[1])
+
 # Why a driver failed to load, so `Unknown driver: X` can say so instead of leaving
 # the user to guess.  Populated by _try_import_driver.
 _driver_import_errors: dict[str, str] = {}
@@ -73,7 +81,7 @@ async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tu
     return (text, is_error)
 
 async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
-                                  source: str = "") -> tuple[bool, str | None, str | None, int]:
+                                  source: str = "") -> tuple[bool, str | None, str | None, tuple[int, int]]:
     """Replay a freshly found proof by feeding its assembled operations through
     proof_opr callbacks.
 
@@ -83,19 +91,20 @@ async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
     replay are entirely ML-side now.)
 
     Returns (success, final_state_name, error, replayed_ms): replayed_ms is the
-    sum of the per-op ML execution times (D61) measured over exactly this — the
-    final assembled stream, run once, in order — which is what a future replay
-    of the recorded proof will spend on its op stream.
+    (thread CPU ms, wall ms) sum of the per-op ML execution times (D61)
+    measured over exactly this — the final assembled stream, run once, in
+    order — which is what a future replay of the recorded proof will spend on
+    its op stream.
     """
     await connection.callback("IsaMini.set_replay_mode", True)
-    replayed_ms = 0
+    replayed_ms = _ZERO_TIMES_MS
     try:
         state_name = "$init"
         for i, packed_op in enumerate(packed_ops):
             dest_name = f"$replay_{i+1}"
-            (_msgs, _flat_goal, time_ms) = await connection.callback(
+            (_msgs, _flat_goal, times_ms) = await connection.callback(
                 "IsaMini.proof_opr", (state_name, dest_name, packed_op))
-            replayed_ms += time_ms
+            replayed_ms = _add_times_ms(replayed_ms, times_ms)
             state_name = dest_name
         return (True, state_name, None, replayed_ms)
     except Exception as e:
@@ -187,8 +196,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     ptree = Minilang_State._unpack_flat_goal(ptree)
 
     # The nine agent_cost numbers.  The wire's stats tuple has a tenth element —
-    # assembled_isabelle_time in ms (D61) — appended at the return points below
-    # (the final stream's verification-replay sum; zero when nothing assembled).
+    # assembled_isabelle_time as (thread CPU ms, wall ms) (D61) — appended at
+    # the return points below (the final stream's verification-replay sum;
+    # zero when nothing assembled).
     zero_cost = (0, 0, 0, 0, 0.0, 0, 0.0, 0.0, 0.0)
 
     logger = connection.server.logger
@@ -347,8 +357,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                 f"Refusing to conclude the theorem from `final_ml_state`, which is "
                 f"closed by a skip_proof oracle.\n"
                 f"invocation_id={invocation_id}\nreplay failed with: {replay_err}")
-        logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops, %d ms) -> %s",
-                    len(assembled), replayed_ms, replayed_state)
+        logger.info("[AoA] replayed the fresh proof from $init: OK (%d ops, thread_cpu=%d ms wall=%d ms) -> %s",
+                    len(assembled), replayed_ms[0], replayed_ms[1], replayed_state)
 
         # Write to log directory
         if actual_log_path:
@@ -363,7 +373,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         reason = quit_obj.reason if quit_obj is not None else "resource_exhausted"
         detail = quit_obj.detail if quit_obj is not None else None
         logger.info("[AoA] proof not finished (reason=%s)", reason)
-        return (assembled, None, cost + (0,), reason, detail)
+        return (assembled, None, cost + (_ZERO_TIMES_MS,), reason, detail)
 
 
 

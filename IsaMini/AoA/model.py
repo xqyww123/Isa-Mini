@@ -372,7 +372,7 @@ class IsabelleFact_Presented(IsabelleFact, IsabelleEntity):
                 file.write(f"  ... ({len(self.expression)} facts total)\n")
         else:
             file.write(f"- {display_name}\n")
-    def pack(self) -> 'tuple[str, str | None, tuple[str, int] | None]':
+    def pack(self) -> 'tuple[str, str | None, tuple[str, tuple[int, int]] | None]':
         suffix = _fact_suffix(self.fact, for_pack=True)
         if suffix:
             suffix = ascii_of_unicode(suffix)
@@ -382,15 +382,15 @@ class IsabelleFact_ProveInTime(IsabelleFact):
     """A fact to be proven just-in-time by Isabelle.
 
     `cached_proof` is the one deliberately mutable field, exempt from the
-    immutable-by-convention rule above: (rendered method text, thread CPU ms;
-    wall elapsed without a per-thread CPU clock) pasted back from a FACT_PRF
-    message once the ML side proves the statement (stage 3a, D37), so the
+    immutable-by-convention rule above: (rendered method text, (thread CPU ms,
+    wall ms) of its replay) pasted back from a FACT_PRF message once the ML
+    side proves the statement (stage 3a, D37), so the
     assembled op stream carries the proof and a replay
     never re-searches. `refresh_facts` passes ProveInTime instances through
     unchanged, so the record survives refreshes."""
     __slots__ = ('statement', 'assigned_name', 'cached_proof')
     def __init__(self, statement: term, assigned_name: str,
-                 cached_proof: 'tuple[str, int] | None' = None):
+                 cached_proof: 'tuple[str, tuple[int, int]] | None' = None):
         self.statement = statement
         self.assigned_name = assigned_name
         self.cached_proof = cached_proof
@@ -399,7 +399,7 @@ class IsabelleFact_ProveInTime(IsabelleFact):
     def print(self, indent: int, file: MyIO) -> None:
         print_indent(indent, file)
         file.write(f"- {self.statement.unicode}\n")
-    def pack(self) -> 'tuple[str, str | None, tuple[str, int] | None]':
+    def pack(self) -> 'tuple[str, str | None, tuple[str, tuple[int, int]] | None]':
         return (self.assigned_name, self.statement.ascii, self.cached_proof)
 
 class IsabelleFact_Unfound(IsabelleFact):
@@ -1507,24 +1507,23 @@ class Compute_Result_Msg(Message):
         self.result = result
 
 class SH_PRF_Msg(Message):
-    """Proof method string and thread CPU time (ms) of the replay that produced
-    it (wall elapsed when the machine has no per-thread CPU clock) from a
-    successful HAMMER."""
-    def __init__(self, method: str, time_ms: int):
+    """Proof method string of a successful HAMMER and the (thread CPU ms,
+    wall ms) of the replay that produced it, standard-machine time as the ML
+    side measures it."""
+    def __init__(self, method: str, times_ms: tuple[int, int]):
         super().__init__()
         self.method = method
-        self.time_ms = time_ms
+        self.times_ms = times_ms
 
 class FACT_PRF_Msg(Message):
-    """Proof method string and thread CPU time (ms) of the replay that produced
-    it (wall elapsed when the machine has no per-thread CPU clock) for a
-    FactInTime (prove-in-time) fact, keyed by its assigned name (stage 3a, D37)
-    — the fact-level analogue of SH_PRF_Msg."""
-    def __init__(self, fact_name: str, method: str, time_ms: int):
+    """Proof method string and the (thread CPU ms, wall ms) of the replay that
+    produced it for a FactInTime (prove-in-time) fact, keyed by its assigned
+    name (stage 3a, D37) — the fact-level analogue of SH_PRF_Msg."""
+    def __init__(self, fact_name: str, method: str, times_ms: tuple[int, int]):
         super().__init__()
         self.fact_name = fact_name
         self.method = method
-        self.time_ms = time_ms
+        self.times_ms = times_ms
 
 class Hint_Notice_Msg(Message):
     """Agent Hint Registry NOTICE: the operation used a registered constant/fact
@@ -1571,16 +1570,16 @@ def unpack_message(data) -> Message:
             return SetupRewriting_MayLoop_Msg()
         case (14, (name, result)):
             return Compute_Result_Msg(IsaTerm.from_isabelle(name), IsaTerm.from_isabelle(result))
-        case (15, (method, time_ms)):
-            return SH_PRF_Msg(method, time_ms)
+        case (15, (method, times_ms)):
+            return SH_PRF_Msg(method, times_ms)
         case (17, (name, text)):
             return Hint_Notice_Msg(name, text)
         case (18, pairs):
             return Discarded_Vars_Msg([(str(i), str(e)) for (i, e) in pairs])
         case (19, n):
             return Interpret_Facts_Count_Msg(int(n))
-        case (20, (fact_name, method, time_ms)):
-            return FACT_PRF_Msg(fact_name, method, time_ms)
+        case (20, (fact_name, method, times_ms)):
+            return FACT_PRF_Msg(fact_name, method, times_ms)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1788,7 +1787,7 @@ class Minilang_Operation(NamedTuple):
             _pack_post_insts(insts)))
     @staticmethod
     def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20,
-               cached_proof: 'tuple[str, int] | None' = None) -> 'Minilang_Operation':
+               cached_proof: 'tuple[str, tuple[int, int]] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout, cached_proof))
     @staticmethod
     def CHAINING(name: xname, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
@@ -2015,10 +2014,11 @@ class Minilang_State:
             session.on_operation_start(self.name, opr.command, opr.arg)
             now = time()
             try:
-                # Third component (D61): this op's ML execution time in ms.  Not
-                # consumed here — the replay-cost sum is taken over the final
-                # assembled stream's verification replay in toplevel.py.
-                (msgs, flat_goal, _time_ms) = await self.connection.callback("IsaMini.proof_opr",
+                # Third component (D61): this op's ML execution times as
+                # (thread CPU ms, wall ms).  Not consumed here — the replay-cost
+                # sum is taken over the final assembled stream's verification
+                # replay in toplevel.py.
+                (msgs, flat_goal, _times_ms) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 session.on_operation_end(self.name, opr.command, opr.arg,
@@ -8037,7 +8037,7 @@ def _backfill_recorded_fact_proofs(
     facts: 'Sequence[IsabelleFact | None] | None', state: 'Minilang_State'
 ) -> None:
     """Paste each FACT_PRF message back onto the ProveInTime fact it names —
-    the fact-level mirror of the SH_PRF -> _found_tactic backfill (stage 3a,
+    the fact-level mirror of the SH_PRF -> _found_proof backfill (stage 3a,
     D37) — so assemble() packs the found proof into the op stream and a
     replay of the blob never re-searches. Call after a SUCCESSful evaluation
     with the facts the node's operation carried."""
@@ -8046,7 +8046,7 @@ def _backfill_recorded_fact_proofs(
             for f in facts or []:
                 if isinstance(f, IsabelleFact_ProveInTime) \
                         and f.assigned_name == m.fact_name:
-                    f.cached_proof = (m.method, m.time_ms)
+                    f.cached_proof = (m.method, m.times_ms)
 
 def _fetched_to_facts(fetched: 'list[IsabelleFact | Interaction_RetrieveForProof]') -> list[IsabelleFact]:
     """Convert fetch_facts results to a pure IsabelleFact list for callers
@@ -8097,8 +8097,9 @@ class Obvious(Leaf):
         self._raw_facts: list[FactByName | FactByProposition | FactByDescription] = [
             f for f in arg["facts"] if f is not None]
         self.fact_refs: list[IsabelleFact] | None = None
-        self._found_tactic: str | None = None
-        self._eval_time_ms: int | None = None
+        # The SH_PRF message of the last SUCCESS, kept whole: assemble() packs
+        # its method and times as HAMMER's cached_proof.
+        self._found_proof: SH_PRF_Msg | None = None
         # Latch: set once any requested fact fails to reach the hammer, never
         # cleared. "This goal is not trivial" is only a fair conclusion when
         # everything the model asked for actually got there, and the refresh
@@ -8201,8 +8202,7 @@ class Obvious(Leaf):
                 self.parent._is_trivial = True
                 for m in self.resulting_state().messages:
                     if isinstance(m, SH_PRF_Msg):
-                        self._found_tactic = m.method
-                        self._eval_time_ms = m.time_ms
+                        self._found_proof = m
                         break
                 _backfill_recorded_fact_proofs(self.fact_refs, self.resulting_state())
             elif self.status.status == EvaluationStatus.Status.FAILURE:
@@ -8221,9 +8221,9 @@ class Obvious(Leaf):
         if output is None:
             output = []
         facts = self.fact_refs if self.fact_refs is not None else []
-        cached: tuple[str, int] | None = None
-        if self._found_tactic and self._found_tactic != "" and self._eval_time_ms is not None:
-            cached = (self._found_tactic, self._eval_time_ms)
+        cached: tuple[str, tuple[int, int]] | None = None
+        if self._found_proof is not None and self._found_proof.method != "":
+            cached = (self._found_proof.method, self._found_proof.times_ms)
         output.append(Minilang_Operation.HAMMER(facts, 30, cached))
         return output
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':

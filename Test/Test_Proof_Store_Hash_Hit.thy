@@ -30,7 +30,7 @@ fun puts_of id =
 fun tombs_of id = length (filter (fn F.TOMB i => i = id | _ => false) (frames ()))
 fun assert b msg = if b then () else error ("FAIL: " ^ msg)
 
-val t1 = Time.fromMilliseconds 100
+val t1 = S.times_of_ms (100, 100)
 fun goal_of ctxt s = Goal.init (Thm.cterm_of ctxt (Syntax.read_prop ctxt s))
 fun hit key hash {write} cs =
   Proof_Store_AoA.store_hit_replay {key = key, hash = hash, write_store = write} cs

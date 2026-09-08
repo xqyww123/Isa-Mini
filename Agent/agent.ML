@@ -17,10 +17,10 @@ type bindings = var_name list * prem_name list
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
   | FactInTime of string (*assigned name*) * 'term (*statement to prove on-the-fly*)
-               * (string * int) option (*recorded proof: (rendered method text,
-                              thread CPU ms; wall elapsed without a per-thread
-                              CPU clock) — shape follows HAMMER's cached_proof
-                              (stage 3a, D37); NONE = never proven/recorded yet*)
+               * (string * Phi_Proof_Store.times) option (*recorded proof: (rendered
+                              method text, its replay's standard-machine times)
+                              — shape follows HAMMER's cached_proof (stage 3a,
+                              D37); NONE = never proven/recorded yet*)
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -57,7 +57,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
-              * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
+              * (string * Phi_Proof_Store.times) option (*cached proof: method text, its
+                              replay's standard-machine times; NONE = no cache*)
   | INTRO    of bindings option * bool
   | SPLIT_CONJS
   | SPLIT_CONJS2
@@ -119,12 +120,11 @@ val default_cfg : cfg * budget
 
 exception FACT_IN_TIME_FAIL of term
 (* Reporter message fired by pre_resolve_fact's LIVE no-record branch:
-   (assigned fact name, rendered proof text, the fastforce's thread CPU time;
-   wall elapsed without a per-thread CPU clock) of the FactInTime statement
-   just proven, so Python can record the proof into the
-   op's fact field (stage 3a, D37).  Mirrors Minilang.SH_PRF, plus the fact
-   name — one op can carry several FactInTime facts. *)
-exception FACT_PRF of string * string * Time.time
+   (assigned fact name, rendered proof text, the fastforce's standard-machine
+   times) of the FactInTime statement just proven, so Python can record the
+   proof into the op's fact field (stage 3a, D37).  Mirrors Minilang.SH_PRF,
+   plus the fact name — one op can carry several FactInTime facts. *)
+exception FACT_PRF of string * string * Phi_Proof_Store.times
 exception INTRO_BINDINGS of {
     missing: bindings,
     auto_introduced: bindings,
@@ -222,7 +222,7 @@ type config = cfg * budget * counters * exec_mode
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
-  | FactInTime of string * 'term * (string * int) option
+  | FactInTime of string * 'term * (string * Phi_Proof_Store.times) option
 
 datatype ('term, 'thm, 'fact) command =
     UNFOLD   of ('term, 'fact) extended_fact list
@@ -259,7 +259,8 @@ datatype ('term, 'thm, 'fact) command =
   | SORRY_END_ALL of Minilang.opt_var_names
   | SORRY_ONLY
   | HAMMER   of ('term, 'fact) extended_fact list (*with facts*) * int (*timeout in seconds*)
-              * (string * int) option (*cached proof: method_string * time_ms; NONE = no cache*)
+              * (string * Phi_Proof_Store.times) option (*cached proof: method text, its
+                              replay's standard-machine times; NONE = no cache*)
   | INTRO    of bindings option * bool
   | SPLIT_CONJS
   | SPLIT_CONJS2
@@ -1098,13 +1099,12 @@ fun AUTO_SIMPLIFY
   end
 
 exception FACT_IN_TIME_FAIL of term
-exception FACT_PRF of string * string * Time.time
+exception FACT_PRF of string * string * Phi_Proof_Store.times
 
 (* Limits for replaying a record embedded in the op stream (HAMMER's
    cached_proof, FactInTime's recorded proof): the proof store's formula with
    3 s of slack, kept apart from the store's 1 s by decision (2026-09-07). *)
-fun embedded_replay_limits ms =
-  Phi_Proof_Store.replay_limits_with (Time.fromSeconds 3) (Time.fromMilliseconds ms)
+val embedded_replay_limits = Phi_Proof_Store.replay_limits_with (Time.fromSeconds 3)
 
 (* Resolve FactInTime: prove the statement, register in context, return FactByName.
    FactByName passes through unchanged. Threads updated context via fold.
@@ -1138,7 +1138,8 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
                         max_facts lazy_facts [] [] inner 1 goal
                 val _ = if report
                         then Minilang.get_reporter ()
-                               (Minilang.Internal (FACT_PRF (assigned_name, prf_str, time)))
+                               (Minilang.Internal (FACT_PRF (assigned_name, prf_str,
+                                                             Phi_Proof_Store.standard_time time)))
                         else ()
              in st' end
              handle Phi_Sledgehammer_Solver.Auto_Fail _ => raise FACT_IN_TIME_FAIL prop
@@ -1149,10 +1150,10 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
              matching the REPLAY-no-record graceful-degradation ruling; in
              LIVE the fallback also re-reports a fresh FACT_PRF, refreshing
              the stale record (HAMMER's live fallback, likewise). *)
-          fun replay_recorded (prf, ms) =
+          fun replay_recorded (prf, times) =
             let val kws = Keyword.no_major_keywords
                             (Thy_Header.get_keywords (Proof_Context.theory_of inner))
-             in snd (Phi_Sledgehammer_Solver.replay_mepo_proof kws (embedded_replay_limits ms)
+             in snd (Phi_Sledgehammer_Solver.replay_mepo_proof kws (embedded_replay_limits times)
                                                                 1 prf (inner, goal))
             end
           val proved =
@@ -1695,7 +1696,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
 
           (*The limits wrap the whole operation: APPLY's own timeout is wall
             clock only, so it gets none.*)
-          fun try_cached_apply (prf, time_ms) =
+          fun try_cached_apply (prf, times) =
             let val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
                 val toks = Input.source_explode (Input.string prf)
                         |> Token.tokenize (Keyword.no_major_keywords kws) {strict = false}
@@ -1703,22 +1704,22 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
                 val method_text = case Scan.read Token.stopper (Method.parser 0 >> #1) toks of
                     SOME m => m
                   | NONE => error ("Cannot parse cached method: " ^ quote prf)
-                val s' = Thread_CPU.apply (embedded_replay_limits time_ms)
+                val s' = Thread_CPU.apply (embedded_replay_limits times)
                            (Minilang.APPLY NONE [] (Method.check_text ctxt_r method_text))
                            s_resolved
                 val _ = Minilang.get_reporter ()
-                          (Minilang.Internal (Minilang.SH_PRF (prf, Time.fromMilliseconds time_ms)))
+                          (Minilang.Internal (Minilang.SH_PRF (prf, times)))
             in s' end
 
         in case (cached_proof, exec_mode) of
-            (SOME (prf, ms), _) =>
+            (SOME (prf, times), _) =>
               if prf = "" then
                 (case exec_mode of
                    LIVE => hammer_live ()
                  | REPLAY => raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
                      "Cached proof is empty (classical automation) and replay mode forbids sledgehammer"))
               else
-                (\<^try>\<open>try_cached_apply (prf, ms)
+                (\<^try>\<open>try_cached_apply (prf, times)
                   catch exn => (fn () =>
                    case exec_mode of
                      LIVE => hammer_live ()

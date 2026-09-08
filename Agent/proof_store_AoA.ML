@@ -8,7 +8,8 @@ wrapper — NOT the agent stack) and the level-0 lookup brick
 search.  Loaded by Minilang_AoA.thy BEFORE agent_server.ML.
 
 L1 and L2 use the same key (the all-goals hash of the goal before any
-preprocessing) and the same value shape (standard-machine time, proof text).
+preprocessing) and the same value shape (standard-machine times, proof text);
+on the wire the times are (cpu_ms, wall_ms) nested in one slot.
 Every RPC here degrades silently on failure — a downstream user may have no
 Python at all, and an obligation must never die of that.  None of these RPCs
 may touch the semantic DB; that holds by construction, the Python module does
@@ -17,12 +18,12 @@ not import the agent stack.
 
 signature PROOF_STORE_AoA = sig
 
-  (* L1 query RPC: SOME (standard-machine time, proof text) on a hit; a MISS
+  (* L1 query RPC: SOME (standard-machine times, proof text) on a hit; a MISS
      and ANY failure (no Python, no module, dead host) both return NONE. *)
-  val l1_lookup : Phi_Proof_Store.proof_id -> (Time.time * string) option
+  val l1_lookup : Phi_Proof_Store.proof_id -> (Phi_Proof_Store.times * string) option
 
   (* L1 write RPC, paired with the query.  Failures are swallowed silently. *)
-  val l1_write : Phi_Proof_Store.proof_id * Time.time * string -> unit
+  val l1_write : Phi_Proof_Store.proof_id * Phi_Proof_Store.times * string -> unit
 
   (* L1 invalidation RPC: deletes the row after a hit whose replay failed —
      the L1 mirror of the L2 tombstone.  Failures are swallowed silently. *)
@@ -41,17 +42,17 @@ signature PROOF_STORE_AoA = sig
           into an L2 entry (gated by write_store); one that fails is
           invalidated (l1_invalidate) and the result is a miss.
      Across all three: a record that already failed under an earlier level --
-     same time, same text -- is not replayed again but counted as failed
+     same times, same text -- is not replayed again but counted as failed
      outright.  Invalidations are store maintenance and are NOT gated.
-     Every level returns (std_time, text) and replays through the one generic
-     channel eval_prf_str; a text of the form `aoa_replay "…"` enters the
-     pure-ML §2.7 flow through that method, never through a second path.  The
-     hash is computed by the caller: this brick holds no key recipe.  Do not
-     wrap another timeout around this: the replay limits are replay_limits
-     of the recorded std_time, applied inside eval_prf_str. *)
+     Every level returns (standard-machine times, text) and replays through
+     the one generic channel eval_prf_str; a text of the form `aoa_replay "…"`
+     enters the pure-ML §2.7 flow through that method, never through a second
+     path.  The hash is computed by the caller: this brick holds no key recipe.
+     Do not wrap another timeout around this: the replay limits are
+     replay_limits of the recorded std_time, applied inside eval_prf_str. *)
   val store_hit_replay : {key: Phi_Proof_Store.proof_id, hash: Hasher.digest option, write_store: bool}
                       -> Proof.context * thm
-                      -> (Time.time * string * thm) option
+                      -> (Phi_Proof_Store.times * string * thm) option
 
 end
 
@@ -62,29 +63,28 @@ local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
 fun l1_lookup key =
   \<^try>\<open>
     let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
-        val cmd : (string, (int * string) option) Remote_Procedure_Calling.command = {
+        val cmd : (string, ((int * int) * string) option) Remote_Procedure_Calling.command = {
               name = "IsaMini.ProofStore.lookup",
               arg_schema = packString,
-              ret_schema = unpackOption (unpackPair (unpackInt, unpackString)),
+              ret_schema = unpackOption (unpackPair (unpackPair (unpackInt, unpackInt), unpackString)),
               callback = [],
               timeout = NONE }
-     in case Remote_Procedure_Calling.call_command cmd key of
-          SOME (ms, text) => SOME (Time.fromMilliseconds ms, text)
-        | NONE => NONE
+     in Remote_Procedure_Calling.call_command cmd key
+        |> Option.map (apfst Phi_Proof_Store.times_of_ms)
     end
   catch _ => NONE\<close>
 
 fun l1_write (key, std_time, text) =
   \<^try>\<open>
     let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
-        val cmd : (string * int * string, unit) Remote_Procedure_Calling.command = {
+        val cmd : (string * (int * int) * string, unit) Remote_Procedure_Calling.command = {
               name = "IsaMini.ProofStore.store",
-              arg_schema = packTuple3 (packString, packInt, packString),
+              arg_schema = packTuple3 (packString, packPair (packInt, packInt), packString),
               ret_schema = unpackUnit,
               callback = [],
               timeout = NONE }
      in Remote_Procedure_Calling.call_command cmd
-          (key, Time.toMilliseconds std_time, text)
+          (key, Phi_Proof_Store.ms_of_times std_time, text)
     end
   catch _ => ()\<close>
 
@@ -137,7 +137,7 @@ fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
         if member (op =) failed s then NONE
         else Option.map (fn th => (std_time, prf_text, th)) (replay s)
       (* L2 is cold under `key` on every route that writes here (miss, or
-         hit-then-tombstone): write the row as-is -- same time, same text. *)
+         hit-then-tombstone): write the row as-is -- same times, same text. *)
       fun write_l2 (std_time, prf_text, _) =
         if write_store
         then Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash} (std_time, prf_text)

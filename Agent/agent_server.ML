@@ -67,28 +67,28 @@ val merge_segment : Proof.context -> thm -> thm
    segments, agent RPC.  NO store or cache logic inside.  Synchronous; the
    by-products are (xcmds, cost, replay time, proof text): the third component
    is what a REPLAY of this proof will spend (entry preprocessing + the final
-   op stream's summed ML time, undivided by Timeout.scale); the fourth is the
+   op stream's summed ML times, undivided by Timeout.scale); the fourth is the
    assembled `aoa_replay "<b64>"` — the blob format is known only to this
    assembler and the aoa_replay decoder.  Futures exist one layer up: run_AoA
    obtains them from async_prove. *)
 val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
                budget: MiniLang_Agent.budget, invocation_id: string, task: task}
            -> Proof.context * thm
-           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) * thm
+           -> (MiniLang_Agent.xcmd list * agent_cost * Phi_Proof_Store.times * string) * thm
 
 (* run_AoA — the caching wrapper around raw_AoA:
    [read_store -> level-0 three-level lookup, whose by-hash promotion and L1
    upgrade are themselves gated by write_store] -> raw_AoA -> [write_store ->
    write-back to L2 and L1].  bool option NONE follows the
    AoA_read_proof_store / AoA_write_proof_store configs.  On a level-0 hit the
-   four by-products are ([], zero_cost, recorded time, stored text) in a
+   four by-products are ([], zero_cost, recorded times, stored text) in a
    fulfilled Future.value — the agent never ran. *)
 val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
                budget: MiniLang_Agent.budget, invocation_id: string,
                read_store: bool option, write_store: bool option,
                async_mode: Phi_Sledgehammer_Solver.async_mode, task: task}
            -> Proof.context * thm
-           -> (MiniLang_Agent.xcmd list * agent_cost * Time.time * string) future * thm
+           -> (MiniLang_Agent.xcmd list * agent_cost * Phi_Proof_Store.times * string) future * thm
 
 val method : thm list -> context_state -> context_state Seq.result Seq.seq
 
@@ -387,16 +387,18 @@ fun minilang_message_packer ctxt =
              | MiniLang_Agent.COMPUTE_RESULT (name, result) =>
                  packPair (packInt, packPair (packString, packString))
                           (14, (name, result))
-             | Minilang.SH_PRF (prf, time) =>
-                 packPair (packInt, packPair (packString, packInt))
-                          (15, (prf, Time.toMilliseconds time))
-             (* (assigned fact name, rendered proof text, time ms) of a
+             (* (rendered proof text, (cpu_ms, wall_ms)): the ms pair nested in
+                one slot, as at every wire carrying a Phi_Proof_Store.times. *)
+             | Minilang.SH_PRF (prf, times) =>
+                 packPair (packInt, packPair (packString, packPair (packInt, packInt)))
+                          (15, (prf, Phi_Proof_Store.ms_of_times times))
+             (* (assigned fact name, rendered proof text, (cpu_ms, wall_ms)) of a
                 FactInTime just proven live — Python pastes it back into the
                 op's fact field (stage 3a, D37; tag 20 author-approved
                 2026-08-10). *)
-             | MiniLang_Agent.FACT_PRF (name, prf, time) =>
-                 packPair (packInt, packTuple3 (packString, packString, packInt))
-                          (20, (name, prf, Time.toMilliseconds time))
+             | MiniLang_Agent.FACT_PRF (name, prf, times) =>
+                 packPair (packInt, packTuple3 (packString, packString, packPair (packInt, packInt)))
+                          (20, (name, prf, Phi_Proof_Store.ms_of_times times))
              | Agent_Hint.HINT_NOTICE {name, text} =>
                  packPair (packInt, packPair (packString, packString))
                           (17, (name, text))
@@ -944,12 +946,14 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
       val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
-        (* Third component: this op's ML-side time in ms as Phi_Proof_Store.timing
-           measures it (D61).  The assembly verification replay sums it over the
-           final op stream into assembled_isabelle_time. *)
-        ret_schema = (fn (ctxt, msgs, flat_goal, time_ms) =>
-          packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt, packInt)
-                     (msgs, flat_goal, time_ms)),
+        (* Third component: this op's ML-side times as (cpu_ms, wall_ms), raw as
+           Phi_Proof_Store.timing measures them (D61).  The assembly verification
+           replay sums them over the final op stream into assembled_isabelle_time;
+           the write layer standardises the sum once. *)
+        ret_schema = (fn (ctxt, msgs, flat_goal, times_ms) =>
+          packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt,
+                      packPair (packInt, packInt))
+                     (msgs, flat_goal, times_ms)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
@@ -964,7 +968,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                     val msgs = clean_report ()
                     val _ = state := Symtab.update (to, s1) (!state)
                  in (ctxt', msgs, Minilang.leading_goal_data s1,
-                     Time.toMilliseconds time) end) ()
+                     Phi_Proof_Store.ms_of_times time) end) ()
               (* Drain reporter messages on EVERY path: the success branch already
                  drained via clean_report, but a NOTICE pushed before a failure
                  (e.g. an Agent Hint notice fired during term checking) would
@@ -1761,17 +1765,18 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
                            (task_kind, ()), enable_write_memory)
             end),
-        (* Stats tuple: the 10th element is assembled_isabelle_time in ms (D61) —
-           the per-op ML execution times summed over the assembly verification
-           replay of the final op stream.  It is NOT part of agent_cost; raw_AoA
-           folds it into the replay-time by-product right below.  No blob comes
-           back over this wire: raw_AoA assembles the blob itself from the
-           returned op stream (D41 — the blob never leaves the
-           raw_AoA/aoa_replay codec pair). *)
+        (* Stats tuple: the 10th element is assembled_isabelle_time as
+           (cpu_ms, wall_ms) (D61) — the per-op ML execution times summed over
+           the assembly verification replay of the final op stream.  It is NOT
+           part of agent_cost; raw_AoA folds it into the replay-time by-product
+           right below.  No blob comes back over this wire: raw_AoA assembles
+           the blob itself from the returned op stream (D41 — the blob never
+           leaves the raw_AoA/aoa_replay codec pair). *)
         ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
                                    unpackOption unpackString,
                                    (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt,ait), src') =
-                                      unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,unpackInt) src
+                                      unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,
+                                                     unpackPair (unpackInt, unpackInt)) src
                                     in (({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, ait), src') end),
                                    unpackOption unpackString,
                                    unpackOption unpackString),
@@ -1859,10 +1864,11 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                     preprocessing plus the final op stream's summed ML time
                     (measured over the assembly verification replay).  LLM
                     round-trips, RPC overhead and dead branches are deliberately
-                    not in it.  Raw (undivided) time: the write layer divides
+                    not in it.  Raw (undivided) times: the write layer divides
                     by Timeout.scale. *)
                  val replay_time =
-                   prep_time + Time.fromMilliseconds assembled_isabelle_time_ms
+                   Phi_Proof_Store.add_times prep_time
+                     (Phi_Proof_Store.times_of_ms assembled_isabelle_time_ms)
               in ((xcmds, agent_cost, replay_time, prf_text),
                   Minilang.conclude ctxt s1'
                   |> restore_concl orig_concl (*verbatim conclusion, stage 4e*))
@@ -1896,9 +1902,9 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
         SOME (std_time, prf_text, sequent') =>
           (* Level-0 hit: the agent never ran — [] and zero_cost are statements
              of fact, not placeholders (§2.3).  The recorded standard-machine
-             time is scaled back to this machine's clock; the stored text goes
+             times are scaled back to this machine's clock; the stored text goes
              out verbatim (the blob never leaves the aoa_replay codec pair). *)
-          (Future.value ([], zero_cost, Time.scale (Timeout.scale ()) std_time, prf_text),
+          (Future.value ([], zero_cost, Phi_Proof_Store.machine_time std_time, prf_text),
            sequent')
       | NONE =>
           let val (_, futs, sequent') =
@@ -1939,7 +1945,7 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
               | _ =>
                   (* async_prove's zero-subgoal short circuit: nothing to prove,
                      nothing ran, nothing is written. *)
-                  (Future.value ([], zero_cost, Time.zeroTime, ""), sequent')
+                  (Future.value ([], zero_cost, Phi_Proof_Store.zero_times, ""), sequent')
           end
   end
 
