@@ -32,3 +32,11 @@ __pycache__
 .vscode
 .coverage
 .claude
+
+# one-off Scratch/Probe/Debug/Experiment theories moved out of Agent/ and Test/ on 2026-09-08; never tracked again
+ai-artifacts/Scratch*.thy
+ai-artifacts/*_Probe.thy
+ai-artifacts/*_Scratch.thy
+ai-artifacts/*_Debug.thy
+ai-artifacts/*_Debug2.thy
+ai-artifacts/*_Experiment.thy

@@ -11138,7 +11138,7 @@ class Induction(CaseSplit_Like):
         # passed as `arbitrary:` to the ML induction tactic — this triggers
         # a degenerate HO-unification solution that yields an IH with
         # schematic variables disconnected from the induction case variable
-        # (see Test/Induct_HO_Unif_Probe.thy and the Induction_AmendTargetFree
+        # (see ai-artifacts/Induct_HO_Unif_Probe.thy and the Induction_AmendTargetFree
         # regression). The stripping is unconditional: the ML contract
         # forbids target-in-arbitrary on both fresh fill and amend.
         self.variables[:] = [var for var in self.variables if IsaTerm.from_agent(var["name"]) not in frees]

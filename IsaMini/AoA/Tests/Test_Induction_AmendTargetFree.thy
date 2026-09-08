@@ -6,7 +6,7 @@ declare [[AoA_driver="test.Induction_AmendTargetFree"]]
 
 text \<open>
   Regression test for the "target-in-arbitrary on amend" bug
-  (see contrib/Isa-Mini/Test/Induct_HO_Unif_Probe.thy for the underlying
+  (see contrib/Isa-Mini/ai-artifacts/Induct_HO_Unif_Probe.thy for the underlying
   ML-level pathology).
 
   Agent flow originally observed in
