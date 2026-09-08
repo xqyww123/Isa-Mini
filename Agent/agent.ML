@@ -18,7 +18,8 @@ datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
   | FactInTime of string (*assigned name*) * 'term (*statement to prove on-the-fly*)
                * (string * int) option (*recorded proof: (rendered method text,
-                              elapsed ms) — shape follows HAMMER's cached_proof
+                              thread CPU ms; wall elapsed without a per-thread
+                              CPU clock) — shape follows HAMMER's cached_proof
                               (stage 3a, D37); NONE = never proven/recorded yet*)
 
 datatype ('term, 'thm, 'fact) command =
@@ -118,8 +119,9 @@ val default_cfg : cfg * budget
 
 exception FACT_IN_TIME_FAIL of term
 (* Reporter message fired by pre_resolve_fact's LIVE no-record branch:
-   (assigned fact name, rendered proof text, fastforce-only elapsed) of the
-   FactInTime statement just proven, so Python can record the proof into the
+   (assigned fact name, rendered proof text, the fastforce's thread CPU time;
+   wall elapsed without a per-thread CPU clock) of the FactInTime statement
+   just proven, so Python can record the proof into the
    op's fact field (stage 3a, D37).  Mirrors Minilang.SH_PRF, plus the fact
    name — one op can carry several FactInTime facts. *)
 exception FACT_PRF of string * string * Time.time
@@ -1098,6 +1100,12 @@ fun AUTO_SIMPLIFY
 exception FACT_IN_TIME_FAIL of term
 exception FACT_PRF of string * string * Time.time
 
+(* Limits for replaying a record embedded in the op stream (HAMMER's
+   cached_proof, FactInTime's recorded proof): the proof store's formula with
+   3 s of slack, kept apart from the store's 1 s by decision (2026-09-07). *)
+fun embedded_replay_limits ms =
+  Phi_Proof_Store.replay_limits_with (Time.fromSeconds 3) (Time.fromMilliseconds ms)
+
 (* Resolve FactInTime: prove the statement, register in context, return FactByName.
    FactByName passes through unchanged. Threads updated context via fold.
    The assigned name comes from the FactInTime tuple (set by Python).
@@ -1125,18 +1133,17 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
           fun search report =
             let val max_facts = Config.get inner Phi_Sledgehammer_Solver.fast_mepo_max_facts
                 val lazy_facts = Phi_Sledgehammer_Solver.facts_as_mepo_lazy_facts true inner
-                val (st', prf_str, elapsed) =
+                val (st', prf_str, time) =
                       Phi_Sledgehammer_Solver.run_mepo_and_render (Time.fromSeconds 10)
                         max_facts lazy_facts [] [] inner 1 goal
                 val _ = if report
                         then Minilang.get_reporter ()
-                               (Minilang.Internal (FACT_PRF (assigned_name, prf_str, elapsed)))
+                               (Minilang.Internal (FACT_PRF (assigned_name, prf_str, time)))
                         else ()
              in st' end
              handle Phi_Sledgehammer_Solver.Auto_Fail _ => raise FACT_IN_TIME_FAIL prop
                   | Timeout.TIMEOUT _ => raise FACT_IN_TIME_FAIL prop
-          (* Replay a recorded proof text under the author-ruled budget
-             (2026-08-10, HAMMER's paradigm): 1.5 x recorded ms + 3000 ms.
+          (* Replay a recorded proof text under embedded_replay_limits.
              On any failure of the recorded text, fall back to the search of
              the current mode — bounded (10s), so acceptable even on replay,
              matching the REPLAY-no-record graceful-degradation ruling; in
@@ -1145,8 +1152,8 @@ fun pre_resolve_fact _ (FactByName fref) ctxt = (fref, ctxt)
           fun replay_recorded (prf, ms) =
             let val kws = Keyword.no_major_keywords
                             (Thy_Header.get_keywords (Proof_Context.theory_of inner))
-                val budget = Time.fromMilliseconds (Real.round (1.5 * Real.fromInt ms) + 3000)
-             in snd (Phi_Sledgehammer_Solver.replay_mepo_proof kws budget 1 prf (inner, goal))
+             in snd (Phi_Sledgehammer_Solver.replay_mepo_proof kws (embedded_replay_limits ms)
+                                                                1 prf (inner, goal))
             end
           val proved =
             (case (recorded, exec_mode) of
@@ -1686,18 +1693,19 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
                 "Automatic proof fails. The goal is non-trivial and a step-by-step proof is required."))
 
+          (*The limits wrap the whole operation: APPLY's own timeout is wall
+            clock only, so it gets none.*)
           fun try_cached_apply (prf, time_ms) =
-            let val replay_timeout = Time.fromMilliseconds
-                      (Real.round (1.5 * Real.fromInt time_ms) + 3000)
-                val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
+            let val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
                 val toks = Input.source_explode (Input.string prf)
                         |> Token.tokenize (Keyword.no_major_keywords kws) {strict = false}
                         |> filter Token.is_proper
                 val method_text = case Scan.read Token.stopper (Method.parser 0 >> #1) toks of
                     SOME m => m
                   | NONE => error ("Cannot parse cached method: " ^ quote prf)
-                val s' = Minilang.APPLY (SOME replay_timeout) []
-                           (Method.check_text ctxt_r method_text) s_resolved
+                val s' = Thread_CPU.apply (embedded_replay_limits time_ms)
+                           (Minilang.APPLY NONE [] (Method.check_text ctxt_r method_text))
+                           s_resolved
                 val _ = Minilang.get_reporter ()
                           (Minilang.Internal (Minilang.SH_PRF (prf, Time.fromMilliseconds time_ms)))
             in s' end

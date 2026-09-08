@@ -243,11 +243,11 @@ val CONSIDER : (
           -> operation
 val CONSIDER_CMD : command
 
-val HAMMER : (string option -> Proof.context -> thm -> string * thm) -> operation
+val HAMMER : (string option -> Proof.context -> thm -> (Time.time * string) * thm) -> operation
 val HAMMER_CMD : command
 val enable_cache_by_step : bool Config.T
 val default_prover : Time.time option -> Sledgehammer.fact_override -> Proof.context
-                  -> string option -> Proof.context -> thm -> string * thm
+                  -> string option -> Proof.context -> thm -> (Time.time * string) * thm
 
 val END : Sledgehammer.fact_override -> operation
 val END_CMD : command
@@ -4367,16 +4367,17 @@ fun default_prover timeout_opt override ctxt =
                 error (Phi_Sledgehammer_Solver.error_message ctxt goal)
   end
 
-fun HAMMER_i (prover : string option -> Proof.context -> thm -> string * thm)
+(*The time reported with the proof is the raw (undivided) time of whatever the
+  prover last measured: for Phi_Sledgehammer_Solver.auto, the verification
+  replay on a search, this replay's own measurement on a store hit.*)
+fun HAMMER_i (prover : string option -> Proof.context -> thm -> (Time.time * string) * thm)
              step_id (ctxt, HHF (s,facts) :: S) =
   let val (_, _, ID_BASE) = IPS_Data.get ctxt
       val ID = ID_BASE ^ "/" ^ step_id
       val ID' = if Config.get ctxt enable_cache_by_step then SOME ID else NONE
-      val timer = Timer.startRealTimer ()
-      val (prf, s') = prover ID' ctxt s
-                      handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
-      val elapsed = Timer.checkRealTimer timer
-   in get_reporter () (Internal (SH_PRF (prf, elapsed)))
+      val ((time, prf), s') = prover ID' ctxt s
+                              handle ERROR E => raise OPR_FAIL (PROOF_FAIL, E)
+   in get_reporter () (Internal (SH_PRF (prf, time)))
     ; (ctxt, HHF (s', facts) :: S)
    |> maintain
   end

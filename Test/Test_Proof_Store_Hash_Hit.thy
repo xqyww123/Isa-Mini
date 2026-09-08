@@ -112,7 +112,7 @@ val kws = Keyword.no_major_keywords (Thy_Header.get_keywords (Proof_Context.theo
 val g22b = goal_of ctxt "(u::nat) * 1 = u"
 val h22b = Hasher.all_goals (ctxt, g22b)
 val _ = replays := 0
-val _ = \<^try>\<open>ignore (Phi_Sledgehammer_Solver.eval_prf_str kws 1 (S.tolerant_time t1) "(count_fail)[1]" (ctxt, g22b))
+val _ = \<^try>\<open>ignore (Phi_Sledgehammer_Solver.eval_prf_str kws 1 (S.replay_limits t1) "(count_fail)[1]" (ctxt, g22b))
                  catch Phi_Sledgehammer_Solver.Auto_Fail _ => ()\<close>
 val per_replay = !replays
 val _ = assert (per_replay > 0) "test22b count_fail is reached"

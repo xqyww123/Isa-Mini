@@ -382,9 +382,10 @@ class IsabelleFact_ProveInTime(IsabelleFact):
     """A fact to be proven just-in-time by Isabelle.
 
     `cached_proof` is the one deliberately mutable field, exempt from the
-    immutable-by-convention rule above: (rendered method text, elapsed ms)
-    pasted back from a FACT_PRF message once the ML side proves the statement
-    (stage 3a, D37), so the assembled op stream carries the proof and a replay
+    immutable-by-convention rule above: (rendered method text, thread CPU ms;
+    wall elapsed without a per-thread CPU clock) pasted back from a FACT_PRF
+    message once the ML side proves the statement (stage 3a, D37), so the
+    assembled op stream carries the proof and a replay
     never re-searches. `refresh_facts` passes ProveInTime instances through
     unchanged, so the record survives refreshes."""
     __slots__ = ('statement', 'assigned_name', 'cached_proof')
@@ -1506,16 +1507,19 @@ class Compute_Result_Msg(Message):
         self.result = result
 
 class SH_PRF_Msg(Message):
-    """Proof method string and wall-clock time (ms) from a successful HAMMER."""
+    """Proof method string and thread CPU time (ms) of the replay that produced
+    it (wall elapsed when the machine has no per-thread CPU clock) from a
+    successful HAMMER."""
     def __init__(self, method: str, time_ms: int):
         super().__init__()
         self.method = method
         self.time_ms = time_ms
 
 class FACT_PRF_Msg(Message):
-    """Proof method string and wall-clock time (ms) found for a FactInTime
-    (prove-in-time) fact, keyed by its assigned name (stage 3a, D37) — the
-    fact-level analogue of SH_PRF_Msg."""
+    """Proof method string and thread CPU time (ms) of the replay that produced
+    it (wall elapsed when the machine has no per-thread CPU clock) for a
+    FactInTime (prove-in-time) fact, keyed by its assigned name (stage 3a, D37)
+    — the fact-level analogue of SH_PRF_Msg."""
     def __init__(self, fact_name: str, method: str, time_ms: int):
         super().__init__()
         self.fact_name = fact_name
@@ -2014,7 +2018,7 @@ class Minilang_State:
                 # Third component (D61): this op's ML execution time in ms.  Not
                 # consumed here — the replay-cost sum is taken over the final
                 # assembled stream's verification replay in toplevel.py.
-                (msgs, flat_goal, _elapsed_ms) = await self.connection.callback("IsaMini.proof_opr",
+                (msgs, flat_goal, _time_ms) = await self.connection.callback("IsaMini.proof_opr",
                                                         (self.name, dest_name, (opr.command, opr.arg)))
             except IsabelleError as err:
                 session.on_operation_end(self.name, opr.command, opr.arg,

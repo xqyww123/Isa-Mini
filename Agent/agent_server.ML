@@ -192,8 +192,12 @@ val default_driver = "ClaudeCode"
 fun is_test_driver driver =
       String.isPrefix "test." driver orelse driver = "test"
 
-(* Config for driver selection *)
-val aoa_driver = Attrib.setup_config_string \<^binding>\<open>AoA_driver\<close> (K default_driver)
+(* Driver selection.  Unset in the context, the option falls back to the Isabelle
+   settings variable AOA_DRIVER (etc/settings), then to default_driver.  Read
+   lazily at each Config.get, so a `declare` still wins. *)
+fun default_driver_of _ =
+      (case getenv "AOA_DRIVER" of "" => default_driver | s => s)
+val aoa_driver = Attrib.setup_config_string \<^binding>\<open>AoA_driver\<close> default_driver_of
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -386,7 +390,7 @@ fun minilang_message_packer ctxt =
              | Minilang.SH_PRF (prf, time) =>
                  packPair (packInt, packPair (packString, packInt))
                           (15, (prf, Time.toMilliseconds time))
-             (* (assigned fact name, rendered proof text, elapsed ms) of a
+             (* (assigned fact name, rendered proof text, time ms) of a
                 FactInTime just proven live — Python pastes it back into the
                 op's fact field (stage 3a, D37; tag 20 author-approved
                 2026-08-10). *)
@@ -889,11 +893,11 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
       val cfg : cfg = (minilang_cfg, budget)
       val (task_kind, task_payload_packer) = pack_task task
 
-      (* The three preprocessing segments, timed as one block: prep_elapsed is
+      (* The three preprocessing segments, timed as one block: prep_time is
          the entry's share of the recorded replay cost (D61 — what a replay
          will spend, not what this search spent). *)
-      val ({elapsed = prep_elapsed, ...}, (sequent, split_script)) =
-        Timing.timing (fn () =>
+      val (prep_time, (sequent, split_script)) =
+        Phi_Proof_Store.timing (fn () =>
           let val st1 = standard_tac_segment ctxt0 sequent0
               val (st2, split_script) = Goal_Preprocess.preprocess_split_recorded ctxt0 st1
               val st3 = merge_segment ctxt0 st2
@@ -940,12 +944,12 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
       val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
-        (* Third component: this op's ML-side execution time in ms (D61).
-           The assembly verification replay sums it over the final op stream
-           into assembled_isabelle_time. *)
-        ret_schema = (fn (ctxt, msgs, flat_goal, elapsed_ms) =>
+        (* Third component: this op's ML-side time in ms as Phi_Proof_Store.timing
+           measures it (D61).  The assembly verification replay sums it over the
+           final op stream into assembled_isabelle_time. *)
+        ret_schema = (fn (ctxt, msgs, flat_goal, time_ms) =>
           packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt, packInt)
-                     (msgs, flat_goal, elapsed_ms)),
+                     (msgs, flat_goal, time_ms)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
@@ -954,13 +958,13 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                     val mode = if !replay_mode then MiniLang_Agent.REPLAY
                                else MiniLang_Agent.LIVE
                     val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
-                    val ({elapsed, ...}, s1) =
-                      Timing.timing (fn () => MiniLang_Agent.interpret full_config opr s0) ()
+                    val (time, s1) =
+                      Phi_Proof_Store.timing (fn () => MiniLang_Agent.interpret full_config opr s0) ()
                     val ctxt' = Minilang.context_of s1
                     val msgs = clean_report ()
                     val _ = state := Symtab.update (to, s1) (!state)
                  in (ctxt', msgs, Minilang.leading_goal_data s1,
-                     Time.toMilliseconds elapsed) end) ()
+                     Time.toMilliseconds time) end) ()
               (* Drain reporter messages on EVERY path: the success branch already
                  drained via clean_report, but a NOTICE pushed before a failure
                  (e.g. an Agent Hint notice fired during term checking) would
@@ -1852,13 +1856,13 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                                  |> Base64.encode |> Bytes.content
                     in "aoa_replay " ^ quote b64 end
                  (* D61: what a REPLAY of this proof will cost — entry
-                    preprocessing plus the final op stream's summed ML execution
-                    time (measured over the assembly verification replay).  LLM
+                    preprocessing plus the final op stream's summed ML time
+                    (measured over the assembly verification replay).  LLM
                     round-trips, RPC overhead and dead branches are deliberately
                     not in it.  Raw (undivided) time: the write layer divides
                     by Timeout.scale. *)
                  val replay_time =
-                   prep_elapsed + Time.fromMilliseconds assembled_isabelle_time_ms
+                   prep_time + Time.fromMilliseconds assembled_isabelle_time_ms
               in ((xcmds, agent_cost, replay_time, prf_text),
                   Minilang.conclude ctxt s1'
                   |> restore_concl orig_concl (*verbatim conclusion, stage 4e*))

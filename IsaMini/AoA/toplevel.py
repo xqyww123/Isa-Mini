@@ -93,9 +93,9 @@ async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
         state_name = "$init"
         for i, packed_op in enumerate(packed_ops):
             dest_name = f"$replay_{i+1}"
-            (_msgs, _flat_goal, elapsed_ms) = await connection.callback(
+            (_msgs, _flat_goal, time_ms) = await connection.callback(
                 "IsaMini.proof_opr", (state_name, dest_name, packed_op))
-            replayed_ms += elapsed_ms
+            replayed_ms += time_ms
             state_name = dest_name
         return (True, state_name, None, replayed_ms)
     except Exception as e:

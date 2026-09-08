@@ -47,8 +47,8 @@ signature PROOF_STORE_AoA = sig
      channel eval_prf_str; a text of the form `aoa_replay "…"` enters the
      pure-ML §2.7 flow through that method, never through a second path.  The
      hash is computed by the caller: this brick holds no key recipe.  Do not
-     wrap another Timeout.apply around this: the replay budget is
-     tolerant_time of the recorded std_time, applied inside eval_prf_str. *)
+     wrap another timeout around this: the replay limits are replay_limits
+     of the recorded std_time, applied inside eval_prf_str. *)
   val store_hit_replay : {key: Phi_Proof_Store.proof_id, hash: Hasher.digest option, write_store: bool}
                       -> Proof.context * thm
                       -> (Time.time * string * thm) option
@@ -117,7 +117,7 @@ fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
          including a traceless Interrupt_Breakdown record — is logged before
          it is re-raised unchanged; Auto_Fail is the ordinary miss and is
          excluded from the record predicate.  The region is bounded by the
-         tolerant_time budget applied inside eval_prf_str. *)
+         replay_limits applied inside eval_prf_str. *)
       fun replay (std_time, prf_text) =
         (case Exn.capture_body (fn () =>
                 Exception_Log.capture
@@ -126,7 +126,7 @@ fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
                              | e => Exception_Log.default_record e}
                   (fn () =>
                     Phi_Sledgehammer_Solver.eval_prf_str kws n
-                      (Phi_Proof_Store.tolerant_time std_time) prf_text (ctxt, sequent)
+                      (Phi_Proof_Store.replay_limits std_time) prf_text (ctxt, sequent)
                     |> (fn (_, (_, th)) => th))) of
            Exn.Res th => SOME th
          | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail _) => NONE
