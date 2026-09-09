@@ -1,19 +1,67 @@
 theory Minilang_AoA
-  imports Minilang.Minilang Complex_Main
+  imports Minilang.Minilang
           Isabelle_RPC.Remote_Procedure_Calling Semantic_Embedding.Semantic_Embedding
 begin
 (* declare [[ML_debugger]] *)
 ML_file "helper.ML"
+
+(* Agent Hint Registry: theory-local notice/reject hints fired when the agent
+   uses a registered constant/fact. Loaded before agent.ML (which calls
+   Agent_Hint.check_ and before agent_packer.ML/agent_server.ML (which pack
+   Agent_Hint.HINT_NOTICE). *)
+ML_file "agent_hint.ML"
+
+attribute_setup xsymmetric = ‹
+  Scan.succeed (Thm.rule_attribute [] (fn context => fn th =>
+    Minilang_Helper.xsymmetric (Context.proof_of context) th))
+› "recursive symmetric that enters quantifiers and connectives"
+
 ML_file "agent.ML"
 (* ML_file "agent.old.ML" *)
 (* ML_file "model_AoA.ML" *)
 ML_file "agent_packer.ML"
 ML_file "preprocess.ML"
+(* The AoA side of the proof store: L1 RPCs + the level-0 lookup brick.
+   MUST load before agent_server.ML — run_AoA calls into it. *)
+ML_file "proof_store_AoA.ML"
 ML_file "agent_server.ML"
 (* ML_file "tactic.ML.old"
 ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
 
+method_setup aoa = ‹
+  (* CONTEXT_METHOD prepends `ALLGOALS Goal.conjunction_tac`, splitting a Pure
+     meta-conjunction goal `A &&& B` (as produced by multi-`shows` why3 VCs)
+     into separate subgoals before the agent runs — matching how every stock
+     Isabelle method handles `&&&`. A raw `K MiniLang_Agent_AoA.method` skips
+     this, leaving the agent a `&&&` goal that its object-level conjunction
+     ops (SplitConjs/conjI) cannot handle. *)
+  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.method))
+›
+
+method_setup hammer_or_aoa = ‹
+  (* hammer_or_AoA facade (§2.3): store lookup, engine search, then the AoA
+     agent — always async_mode = Sync at the method layer.  Same &&&-splitting
+     prelude as `aoa` (CONTEXT_METHOD). *)
+  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.hammer_or_aoa_method))
+›
+
+method_setup aoa_replay = ‹
+  (* Pure-ML replay of an assembled AoA proof blob (§2.7, D39): the ONLY
+     decoder of the blob format.  Store entries read `aoa_replay "<b64>"` and
+     reach here through the generic replay channel (eval_prf_str). *)
+  Scan.lift Parse.string >> (fn blob =>
+    K (Method.CONTEXT_METHOD (MiniLang_Agent_AoA.aoa_replay_method blob)))
+›
+
+(* AoA-agent-specific INDUCT/CASE_SPLIT tuning (consumes_policy,
+ * induct_auto_insert_facts, …) is applied per-session in agent_server.ML
+ * via Config.put on the session context, not as a theory-level `declare`
+ * here — so non-AoA Minilang users of this theory keep the stock
+ * defaults. *)
+
+
+(*
 ML ‹
     let
       val ctxt = \<^context>
@@ -38,9 +86,7 @@ ML ‹
     in () end
   ›
 
-method_setup aoa = ‹
-  Scan.succeed (K MiniLang_Agent_AoA.method)
-›
+
 
 method_setup goal_split = ‹
   Scan.succeed (fn ctxt =>
@@ -208,5 +254,13 @@ text ‹What about the cleanup tactic ‹Inductive.mk_cases_tac› by itself?
   goal state \emph{after} the raw ‹cases› rule has been applied. To use
   it in an apply-script, you must first apply ‹is_even.cases› to set up
   the case obligations, then ‹mk_cases_tac› discharges the dead branches:›
+*)
+
+no_notation BNF_Cardinal_Arithmetic.cprod (infixr "*c" 80)
+no_notation BNF_Cardinal_Arithmetic.csum (infixr "+c" 65)
+no_notation BNF_Cardinal_Arithmetic.cexp (infixr "^c" 90)
+no_notation BNF_Wellorder_Constructions.ordIso2 (infix "=o" 50)
+no_notation BNF_Wellorder_Constructions.ordLess2 (infix "=o" 50)
+no_notation BNF_Wellorder_Constructions.ordLeq2 (infix "<=o" 50)
 
 end

@@ -45,6 +45,8 @@ end
 ```
 which runs the proof with GPT-5.5 at high reasoning effort. The configuration option `AoA_driver` takes a string of the form `Driver` or `Driver.option`, where `Driver` is currently one of `ClaudeCode`, `ChatGPT`, `Codex-API`, or `DeepSeek`. The sections below describe each driver and the options it accepts.
 
+To change the default for a whole installation instead of one theory, set the Isabelle settings variable `AOA_DRIVER` (same `Driver` or `Driver.option` string) in `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`; a `declare [[AoA_driver = ...]]` in a theory still takes precedence.
+
 ### 3.1 `ClaudeCode` — Claude via the Claude Code CLI (default)
 
 The default driver. It needs no API key — being logged into the Claude Code CLI (see above) is all it takes. Its option is a Claude model name:
@@ -58,7 +60,7 @@ declare [[AoA_driver = "ClaudeCode.claude-sonnet-4-6"]]
 
 This driver provides the GPT family of models:
 ```isabelle
-declare [[AoA_driver = "OpenAI"]]                  (* default: gpt-5.5, high effort *)
+declare [[AoA_driver = "OpenAI"]]                  (* default: gpt-5.5, medium effort *)
 declare [[AoA_driver = "OpenAI.gpt-5.5-high"]]
 declare [[AoA_driver = "OpenAI.gpt-5.6-xhigh"]]
 ```
@@ -74,7 +76,7 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, then restart Isabell
 The `Codex-API` driver gives you the same GPT family as OpenAI, but billed through a ChatGPT subscription instead of API credits. It needs no OpenAI API key; instead, it talks to a local proxy that holds the OAuth session of your subscription. Two proxies are supported: `openai-oauth` and `auth2api`.
 
 ```isabelle
-declare [[AoA_driver = "Codex-API"]]                (* default: gpt-5.5, medium effort *)
+declare [[AoA_driver = "Codex-API"]]                (* default: gpt-5.5, high effort *)
 declare [[AoA_driver = "Codex-API.gpt-5.5-high"]]
 ```
 
@@ -103,7 +105,7 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, then restart Isabell
 
 The option is V4-pro or V4-flash (default V4-flash), or a full model id:
 ```isabelle
-declare [[AoA_driver = "DeepSeek"]]                    (* default: deepseek-v4-flash *)
+declare [[AoA_driver = "DeepSeek"]]                    (* default: deepseek-v4-pro *)
 declare [[AoA_driver = "DeepSeek.V4-pro"]]             (* deepseek-v4-pro *)
 declare [[AoA_driver = "DeepSeek.V4-flash"]]
 ```

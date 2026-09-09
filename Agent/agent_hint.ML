@@ -143,3 +143,7 @@ val _ =
       "register an agent REJECT hint on a fact the agent must not use")
 
 end
+
+(*TEMPORARY hunt marker (`exception Option`, 2026-09-03): forces this session to
+  rebuild so its ROOT ML_debugger option takes effect (a ROOT options change alone
+  does not enter the session digest).  Delete with the hunt.*)
