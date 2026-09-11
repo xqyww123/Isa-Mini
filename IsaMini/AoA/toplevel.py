@@ -1,6 +1,8 @@
 from re import I
+import asyncio
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
+from .model import interrupts_are_cancellations
 from . import usage_count
 from typing import Any
 import json
@@ -71,6 +73,7 @@ Session.Driver["test"] = _test_driver  # type: ignore[assignment]
 
 
 @isabelle_remote_procedure("IsaMini.query_by_name")
+@interrupts_are_cancellations
 async def _query_by_name_rpc(arg: tuple[int, str], connection: Connection) -> tuple[str, bool]:
     """Query entity by kind and name — reuses the core of the MCP query tool."""
     from .retrieval import _query_entity_core
@@ -98,6 +101,7 @@ async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
     """
     await connection.callback("IsaMini.set_replay_mode", True)
     replayed_ms = _ZERO_TIMES_MS
+    peer_alive = True
     try:
         state_name = "$init"
         for i, packed_op in enumerate(packed_ops):
@@ -107,11 +111,25 @@ async def _replay_assembled_proof(connection: Connection, packed_ops: list[Any],
             replayed_ms = _add_times_ms(replayed_ms, times_ms)
             state_name = dest_name
         return (True, state_name, None, replayed_ms)
+    except asyncio.CancelledError:
+        # Isabelle unwound with the interrupt and closed the connection:
+        # nothing may call back, and the cancellation must not be replaced
+        # by that failure
+        peer_alive = False
+        raise
+    except (ConnectionError, EOFError) as e:
+        peer_alive = False
+        connection.server.logger.info(f"[AoA] Proof replay failed ({source}): {e}")
+        return (False, None, f"{type(e).__name__}: {e}", replayed_ms)
     except Exception as e:
         connection.server.logger.info(f"[AoA] Proof replay failed ({source}): {e}")
         return (False, None, f"{type(e).__name__}: {e}", replayed_ms)
     finally:
-        await connection.callback("IsaMini.set_replay_mode", False)
+        if peer_alive:
+            try:
+                await connection.callback("IsaMini.set_replay_mode", False)
+            except Exception:
+                pass    # a dead peer must not replace the replay's verdict
 
 # The L19 empty-DB warning fires at most once per RPC-host process: the check
 # itself runs (cheaply) at every `by aoa`, but a user who has seen the install
@@ -171,6 +189,7 @@ async def _ensure_semantic_db(connection) -> None:
 
 
 @isabelle_remote_procedure("IsaMini.AoA")
+@interrupts_are_cancellations
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,

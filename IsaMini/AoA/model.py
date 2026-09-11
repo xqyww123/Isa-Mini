@@ -11,7 +11,8 @@ from . import config
 from .task import Task, UsualTask
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
-from Isabelle_RPC_Host import Connection, IsabelleError, pretty_unicode, ascii_of_unicode, get_LETTER_SYMBOLS
+import functools
+from Isabelle_RPC_Host import Connection, IsabelleError, IsabelleInterrupt, pretty_unicode, ascii_of_unicode, get_LETTER_SYMBOLS
 from Isabelle_RPC_Host.position import IsabellePosition
 from Isabelle_RPC_Host.universal_key import (
     EntityKind, THM_RULE_KINDS, universal_key, universal_key_of, universal_key_and_name_of,
@@ -68,6 +69,42 @@ import sys
 import yaml
 import platformdirs
 from io import StringIO
+
+
+_ABSENT = object()
+
+def interrupts_are_cancellations(procedure: Callable[[Any, Connection], Awaitable[Any]]
+                                 ) -> Callable[[Any, Connection], Awaitable[Any]]:
+    """Decorates one of AoA's RPC procedures: for its duration an interrupted
+    Isabelle callback on its connection is a cancellation, not an Isabelle
+    error.  `callback` is shadowed on the connection instance and the
+    previous binding restored on exit, before the pooled connection serves
+    anyone else.  Shadowing rather than wrapping the connection, because
+    every helper of `Connection`'s and the vector store cached on it call
+    back through the instance they hold, which a wrapper would not
+    intercept; an explicit delegating class would, but breaks every
+    `Connection`-typed signature in Semantic_Embedding and
+    Isabelle_RPC_Host.  A bound `callback` taken before the procedure, or
+    reached off the class, escapes the shadow (nothing does either)."""
+    @functools.wraps(procedure)
+    async def wrapped(arg: Any, connection: Connection) -> Any:
+        callback = connection.callback
+        async def cancelling(name: str, arg: Any) -> Any:
+            try:
+                return await callback(name, arg)
+            except IsabelleInterrupt as e:
+                raise asyncio.CancelledError("Isabelle interrupted: " + "; ".join(e.errors)) from e
+        previous = vars(connection).get("callback", _ABSENT)
+        vars(connection)["callback"] = cancelling
+        try:
+            return await procedure(arg, connection)
+        finally:
+            if previous is _ABSENT:
+                del vars(connection)["callback"]
+            else:
+                vars(connection)["callback"] = previous
+    return wrapped
+
 
 class IsaTerm:
     """Dual-representation Isabelle string: Unicode (for LLM display) + ASCII (for Isabelle RPC).
@@ -14485,6 +14522,7 @@ class WorkerHandle:
         self.session = session
         self._event_queue: 'asyncio.Queue' = asyncio.Queue()
         self._task: 'asyncio.Task | None' = None
+        self._cancelled_by_us = False   # a cancellation we did not cause is an interrupt
         self._sub: 'LMDriver | None' = None
         self._pending_review: 'asyncio.Future[tuple[bool, str | None]] | None' = None
         # Pending resume future for a parked/suspended worker — shared by the
@@ -14771,11 +14809,15 @@ class WorkerHandle:
             self._trace_subagent(f"resumed on {self._step_label()}")
 
     async def wait_finish(self) -> None:
+        """Await the worker's task.  A cancellation this handle asked for is
+        its own teardown and is swallowed; any other is an Isabelle interrupt
+        converted by `interrupts_are_cancellations` and reaches the planner."""
         if self._task is not None:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                if not self._cancelled_by_us:
+                    raise
 
     def cancel(self) -> None:
         """Best-effort synchronous teardown: unblock a worker waiting on its
@@ -14787,17 +14829,21 @@ class WorkerHandle:
         self._pending_review = None
         self._pending_resume = None
         if self._task is not None and not self._task.done():
+            self._cancelled_by_us = True
             self._task.cancel()
 
     async def aclose(self) -> None:
         """Idempotent teardown that GUARANTEES the worker is gone: cancel it,
-        then await the task (swallowing ``CancelledError``). Safe to call when
-        the worker already finished. Detaches the handle from its node. Called per
-        node by the two recursive teardowns: ``Node.discard`` (node leaves the tree
-        — delete, amend) and ``Node.aclose_all_subagents`` (node stays —
-        cancel_subagent, a worker's own wind-down, the session-close sweep)."""
+        then await the task (swallowing every ``CancelledError``: teardown is
+        total, and a converted interrupt reaches the planner through
+        ``wait_finish`` alone). Safe to call when the worker already finished.
+        Detaches the handle from its node. Called per node by the two recursive
+        teardowns: ``Node.discard`` (node leaves the tree — delete, amend) and
+        ``Node.aclose_all_subagents`` (node stays — cancel_subagent, a worker's
+        own wind-down, the session-close sweep)."""
         self.cancel()
-        await self.wait_finish()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self.wait_finish()
         self._settle_costs()  # fallback: ensure cost is rolled up if _run's
                               # finally somehow didn't (idempotent via the flag)
         if self.target.worker_handle is self:
