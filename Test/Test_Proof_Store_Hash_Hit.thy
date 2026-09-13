@@ -50,7 +50,7 @@ val ctxt = \<^context>
 (*20: a hit by hash is promoted under the caller's key when write_store is on*)
 val g20 = goal_of ctxt "(x::nat) + 0 = x"
 val h20 = Hasher.all_goals (ctxt, g20)
-val _ = S.update_cached_proof thy {id = "TPSHH.id1", hash = SOME h20} (t1, "(simp)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.id1", hash = SOME h20, rewrites = false} (t1, "(simp)[1]")
 val r20 = hit "TPSHH.id2" (SOME h20) {write = true} (ctxt, g20)
 val _ = assert (Option.map #2 r20 = SOME "(simp)[1]") "test20 hit"
 val _ = assert (map #hash (puts_of "TPSHH.id2") = [SOME h20]) "test20 promoted"
@@ -62,7 +62,7 @@ val _ = assert (length (frames ()) = n20) "test20 no frame without write_store"
 (*20b: a hit by id is handed back as it stands: nothing written.  The preset
       has no hash while the call has one, so a stray promotion write would
       differ from it and could not be short-circuited.*)
-val _ = S.update_cached_proof thy {id = "TPSHH.K20b", hash = NONE} (t1, "(simp)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.K20b", hash = NONE, rewrites = false} (t1, "(simp)[1]")
 val n20b = length (frames ())
 val r20b = hit "TPSHH.K20b" (SOME h20) {write = true} (ctxt, g20)
 val _ = assert (Option.map #2 r20b = SOME "(simp)[1]") "test20b hit"
@@ -79,7 +79,7 @@ val g21b = goal_of ctxt "rev (rev (xs::nat list)) = xs"
 val p21 = "(rule rev_rev_ident)[1]"
 val h21a = Hasher.all_goals (ctxt, g21a)
 val h21b = Hasher.all_goals (ctxt, g21b)
-val _ = S.update_cached_proof thy {id = "TPSHH.K1", hash = SOME h21b} (t1, p21)
+val _ = S.update_cached_proof thy {id = "TPSHH.K1", hash = SOME h21b, rewrites = false} (t1, p21)
 val r21a = hit "TPSHH.K1" (SOME h21a) {write = true} (ctxt, g21a)
 val _ = assert (is_none r21a) "test21 first call misses"
 val _ = assert (tombs_of "TPSHH.K1" = 1) "test21 tombstone"
@@ -94,8 +94,8 @@ val ctxt = \<^context>
 (*22: the skip rule must not fire on a DIFFERENT record*)
 val g22 = goal_of ctxt "(y::nat) * 1 = y"
 val h22 = Hasher.all_goals (ctxt, g22)
-val _ = S.update_cached_proof thy {id = "TPSHH.K22", hash = NONE} (t1, "(fail)[1]")
-val _ = S.update_cached_proof thy {id = "TPSHH.id_good", hash = SOME h22} (t1, "(simp)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.K22", hash = NONE, rewrites = false} (t1, "(fail)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.id_good", hash = SOME h22, rewrites = false} (t1, "(simp)[1]")
 (*the promotion rewrites K22 with another text: the collision guard warns, as it should --
   the one collision this file provokes on purpose; every other block has ids of its own*)
 val r22 = hit "TPSHH.K22" (SOME h22) {write = true} (ctxt, g22)
@@ -116,7 +116,7 @@ val _ = \<^try>\<open>ignore (Phi_Sledgehammer_Solver.eval_prf_str kws 1 (S.repl
                  catch Phi_Sledgehammer_Solver.Auto_Fail _ => ()\<close>
 val per_replay = !replays
 val _ = assert (per_replay > 0) "test22b count_fail is reached"
-val _ = S.update_cached_proof thy {id = "TPSHH.K22b", hash = SOME h22b} (t1, "(count_fail)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.K22b", hash = SOME h22b, rewrites = false} (t1, "(count_fail)[1]")
 val _ = replays := 0
 val r22b = hit "TPSHH.K22b" (SOME h22b) {write = true} (ctxt, g22b)
 val _ = assert (is_none r22b) "test22b miss"
@@ -130,7 +130,7 @@ val ctxt = \<^context>
 (*23: a hash hit that fails to replay writes nothing and forgets the hash only*)
 val g23 = goal_of ctxt "rev (rev (ys::nat list)) = ys"
 val h23 = Hasher.all_goals (ctxt, g23)
-val _ = S.update_cached_proof thy {id = "TPSHH.id23a", hash = SOME h23} (t1, "(fail)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.id23a", hash = SOME h23, rewrites = false} (t1, "(fail)[1]")
 val n23 = length (frames ())
 val _ = assert (length (puts_of "TPSHH.id23a") = 1) "test23 preset"
 val r23 = hit "TPSHH.id23b" (SOME h23) {write = true} (ctxt, g23)
@@ -147,7 +147,7 @@ val ctxt = \<^context>
      verbatim instead of a searched one*)
 val g24 = goal_of ctxt "(u::nat) + 0 = u"
 val h24 = Hasher.all_goals (ctxt, g24)
-val _ = S.update_cached_proof thy {id = "TPSHH.id24", hash = SOME h24} (t1, "(simp)[1]")
+val _ = S.update_cached_proof thy {id = "TPSHH.id24", hash = SOME h24, rewrites = false} (t1, "(simp)[1]")
 val (fut24, st24) =
   MiniLang_Agent_AoA.hammer_or_AoA
     {fact_override = Sledgehammer_Fact.no_fact_override, proof_id = SOME "TPSHH.K24",

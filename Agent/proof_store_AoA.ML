@@ -140,7 +140,7 @@ fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
          hit-then-tombstone): write the row as-is -- same times, same text. *)
       fun write_l2 (std_time, prf_text, _) =
         if write_store
-        then Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash} (std_time, prf_text)
+        then Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash, rewrites = false} (std_time, prf_text)
         else ()
       fun try_l1 failed =
         case l1_lookup key of

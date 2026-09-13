@@ -1961,7 +1961,7 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
                                  Exn.Res (_, _, replay_time, prf_text) =>
                                    let val thy = Proof_Context.theory_of ctxt
                                        val std = Phi_Proof_Store.standard_time replay_time
-                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = SOME hash} (std, prf_text)
+                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = SOME hash, rewrites = false} (std, prf_text)
                                      ; Proof_Store_AoA.l1_write (key, std, prf_text)
                                    end
                                | Exn.Exn _ => () (*no proof came out: nothing to write*)))
@@ -2184,7 +2184,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
                                  Exn.Res (time, prf_text) =>
                                    let val thy = Proof_Context.theory_of ctxt
                                        val std = Phi_Proof_Store.standard_time time
-                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash} (std, prf_text)
+                                    in Phi_Proof_Store.update_cached_proof thy {id = key, hash = hash, rewrites = false} (std, prf_text)
                                      ; Proof_Store_AoA.l1_write (key, std, prf_text)
                                    end
                                | Exn.Exn _ => () (*no proof came out: nothing to write*)))
