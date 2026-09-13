@@ -96,8 +96,9 @@ val g22 = goal_of ctxt "(y::nat) * 1 = y"
 val h22 = Hasher.all_goals (ctxt, g22)
 val _ = S.update_cached_proof thy {id = "TPSHH.K22", hash = NONE, rewrites = false} (t1, "(fail)[1]")
 val _ = S.update_cached_proof thy {id = "TPSHH.id_good", hash = SOME h22, rewrites = false} (t1, "(simp)[1]")
-(*the promotion rewrites K22 with another text: the collision guard warns, as it should --
-  the one collision this file provokes on purpose; every other block has ids of its own*)
+(*the promotion rewrites K22 with another text (the collision marks, under ML_debugger,
+  would say so) -- the one collision this file provokes on purpose; every other block
+  has ids of its own*)
 val r22 = hit "TPSHH.K22" (SOME h22) {write = true} (ctxt, g22)
 val _ = assert (Option.map #2 r22 = SOME "(simp)[1]") "test22 verbatim"
 val _ = assert (tombs_of "TPSHH.K22" = 1 andalso map #hash (puts_of "TPSHH.K22") = [NONE, SOME h22]) "test22 frames"
