@@ -150,9 +150,8 @@ val zero_cost : agent_cost = {
   quota_wait_time = 0.0
 }
 
-(* One definition for every cost print (author-finalized format, 2026-08-10):
-   phi's give-up path prints exactly this line; the AoA-side tracing line
-   appends its locally-timed " time=" field. *)
+(* One definition for every cost print: phi's give-up path prints exactly this
+   line; the AoA-side tracing line appends its locally-timed " time=" field. *)
 fun string_of_cost ({input, cache_write, cache_read, output, cost, tool_calls,
                      isabelle_time, model_time, quota_wait_time} : agent_cost) =
   String.concat [
