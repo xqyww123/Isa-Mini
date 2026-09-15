@@ -1,5 +1,4 @@
 from re import I
-import asyncio
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from .model import interrupts_are_cancellations
@@ -232,8 +231,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # network.  Skipped under the test driver: snapshot tests must stay silent.
     if not is_test_driver:
         await _ensure_semantic_db(connection)
-        # The interpretation policy shell: ONE startup
-        # check per `by aoa` -- gate, dry run over this proof's context (an
+        # The interpretation policy shell: at most ONE startup check per
+        # `by aoa` (none once the user has declined it for the session) --
+        # gate, dry run over this proof's context (an
         # as-is root, so locale-local facts are seen) and its ancestor cone,
         # then the threshold policy: small updates run silently, big ones ask
         # (the run itself never asks again -- AoA's query-time lookups pass

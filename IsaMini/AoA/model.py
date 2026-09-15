@@ -2377,9 +2377,10 @@ class Minilang_State:
             else:
                 domain = Semantic_Vector_Store.ContextAll
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
-            # AoA never interprets at query time: the by-aoa startup sweep
-            # (update_interpretations in toplevel.py) already ran the check, so
-            # its lookups pass interpret_in_auto_embed=False -- queries then
+            # AoA never interprets at query time: the check belongs to the
+            # by-aoa startup sweep (update_interpretations in toplevel.py; none
+            # once the user declined it for the session), so its lookups pass
+            # interpret_in_auto_embed=False -- queries then
             # pay nothing for the point fix, not even a config read.
             # A per-call PARAMETER, never a write to
             # the connection-cached store: the ML connection pool reuses this
