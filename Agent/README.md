@@ -21,7 +21,7 @@ pip install dist/isarepl-<<THE LATEST VERSION>>-py3-none-any.whl --force-reinsta
 # assume the current working directory is at the MLML directory.
 source envir.sh
 cd contrib/Isa-REPL
-./repl_server.sh 0.0.0.0:6666 HOL-Library /tmp/repl_outputs -o threads=<<NUMBER OF CPU COREs>> -o document=false
+isabelle REPL -l HOL-Library -o threads=<<NUMBER OF CPU COREs>> -o document=false 0.0.0.0:6666 /tmp/repl_outputs
 ```
 
 2. Launch the Agent Server
