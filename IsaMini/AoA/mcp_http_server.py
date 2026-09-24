@@ -37,7 +37,6 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
-from Isabelle_RPC_Host.universal_key import EntityKind
 from .model import (
     bind_session_context, Session, Node, NonLeaf_Node, StdBlock,
     Root, GlobalEnv, GoalNode,
@@ -78,6 +77,7 @@ from .retrieval import (
     BATCHED_SEMANTIC_SEARCH,
     _query_tool_logic,
     _cc_query_schema,
+    _cc_query_schema_no_experience,
 )
 from . import prompts as P
 from . import config
@@ -2131,19 +2131,6 @@ _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
     k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
 
 
-def _without_enum_value(schema: Any, value: str) -> Any:
-    """``schema`` with ``value`` removed from every ``enum`` listing it. Rebuilt
-    non-destructively, so the shared ``_TOOL_SCHEMAS`` dicts stay intact."""
-    if isinstance(schema, dict):
-        out = {k: _without_enum_value(v, value) for k, v in schema.items()}
-        if value in out.get("enum", ()):
-            out["enum"] = [e for e in out["enum"] if e != value]
-        return out
-    if isinstance(schema, list):
-        return [_without_enum_value(x, value) for x in schema]
-    return schema
-
-
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     """Tool schemas advertised to ``session``. ``subagent`` / ``cancel_subagent`` are
     DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
@@ -2161,9 +2148,7 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     if not session.enable_write_memory:
         base = {k: v for k, v in base.items() if k != TOOL_WRITE_MEMORY}
     if not session.enable_read_memory:
-        query = base[TOOL_SEARCH]
-        base = {**base, TOOL_SEARCH: {
-            **query, "schema": _without_enum_value(query["schema"], EntityKind.EXPERIENCE.label)}}
+        base = {**base, TOOL_SEARCH: {**base[TOOL_SEARCH], "schema": _cc_query_schema_no_experience}}
     # Apply the driver's per-tool schema rewrite (default identity). Drivers whose
     # model/client needs a different schema form override `transform_tool_schema` —
     # e.g. codex-cli DROPS `$ref`/`$defs` (collapsing `cc_edit.jsonc`'s operation

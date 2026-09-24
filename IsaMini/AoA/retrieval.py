@@ -78,6 +78,24 @@ _cc_query_schema = _load_schema(
     else "cc_semantic_search_single.jsonc")
 
 
+def _without_enum_value(schema: Any, value: str) -> Any:
+    """``schema`` with ``value`` removed from every ``enum`` listing it. Rebuilt
+    non-destructively, so the shared schema dicts stay intact."""
+    if isinstance(schema, dict):
+        out = {k: _without_enum_value(v, value) for k, v in schema.items()}
+        if value in out.get("enum", ()):
+            out["enum"] = [e for e in out["enum"] if e != value]
+        return out
+    if isinstance(schema, list):
+        return [_without_enum_value(x, value) for x in schema]
+    return schema
+
+
+# The `query` schema advertised while experience retrieval is off
+# (AoA_enable_read_memory=false; PlainAgent always): no "experience" kind.
+_cc_query_schema_no_experience = _without_enum_value(_cc_query_schema, EntityKind.EXPERIENCE.label)
+
+
 def _query_k(q: dict) -> int:
     k = q.get("number", DEFAULT_QUERY_K)
     if not isinstance(k, int) or k < 1:
