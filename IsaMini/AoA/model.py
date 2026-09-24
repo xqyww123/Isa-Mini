@@ -2253,6 +2253,14 @@ class Minilang_State:
         # QUERY_BY_NAME_LIVE_RENDER_PLAN.md.
         k_fetch = max(k + 1, int(k * 1.15))
 
+        # AoA_enable_read_memory=false: strip experience memory here, ahead of every
+        # retrieval branch (exact-name, vectored, vectorless), so no stored experience
+        # can reach the agent. The flag is tree-wide on Runtime, via the ambient session.
+        if not the_session().enable_read_memory:
+            kinds = [kd for kd in kinds if kd != EntityKind.EXPERIENCE]
+            if not kinds:
+                return [], [], 0
+
         # Exact name lookup — bypass all search criteria
         # scored_recs elements are (score, rec, override) in ALL branches below:
         # override is None except for abbreviation constants hit by exact_name,
@@ -2439,7 +2447,7 @@ class Minilang_State:
                 # (hit_rate>0) using hit_rate as their score, then re-sort/slice.
                 # (Scale-mixing hit_rate∈[0,1] with the provider default scores is
                 # inherent to this vectorless path — cf. Q5 numeric mixing.)
-                if self.enable_read_memory and EntityKind.EXPERIENCE in kinds:
+                if EntityKind.EXPERIENCE in kinds:
                     exp_hit = await store._experience_hits(term_patterns, self.name)
                     total += len(exp_hit)
                     for uk, hr in exp_hit.items():
@@ -11978,14 +11986,16 @@ class Runtime:
         # `AoA_enable_write_memory` declaration, threaded via the RPC payload).
         # When False, write_memory is dropped from every advertised tool set (so it
         # never appears in available tools) and the LearningTask memorize
-        # interaction is a no-op; experience RETRIEVAL (`query kinds:["experience"]`)
-        # is gated separately by enable_read_memory. Tree-wide (like task): forks
-        # inherit it via this runtime.
+        # interaction is a no-op. Tree-wide (like task): forks inherit it via this
+        # runtime.
         self.enable_write_memory: bool = True
-        # Whether experience RETRIEVAL (`query kinds:["experience"]`) is active this
-        # run (from the Isabelle `AoA_enable_read_memory` declaration, threaded via
-        # the RPC payload). When False, experience hits are never fetched or merged
-        # into query results, so no stored experience enters the agent's context.
+        # Whether experience RETRIEVAL is active this run (from the Isabelle
+        # `AoA_enable_read_memory` declaration, threaded via the RPC payload). When
+        # False, the "experience" kind is stripped from every query
+        # (Minilang_State.semantic_knn_counted) and hidden from the `query` schema
+        # and the system prompt, so no stored experience enters the agent's context.
+        # False requires enable_write_memory=False too (write_memory's duplicate
+        # check would read experiences back) — checked in toplevel.IsaMini_AoA.
         # Tree-wide (like task): forks inherit it via this runtime.
         self.enable_read_memory: bool = True
         # Live interaction-fork tasks, tree-wide. Needed by the deep restart:
@@ -12707,6 +12717,13 @@ class Session:
             "not the default — reach for them only on rare occasions when you genuinely need "
             "to spell out a fine-grained inference step.\n"
         )
+        # Experience retrieval is gated by AoA_enable_read_memory (see Runtime); when
+        # off, the "experience" kind is absent from the `query` schema, so the prompt
+        # must not point at it either.
+        experience_hint = (
+            f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
+            "retrieve saved proof experiences (strategies) relevant to your goal.\n"
+            if self.enable_read_memory else "")
         if self.is_major:
             # The main agent's job is to formalize a PLAN (BFS skeleton + delegate),
             # not to prove stepwise. The worker gets its own structured body (intro +
@@ -12735,9 +12752,7 @@ class Session:
                 f"4. If you need a background lemma, `{self.tool_name(TOOL_SEARCH)}` for it "
                 f"first; if it truly doesn't exist, {lemma_step}.\n"
                 "\n"
-                f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
-                "retrieve saved proof experiences (strategies) relevant to your goal.\n"
-                "\n"
+                + (experience_hint + "\n" if experience_hint else "")
                 + declarative_style +
                 "\n"
                 "Holes are expected:\n"
@@ -12764,9 +12779,8 @@ class Session:
                 f"sub-agent with `{self.tool_name(TOOL_SUBAGENT)}` rather than proving it inline.\n"
                 "The goal may rely on background lemmas that are not yet available. "
                 f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                + self._lemma_guidance(self.is_major) +
-                f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
-                "retrieve saved proof experiences (strategies) relevant to your goal.\n"
+                + self._lemma_guidance(self.is_major)
+                + experience_hint
                 + report_line +
                 "Be concise in text output.\n"
                 "Continue until the goal is fully proved and no errors remain.\n"
@@ -12791,7 +12805,9 @@ class Session:
                 "## Tools\n"
                 f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
                 f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
-                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, rules, and saved experiences (proof strategies); also help you understand unfamiliar terms\n"
+                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, rules"
+                + (", and saved experiences (proof strategies)" if self.enable_read_memory else "")
+                + "; also help you understand unfamiliar terms\n"
                 f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
                 f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
                 f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: {config.request_tool_description()}\n"
@@ -12814,7 +12830,7 @@ class Session:
             )
             # write_memory is gated by AoA_enable_write_memory (see Runtime); when
             # off it is absent from the advertised tools, so it must not be listed
-            # here either. Experience retrieval via `query` stays regardless.
+            # here either.
             if self.enable_write_memory:
                 parts.append(
                     f"- {self.tool_name(TOOL_WRITE_MEMORY)}: Save a reusable proof experience or a strategy for a general class of goals, so future proofs can retrieve it using the `{self.tool_name(TOOL_SEARCH)}` tool.\n"

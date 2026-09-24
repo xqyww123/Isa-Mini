@@ -197,6 +197,12 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     task_kind, task_payload = task_info
     # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
     # tool is dropped from every advertised tool set and memorize is a no-op.
+    # AoA_enable_read_memory=false requires it: write_memory's duplicate check
+    # would otherwise read stored experiences back into the agent's context.
+    if enable_write_memory and not enable_read_memory:
+        raise AoA_Error(
+            "AoA_enable_read_memory = false requires AoA_enable_write_memory = false "
+            "(write_memory's duplicate check would read stored experiences).")
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -306,8 +312,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             # through the shared runtime singleton.
             session.task = task_obj
             session.enable_write_memory = enable_write_memory
-            # AoA_enable_read_memory (Isabelle declaration): when False, experience
-            # RETRIEVAL (`query kinds:["experience"]`) returns nothing.
+            # AoA_enable_read_memory (Isabelle declaration): when False, the
+            # "experience" kind is stripped from every query and hidden from the
+            # query schema and the prompt.
             session.enable_read_memory = enable_read_memory
             # Park the Connection on the shared Runtime so every tool entry point
             # can rebind Connection.current() (see model.bind_session_context):

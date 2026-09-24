@@ -1,0 +1,10 @@
+--- enable_read_memory=True ---
+experience kind in query schema: True
+retrieval hint in system prompt: True
+saved experiences in query tool blurb: True
+experience-only query: ([], [], 0)
+--- enable_read_memory=False ---
+experience kind in query schema: False
+retrieval hint in system prompt: False
+saved experiences in query tool blurb: False
+experience-only query: ([], [], 0)

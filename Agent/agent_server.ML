@@ -485,15 +485,17 @@ val AoA_write_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_write
    to the agent at all. true (default) — advertised as before. false — dropped
    from every advertised tool set (Python side), so it never appears in available
    tools, and the LearningTask memorize interaction becomes a no-op. Experience
-   RETRIEVAL (`query kinds:["experience"]`) is gated separately by
-   AoA_enable_read_memory below. *)
+   RETRIEVAL is gated by AoA_enable_read_memory below. *)
 val AoA_enable_write_memory = Attrib.setup_config_bool \<^binding>\<open>AoA_enable_write_memory\<close>
       (K true);
 
 (* Whether experience RETRIEVAL (`query kinds:["experience"]`) is active. true
    (default) — experience hits are fetched and merged into query results as before.
-   false — experience retrieval returns nothing (Python side), so no stored
-   experience enters the agent's context. Independent of AoA_enable_write_memory. *)
+   false — the "experience" kind is stripped from every query and hidden from the
+   query schema and the prompt (Python side), so no stored experience enters the
+   agent's context. false requires AoA_enable_write_memory = false as well
+   (write_memory's duplicate check would read experiences back); the Python entry
+   point rejects the other combination. *)
 val AoA_enable_read_memory = Attrib.setup_config_bool \<^binding>\<open>AoA_enable_read_memory\<close>
       (K true);
 

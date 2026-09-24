@@ -477,9 +477,10 @@ async def _test_memorize_interaction_stages(root: Root, file: MyIO):
 async def _test_write_memory_gate(root: Root, file: MyIO):
     """[AoA_enable_write_memory gate] When enabled, write_memory is advertised in
     the available tools and listed in the system prompt; when disabled it is absent
-    from BOTH — while the `query` tool (experience RETRIEVAL) stays available
-    regardless. Gated per-session via Runtime.enable_write_memory (set from the
-    Isabelle declaration, threaded through the RPC payload)."""
+    from BOTH — while the `query` tool stays available regardless (experience
+    RETRIEVAL has its own gate, see ReadMemoryGate). Gated per-session via
+    Runtime.enable_write_memory (set from the Isabelle declaration, threaded through
+    the RPC payload)."""
     from .mcp_http_server import _tool_schemas_for
     from .model import TOOL_WRITE_MEMORY, TOOL_SEARCH
     session = root.session
@@ -491,6 +492,44 @@ async def _test_write_memory_gate(root: Root, file: MyIO):
         file.write(f"write_memory advertised: {TOOL_WRITE_MEMORY in schemas}\n")
         file.write(f"write_memory in system prompt: {TOOL_WRITE_MEMORY in sysprompt}\n")
         file.write(f"query (retrieval) advertised: {TOOL_SEARCH in schemas}\n")
+    session.enable_write_memory = True
+
+
+@model_test("ReadMemoryGate", "Test_ReadMemoryGate.thy", 8, isolated_db=True)
+async def _test_read_memory_gate(root: Root, file: MyIO):
+    """[AoA_enable_read_memory gate] When enabled, the `query` schema offers the
+    "experience" kind, the system prompt points at it, and an experience query
+    reaches the experience store. When disabled, the kind is gone from the schema
+    and the prompt, and an experience-only query returns nothing without touching
+    the store — for the pattern-only path, which is the one that crashed with an
+    AttributeError in dc0a727 (the gate read `self.enable_read_memory` on
+    Minilang_State, which has no such attribute; the fix reads it off the ambient
+    session). Gated tree-wide via Runtime.enable_read_memory. Runs against the
+    throwaway (empty) semantic DB so the enabled query's outcome is fixed too."""
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    from .mcp_http_server import _tool_schemas_for
+    from .model import TOOL_SEARCH
+    session = root.session
+    ml = root.ml_state
+    for enabled in (True, False):
+        # Read off requires write off (toplevel.IsaMini_AoA rejects the other
+        # combination), so probe the two legal configurations.
+        session.enable_read_memory = enabled
+        session.enable_write_memory = enabled
+        kinds_enum = (_tool_schemas_for(session)[TOOL_SEARCH]["schema"]
+                      ["properties"]["queries"]["items"]["properties"]["kinds"]["items"]["enum"])
+        sysprompt = session.system_prompt() or ""
+        file.write(f"--- enable_read_memory={enabled} ---\n")
+        file.write(f"experience kind in query schema: {EntityKind.EXPERIENCE.label in kinds_enum}\n")
+        file.write(f"retrieval hint in system prompt: {'kinds: [\"experience\"]' in sysprompt}\n")
+        file.write(f"saved experiences in query tool blurb: {'saved experiences' in sysprompt}\n")
+        # Pattern-only experience query (no embedding call). Enabled: reaches the
+        # (empty) experience store and finds nothing. Disabled: stripped to no kinds
+        # and returned before any store access.
+        results, warnings, total = await ml.semantic_knn_counted(
+            None, 5, [EntityKind.EXPERIENCE], term_patterns=[r"_ ^ 2"])
+        file.write(f"experience-only query: {(results, warnings, total)}\n")
+    session.enable_read_memory = True
     session.enable_write_memory = True
 
 

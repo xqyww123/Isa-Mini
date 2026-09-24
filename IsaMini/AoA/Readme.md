@@ -148,12 +148,19 @@ Both default to `true`.
 ### 4.3 Memory
 
 AoA accumulates experience across invocations and reuses it on later proofs.
-This is managed automatically — nothing to configure. To stop it recording new
-experience (retrieval of existing experience is unaffected):
+This is managed automatically — nothing to configure. Recording and retrieval
+are controlled separately:
 
 ```isabelle
-declare [[AoA_enable_write_memory = false]]
+declare [[AoA_enable_write_memory = false]]  (* do not record new experience *)
+declare [[AoA_enable_read_memory = false]]   (* do not retrieve stored experience *)
 ```
+
+Both default to `true`. Turning retrieval off requires turning recording off as
+well (recording checks new experience against the stored ones, which would read
+them back); `by aoa` refuses the other combination. With retrieval off the agent
+is never shown the stored experience, so a run is unaffected by what earlier runs
+learnt — for benchmarks, use both `false`.
 
 ### 4.4 Semantic retrieval
 
