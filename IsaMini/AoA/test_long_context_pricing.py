@@ -3,18 +3,21 @@
 context) cost accounting, the OpenAI rows of ``PRICING`` and the Responses
 usage ingestion (cached and cache-written tokens).
 
-OpenAI bills a request whose prompt exceeds the model's long-context threshold
-(272K input tokens: input + cached + cache write) at the long rates for the
-whole request. ``APIDriver_OpenAI`` keeps two disjoint ``Usage`` tallies and
-adds each call to exactly one of them; ``_compute_cost`` bills each tally at
-its tier. Drivers that report per-turn sums (Codex CLI, Claude Code) stay on
-the flat formula and never see a tier.
+``APIDriver_OpenAI`` bills each call at the short or the long rates by the
+rule in docs/COST_ACCOUNTING.md §4 (strict ``>`` on ``prompt_tokens`` against
+the model's ``long.threshold``): it keeps two disjoint ``Usage`` tallies, adds
+each call to exactly one of them, and ``_compute_cost`` bills each tally at its
+tier. Drivers that report per-turn sums (Codex CLI, Claude Code) stay on the
+flat formula and never see a tier. The AOA_ASSUME_PERFECT_CACHE rewrite must
+change only how a prompt is split, never its size.
 
 No Isabelle / no REPL / no LLM / no network. Run directly:
 ``python test_long_context_pricing.py``. Exits non-zero on any failure.
 """
 import os
+import shutil
 import sys
+import tempfile
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
@@ -51,21 +54,35 @@ class _StubProvider:
         return PRICING[self.model_name]
 
 
-def make_driver(model):
-    """A real Codex-API driver through the real constructor chain (Session ->
-    LMDriver -> APIDriver -> APIDriver_OpenAI -> APIDriver_OpenAICodex); only
-    the provider is a stub and the meta log is captured."""
-    d = APIDriver_OpenAICodex(None, "", provider=_StubProvider(model))
+def capture(d):
+    """Replace the driver's meta log with an in-memory list."""
     d.meta = []
     d._log_meta = lambda event, **kw: d.meta.append((event, kw))
     return d
 
 
+def make_driver(model):
+    """A real Codex-API driver through the real constructor chain (Session ->
+    LMDriver -> APIDriver -> APIDriver_OpenAI -> APIDriver_OpenAICodex); only
+    the provider is a stub and the meta log is captured."""
+    return capture(APIDriver_OpenAICodex(None, "", provider=_StubProvider(model)))
+
+
 def flat(d):
-    """The single-tier formula over the four Session totals (LMDriver's own)."""
-    return Usage(d.total_input_tokens, d.total_output_tokens,
-                 d.total_cache_read_input_tokens,
-                 d.total_cache_creation_input_tokens).cost(d._pricing())
+    """What LMDriver's own single-tier ``_compute_cost`` would bill for the
+    four Session totals (run on the driver, then restored)."""
+    saved = d.total_cost_usd
+    LMDriver._compute_cost(d)
+    cost = d.total_cost_usd
+    d.total_cost_usd = saved
+    return cost
+
+
+def totals(d):
+    return Usage(input_tokens=d.total_input_tokens,
+                 output_tokens=d.total_output_tokens,
+                 cached_tokens=d.total_cache_read_input_tokens,
+                 cache_creation_tokens=d.total_cache_creation_input_tokens)
 
 
 def main():
@@ -106,7 +123,7 @@ def main():
     p = PRICING["gpt-5.6-luna"]
     check(approx(d.total_cost_usd, d.short_context_usage.cost(p) + long_call.cost(p["long"])), "a 281K-prompt call is billed at the long rates, the rest stays short")
     check(d.meta[-1][1]["long_context"] is True, "the long call is logged long_context=True")
-    check(d.short_context_usage + d.long_context_usage == Usage(d.total_input_tokens, d.total_output_tokens, d.total_cache_read_input_tokens, d.total_cache_creation_input_tokens),
+    check(d.short_context_usage + d.long_context_usage == totals(d),
           "the two tallies sum to the four Session totals (the exported fields)")
     before = d.total_cost_usd
     d._compute_cost()
@@ -115,7 +132,7 @@ def main():
     # --- the boundary: exactly 272K is short, one more token is long
     for prompt, is_long in ((272_000, False), (272_001, True)):
         d2 = make_driver("gpt-5.6-sol")
-        d2._accumulate_usage(Usage(prompt - 100, 10, 100))
+        d2._accumulate_usage(Usage(prompt - 200, 10, 100, 100))   # all three prompt terms
         check((d2.long_context_usage != Usage()) is is_long and d2.meta[-1][1]["long_context"] is is_long,
               f"prompt of {prompt:,} tokens is {'long' if is_long else 'short'} context")
 
@@ -139,10 +156,44 @@ def main():
     check(approx(parent.total_cost_usd, merged_cost), "after merging a worker, recomputing the parent reproduces the merged cost")
     check(approx(parent.total_cost_usd, Usage(1_000, 100, 0).cost(p) + Usage(300_000, 2_000, 20_000, 5_000).cost(p["long"])), "and it bills the worker's long call at the long rates")
 
-    # --- a per-turn driver (Codex CLI) has no tiers: its 300K turn is billed flat
+    # --- a per-turn driver (Codex CLI, default model gpt-5.5-high): a turn whose
+    #     summed prompt is 300K is billed at the flat short rates ($1.50), not
+    #     at the long rates ($2.955) -- its Usage is a sum over many requests
     from IsaMini.AoA.driver_codex import Codex_Driver
-    check(Codex_Driver._accumulate_usage is LMDriver._accumulate_usage and Codex_Driver._compute_cost is LMDriver._compute_cost,
-          "Codex CLI driver keeps LMDriver's flat accounting")
+    old_home = os.environ.get("CODEX_HOME")
+    with tempfile.TemporaryDirectory() as home:
+        open(os.path.join(home, "auth.json"), "w").close()
+        os.environ["CODEX_HOME"] = home
+        try:
+            c = capture(Codex_Driver(None, ""))
+        finally:
+            if old_home is None:
+                os.environ.pop("CODEX_HOME", None)
+            else:
+                os.environ["CODEX_HOME"] = old_home
+    try:
+        c._record_codex_usage({"input_tokens": 300_000, "cached_input_tokens": 20_000, "output_tokens": 3_000})
+        c._compute_cost()
+        check(approx(c.total_cost_usd, Usage(280_000, 3_000, 20_000).cost(PRICING["gpt-5.5"])),
+              "Codex CLI: a 300K-prompt turn on gpt-5.5 is billed at the flat short rates")
+    finally:
+        shutil.rmtree(c.working_dir, ignore_errors=True)
+        shutil.rmtree(c._codex_home_dir, ignore_errors=True)
+
+    # --- the AOA_ASSUME_PERFECT_CACHE rewrite never changes a call's prompt size,
+    #     now that reported cache writes can be non-zero (a full-rewrite miss)
+    d5 = make_driver("gpt-5.6-luna")
+    d5._assume_perfect_cache = True
+    sizes = set()
+    for _ in range(300):   # the model is random by design: exercise every branch
+        adj, prompt_total = d5._cache_assumed_usage(Usage(0, 1_000, 0, 200_000), 195_000, 2_000)
+        sizes.add((adj.prompt_tokens, prompt_total))
+    check(sizes == {(200_000, 200_000)}, "a 200K full-rewrite call keeps prompt_tokens = 200,000 on every random branch")
+    adj, _ = d5._cache_assumed_usage(Usage(0, 1_000, 0, 100_000), 95_000, 2_000)
+    check(adj.prompt_tokens == 100_000 and adj.cached_tokens + adj.cache_creation_tokens <= 100_000,
+          "a 100K full-rewrite miss after a 95K prompt stays 100K and is split, not doubled")
+    d5._accumulate_usage(adj)
+    check(d5.long_context_usage == Usage(), "and it stays short context")
 
     # --- Responses usage ingestion: cached and cache-written tokens leave `input`
     details = SimpleNamespace(cached_tokens=40, cache_write_tokens=12)

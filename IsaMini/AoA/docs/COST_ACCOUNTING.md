@@ -28,23 +28,27 @@ each is normalized once at ingestion:
 | Provider | Reported prompt count | Cache creation reported? | Normalization |
 |---|---|---|---|
 | Anthropic | already **excludes** cache | yes | pass through (`from_uncached`) |
-| OpenAI | **includes** cached and cache-written | Responses: `input_tokens_details.cache_write_tokens` (read since 2026-09-25; 0 unless the request sets cache breakpoints, which AoA does not); Chat Completions: no | subtract both (`from_inclusive`) |
+| OpenAI | **includes** cached and cache-written | Responses: `input_tokens_details.cache_write_tokens` (read since 2026-09-25); Chat Completions and Codex CLI: no | subtract both (`from_inclusive`) |
 | Gemini | **includes** cached | no (always 0) | subtract cached (`from_inclusive`) |
 
 Sources:
 - OpenAI — `usage.input_tokens` total incl. cached; cached in `input_tokens_details.cached_tokens`: https://platform.openai.com/docs/api-reference/responses
+- OpenAI cache writes — that `input_tokens` includes them rests on the pricing page's Cache writes tooltip, "Input tokens are either Input, Cached Input, or Cache Write and writes are not an additive fee" (https://developers.openai.com/api/docs/pricing, read 2026-09-25). `cache_write_tokens` is not in the openai SDK's typed `InputTokensDetails` (2.33.0); it was observed on the codex backend on 2026-09-25 with value 0 — neither a non-zero value nor the inclusion has been observed yet.
 - Gemini — `usageMetadata.promptTokenCount` includes `cachedContentTokenCount`: https://ai.google.dev/api/generate-content
 - Anthropic — `input_tokens` excludes cache; cache in `cache_read_input_tokens` / `cache_creation_input_tokens`: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 
 ## 3. Implementation map
 
 - `Usage.from_uncached(...)` / `Usage.from_inclusive(...)` — the only blessed
-  ways to build a `Usage`; encode the per-provider convention.
+  ways to build a `Usage` from a provider's report; encode the per-provider
+  convention.
+- `Usage.cost(rates)` — the §4 partition sum at one price tier; `Usage()` and
+  `+` build tallies and keep the invariant.
 - `LMDriver._accumulate_usage(usage)` — the single funnel into the counters;
   touches token counters only, never `total_cost_usd`.
 - Where each driver normalizes:
   - `driver_anthropic.py` (`AnthropicProvider.chat`) → `from_uncached`
-  - `driver_api.py` (OpenAI responses + chat-completions) → `from_inclusive`
+  - `driver_openai_api.py` (`_responses_usage`; `OpenAIChatProvider.chat`) → `from_inclusive`
   - `driver_gemini.py` (`GeminiProvider.chat`) → `from_inclusive`
   - `driver_codex.py` (`_record_codex_usage`) → `from_inclusive`
   - `driver_claude_code.py` (`_accumulate_cost`) → `from_uncached`
@@ -82,10 +86,16 @@ reads this as: a request whose prompt exceeds the threshold is billed at the
 long rates as a whole, output included. Such a model's `PRICING` row carries a
 `long` sub-dict (the same keys plus `threshold`).
 
-Only the OpenAI API driver (`APIDriver_OpenAI`, hence `Codex-API`) bills in two
-tiers, because it is the driver whose `Usage` is exactly one request; the
-Codex CLI and Claude Code drivers report per-turn sums and stay on the flat
-formula above. The driver keeps two disjoint tallies, `short_context_usage`
+Two-tier billing needs each `Usage` to describe exactly one model request.
+Every API driver meets this, because `APIDriver`'s loop records usage once per
+response. The Codex CLI and Claude Code drivers do not: they report per-turn
+sums, so they stay on the flat formula above. As a scope decision, only
+`APIDriver_OpenAI` (hence `Codex-API`) bills in two tiers, and the other API
+drivers bill flat. For their own models this changes nothing, because their
+rows have no `long` tier. The exception is `Chat` running `gpt-5.5-pro`,
+`gpt-5.5` or `gpt-5.4`: its 384K window lets requests above 272K through
+before compaction starts (at 80%, about 307K), and those requests are billed
+at the short rates. The driver keeps two disjoint tallies, `short_context_usage`
 and `long_context_usage`, each a `Usage`; `_accumulate_usage` adds every call
 to exactly one of them (a call is long when its `prompt_tokens` exceed the
 model's `long.threshold`; a model without a `long` tier is always short) and

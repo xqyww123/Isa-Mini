@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from time import time
 from typing import Awaitable, Callable, TypeVar
 
@@ -62,15 +62,13 @@ class Chat_Restart(Exception):
 # keyed by model name across all providers. Names do not collide between
 # providers (``gpt-*``/``o*`` vs ``claude-*`` vs ``gemini-*``), so one table
 # serves them all. ``cached`` is the cache-READ rate. The optional ``cache_write``
-# rate is charged on the tokens an ingestion path reports as cache creation;
-# when the key is absent, ``Usage.cost`` bills those tokens at the ``input`` rate.
-# Today only the Anthropic and Claude Code paths report cache creation; the
-# OpenAI Responses path reads ``input_tokens_details.cache_write_tokens`` (0
-# unless the request sets cache breakpoints, which AoA does not).
+# rate is charged on the tokens an ingestion path records as cache creation,
+# and falls back to the ``input`` rate when absent; which paths record cache
+# creation: docs/COST_ACCOUNTING.md §2.
 # The optional ``long`` sub-dict holds a model's LONG-CONTEXT rates plus the
 # ``threshold`` above which they apply; the OpenAI driver bills a call whose
 # prompt exceeds it at those rates (docs/COST_ACCOUNTING.md §4).
-# The interpretation backends keep their own copy of the OpenAI rows in
+# The interpretation backends keep an independent price table:
 # contrib/Semantic_Embedding/Isabelle_Semantic_Embedding/
 # interpretation_config_template.yaml — update both when prices move.
 # OpenAI rows read from https://developers.openai.com/api/docs/pricing on
@@ -78,10 +76,8 @@ class Chat_Restart(Exception):
 # For Claude the cache convention is the 5-min ephemeral TTL: cache_write =
 # 1.25× input, cache read = 0.1× input.
 
-# OpenAI's Short / Long context columns are "≤272K input tokens" / ">272K input
-# tokens" (the page's column tooltips), input tokens being input, cached input
-# or cache write together. The long rates are read as applying to the whole
-# request, output included.
+# The pricing page's Short / Long context boundary; the rule and its reading
+# are in docs/COST_ACCOUNTING.md §4.
 OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 
 PRICING: dict[str, dict] = {
@@ -141,7 +137,7 @@ PRICING: dict[str, dict] = {
 }
 
 
-def pricing_for(model: str, default: dict[str, float]) -> dict[str, float]:
+def pricing_for(model: str, default: dict) -> dict:
     """Per-token price dict for *model*, or *default* (the caller's family
     flagship, e.g. ``PRICING["gpt-4.1"]``) when the model is unknown."""
     return PRICING.get(model, default)
@@ -164,13 +160,15 @@ def _parse_effort_suffix(argument: str | None, default_model: str,
 
 @dataclass(frozen=True)
 class Usage:
-    """Canonical per-call token usage (see docs/COST_ACCOUNTING.md).
+    """Canonical token usage of one model request, one CLI turn, or a sum of
+    these (see docs/COST_ACCOUNTING.md).
 
     INVARIANT: ``input_tokens`` is UNCACHED-only. Cache reads/writes are the
     separate, mutually-exclusive ``cached_tokens`` / ``cache_creation_tokens``
-    partitions, so ``total_prompt = input + cached + cache_creation``. Always
-    build via the factories below — they encode each provider's convention so
-    the invariant holds by construction rather than by remembering to subtract.
+    partitions, so ``prompt_tokens = input + cached + cache_creation``. Build a
+    Usage from a provider's report only through the factories below — they
+    encode each provider's convention so the invariant holds by construction;
+    the zero ``Usage()`` and ``+`` keep it, so tallies are built from them.
     """
     input_tokens: int = 0
     output_tokens: int = 0
@@ -183,10 +181,7 @@ class Usage:
         return self.input_tokens + self.cached_tokens + self.cache_creation_tokens
 
     def __add__(self, other: 'Usage') -> 'Usage':
-        return Usage(self.input_tokens + other.input_tokens,
-                     self.output_tokens + other.output_tokens,
-                     self.cached_tokens + other.cached_tokens,
-                     self.cache_creation_tokens + other.cache_creation_tokens)
+        return Usage(*(a + b for a, b in zip(astuple(self), astuple(other))))
 
     def cost(self, rates: dict) -> float:
         """USD at one price tier — a partition sum with NO subtraction, because
@@ -291,7 +286,7 @@ class LMDriver(Session):
                     raise
         assert False  # unreachable
 
-    def _pricing(self) -> dict[str, float]:
+    def _pricing(self) -> dict:
         """Price dict for this driver's model. Each concrete driver supplies it —
         a provider lookup (``self._provider.pricing()``) or
         ``pricing_for(self._model, <family default>)``."""
@@ -301,10 +296,12 @@ class LMDriver(Session):
         """Recompute ``total_cost_usd`` from the canonical token partition and the
         driver's pricing (see docs/COST_ACCOUNTING.md): ``Usage.cost`` over the
         four totals. An assignment, so calling it again changes nothing."""
-        self.total_cost_usd = Usage(self.total_input_tokens,
-                                    self.total_output_tokens,
-                                    self.total_cache_read_input_tokens,
-                                    self.total_cache_creation_input_tokens).cost(self._pricing())
+        self.total_cost_usd = Usage(
+            input_tokens=self.total_input_tokens,
+            output_tokens=self.total_output_tokens,
+            cached_tokens=self.total_cache_read_input_tokens,
+            cache_creation_tokens=self.total_cache_creation_input_tokens,
+        ).cost(self._pricing())
 
     def _accumulate_usage(self, usage: Usage, **meta) -> None:
         """Add one call's canonical ``Usage`` into the running token totals (and log

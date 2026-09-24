@@ -120,8 +120,9 @@ class Provider(ABC):
         ...
 
     @abstractmethod
-    def pricing(self) -> dict[str, float]:
-        """Returns {"input": rate, "cached": rate, "output": rate} per token."""
+    def pricing(self) -> dict:
+        """The model's ``PRICING`` row: per-token ``input`` / ``cached`` /
+        ``output`` rates, optionally ``cache_write`` and a ``long`` tier."""
         ...
 
     @staticmethod
@@ -332,8 +333,7 @@ class APIDriver(LMDriver):
         The adjusted cached flows through the normal cost pipeline (_compute_cost
         bills cached at the cached rate). NOTE: when ON this overwrites the real
         cache split, so the token ledger reports notional cache counts."""
-        prompt_total = (usage.input_tokens + usage.cached_tokens
-                        + usage.cache_creation_tokens)
+        prompt_total = usage.prompt_tokens
         if not self._assume_perfect_cache or prev_prompt_total <= 0 or prompt_total <= 0:
             return usage, prompt_total
         real = usage.cached_tokens
@@ -357,11 +357,16 @@ class APIDriver(LMDriver):
         else:
             effective = sim
         effective = max(0, min(int(effective), prompt_total))  # bound: [0, prompt_total]
+        # The notional credit comes out of the uncached input first, then out of
+        # the reported cache writes, so the rewrite changes only how the prompt
+        # is split, never its size (a full-rewrite miss becomes "prefix read,
+        # new content written", which is what a perfect cache would report).
+        creation = min(usage.cache_creation_tokens, prompt_total - effective)
         usage = Usage.from_inclusive(
             prompt_tokens=prompt_total,
             output_tokens=usage.output_tokens,
             cached=effective,
-            cache_creation=usage.cache_creation_tokens)
+            cache_creation=creation)
         return usage, prompt_total
 
     # --- Entry validation: the message list must never contain a lone surrogate ---
@@ -625,8 +630,7 @@ class APIDriver(LMDriver):
         # the context window even though they're cheap. Counting only uncached
         # input would undercount badly under heavy caching (e.g. DeepSeek) and
         # compact far too late, risking a context-overflow error.
-        occupancy = (usage.input_tokens + usage.cached_tokens
-                     + usage.cache_creation_tokens + usage.output_tokens)
+        occupancy = usage.prompt_tokens + usage.output_tokens
         return occupancy > self._provider.context_window * self.COMPACTION_THRESHOLD
 
     async def _find_recent_start(self, messages: list[Msg]) -> int:
@@ -926,5 +930,5 @@ class APIDriver(LMDriver):
                         total += len(tc.name) + len(tc.arguments)
         return total // 4
 
-    def _pricing(self) -> dict[str, float]:
+    def _pricing(self) -> dict:
         return self._provider.pricing()

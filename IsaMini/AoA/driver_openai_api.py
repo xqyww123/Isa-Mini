@@ -280,7 +280,7 @@ class OpenAIBase(Provider):
         bare = self._model.rsplit("/", 1)[-1]
         return bare in self._ALLOWED_TOOLS_CHOICE_MODELS
 
-    def pricing(self) -> dict[str, float]:
+    def pricing(self) -> dict:
         return pricing_for(self._model, PRICING["gpt-4.1"])
 
     def _strict_schema(self, name: str, schema: dict) -> dict:
@@ -545,8 +545,8 @@ def _responses_usage(um: Any) -> Usage:
     return Usage.from_inclusive(
         prompt_tokens=um.input_tokens or 0,
         output_tokens=um.output_tokens or 0,
-        cached=(getattr(details, 'cached_tokens', 0) or 0) if details else 0,
-        cache_creation=(getattr(details, 'cache_write_tokens', 0) or 0) if details else 0,
+        cached=getattr(details, 'cached_tokens', 0) or 0,
+        cache_creation=getattr(details, 'cache_write_tokens', 0) or 0,
     )
 
 

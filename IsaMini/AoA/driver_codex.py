@@ -594,7 +594,7 @@ class Codex_Driver(LMDriver):
             output_tokens=usage.get("output_tokens", 0),
             cached=usage.get("cached_input_tokens", 0)))
 
-    def _pricing(self) -> dict[str, float]:
+    def _pricing(self) -> dict:
         return pricing_for(self._model, PRICING["gpt-4.1"])
 
     # ------------------------------------------------------------------
