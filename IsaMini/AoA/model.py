@@ -2439,7 +2439,7 @@ class Minilang_State:
                 # (hit_rate>0) using hit_rate as their score, then re-sort/slice.
                 # (Scale-mixing hit_rate∈[0,1] with the provider default scores is
                 # inherent to this vectorless path — cf. Q5 numeric mixing.)
-                if EntityKind.EXPERIENCE in kinds:
+                if self.enable_read_memory and EntityKind.EXPERIENCE in kinds:
                     exp_hit = await store._experience_hits(term_patterns, self.name)
                     total += len(exp_hit)
                     for uk, hr in exp_hit.items():
@@ -11979,8 +11979,15 @@ class Runtime:
         # When False, write_memory is dropped from every advertised tool set (so it
         # never appears in available tools) and the LearningTask memorize
         # interaction is a no-op; experience RETRIEVAL (`query kinds:["experience"]`)
-        # is unaffected. Tree-wide (like task): forks inherit it via this runtime.
+        # is gated separately by enable_read_memory. Tree-wide (like task): forks
+        # inherit it via this runtime.
         self.enable_write_memory: bool = True
+        # Whether experience RETRIEVAL (`query kinds:["experience"]`) is active this
+        # run (from the Isabelle `AoA_enable_read_memory` declaration, threaded via
+        # the RPC payload). When False, experience hits are never fetched or merged
+        # into query results, so no stored experience enters the agent's context.
+        # Tree-wide (like task): forks inherit it via this runtime.
+        self.enable_read_memory: bool = True
         # Live interaction-fork tasks, tree-wide. Needed by the deep restart:
         # an interaction fork's host may be an ASGI request task (`query` runs
         # inline in `execute`) that no session owns, so nothing else can reach
@@ -12298,6 +12305,12 @@ class Session:
     @enable_write_memory.setter
     def enable_write_memory(self, v: bool):
         self.runtime.enable_write_memory = v
+    @property
+    def enable_read_memory(self) -> bool:
+        return self.runtime.enable_read_memory
+    @enable_read_memory.setter
+    def enable_read_memory(self, v: bool):
+        self.runtime.enable_read_memory = v
     @property
     def age(self) -> int:
         return self.runtime.age

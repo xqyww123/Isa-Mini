@@ -192,7 +192,7 @@ async def _ensure_semantic_db(connection) -> None:
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     task_info, enable_write_memory) = data
+     task_info, enable_write_memory, enable_read_memory) = data
     # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
     task_kind, task_payload = task_info
     # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
@@ -306,6 +306,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             # through the shared runtime singleton.
             session.task = task_obj
             session.enable_write_memory = enable_write_memory
+            # AoA_enable_read_memory (Isabelle declaration): when False, experience
+            # RETRIEVAL (`query kinds:["experience"]`) returns nothing.
+            session.enable_read_memory = enable_read_memory
             # Park the Connection on the shared Runtime so every tool entry point
             # can rebind Connection.current() (see model.bind_session_context):
             # uvicorn clears the context for each MCP request, so the binding made

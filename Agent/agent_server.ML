@@ -15,6 +15,7 @@ val AoA_retrieval_forking: string Config.T
 val AoA_read_proof_store: bool Config.T
 val AoA_write_proof_store: bool Config.T
 val AoA_enable_write_memory: bool Config.T
+val AoA_enable_read_memory: bool Config.T
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -484,8 +485,16 @@ val AoA_write_proof_store = Attrib.setup_config_bool \<^binding>\<open>AoA_write
    to the agent at all. true (default) — advertised as before. false — dropped
    from every advertised tool set (Python side), so it never appears in available
    tools, and the LearningTask memorize interaction becomes a no-op. Experience
-   RETRIEVAL (`query kinds:["experience"]`) is ALWAYS available regardless. *)
+   RETRIEVAL (`query kinds:["experience"]`) is gated separately by
+   AoA_enable_read_memory below. *)
 val AoA_enable_write_memory = Attrib.setup_config_bool \<^binding>\<open>AoA_enable_write_memory\<close>
+      (K true);
+
+(* Whether experience RETRIEVAL (`query kinds:["experience"]`) is active. true
+   (default) — experience hits are fetched and merged into query results as before.
+   false — experience retrieval returns nothing (Python side), so no stored
+   experience enters the agent's context. Independent of AoA_enable_write_memory. *)
+val AoA_enable_read_memory = Attrib.setup_config_bool \<^binding>\<open>AoA_enable_read_memory\<close>
       (K true);
 
 fun make_invocation_id () =
@@ -1779,15 +1788,16 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                 val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
                 val (_, budget) = cfg
                 val enable_write_memory = Config.get ctxt AoA_enable_write_memory
-            in packTuple10 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+                val enable_read_memory = Config.get ctxt AoA_enable_read_memory
+            in packTuple11 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
                            packPair (packString, fn () => task_payload_packer),
-                           packBool)
+                           packBool, packBool)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           (task_kind, ()), enable_write_memory)
+                           (task_kind, ()), enable_write_memory, enable_read_memory)
             end),
         (* Stats tuple: the 10th element is assembled_isabelle_time as
            (cpu_ms, wall_ms) (D61) — the per-op ML execution times summed over
