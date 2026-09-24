@@ -61,16 +61,59 @@ class Chat_Restart(Exception):
 # Per-model token prices in USD *per token* (= published price-per-1M ÷ 1e6),
 # keyed by model name across all providers. Names do not collide between
 # providers (``gpt-*``/``o*`` vs ``claude-*`` vs ``gemini-*``), so one table
-# serves them all. ``cached`` is the cache-READ rate; the optional ``cache_write``
-# rate applies only to providers that bill cache *creation* (Anthropic) — when
-# absent, ``_compute_cost`` falls back to the ``input`` rate. For Claude the cache
-# convention is the 5-min ephemeral TTL: cache_write = 1.25× input, cache read =
-# 0.1× input. Verified against published pricing 2026-06.
-PRICING: dict[str, dict[str, float]] = {
+# serves them all. ``cached`` is the cache-READ rate. The optional ``cache_write``
+# rate is charged on the tokens an ingestion path reports as cache creation;
+# when the key is absent, ``Usage.cost`` bills those tokens at the ``input`` rate.
+# Today only the Anthropic and Claude Code paths report cache creation; the
+# OpenAI Responses path reads ``input_tokens_details.cache_write_tokens`` (0
+# unless the request sets cache breakpoints, which AoA does not).
+# The optional ``long`` sub-dict holds a model's LONG-CONTEXT rates plus the
+# ``threshold`` above which they apply; the OpenAI driver bills a call whose
+# prompt exceeds it at those rates (docs/COST_ACCOUNTING.md §4).
+# The interpretation backends keep their own copy of the OpenAI rows in
+# contrib/Semantic_Embedding/Isabelle_Semantic_Embedding/
+# interpretation_config_template.yaml — update both when prices move.
+# OpenAI rows read from https://developers.openai.com/api/docs/pricing on
+# 2026-09-25; the rest verified against published pricing 2026-06.
+# For Claude the cache convention is the 5-min ephemeral TTL: cache_write =
+# 1.25× input, cache read = 0.1× input.
+
+# OpenAI's Short / Long context columns are "≤272K input tokens" / ">272K input
+# tokens" (the page's column tooltips), input tokens being input, cached input
+# or cache write together. The long rates are read as applying to the whole
+# request, output included.
+OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
+
+PRICING: dict[str, dict] = {
     # OpenAI
-    "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6},
-    "gpt-5.5":      {"input": 5.00e-6,  "cached": 0.50e-6,  "output": 30.00e-6},
-    "gpt-5.4":      {"input": 2.50e-6,  "cached": 0.25e-6,  "output": 15.00e-6},
+    "gpt-6-astra":   {"input": 10.00e-6, "cached": 1.00e-6, "cache_write": 12.50e-6, "output": 50.00e-6,
+                      "long": {"input": 20.00e-6, "cached": 2.00e-6, "cache_write": 25.00e-6, "output": 75.00e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-6-sol":     {"input": 2.00e-6,  "cached": 0.20e-6, "cache_write": 2.50e-6,  "output": 10.00e-6,
+                      "long": {"input": 4.00e-6,  "cached": 0.40e-6, "cache_write": 5.00e-6,  "output": 15.00e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-6-luna":    {"input": 0.10e-6,  "cached": 0.01e-6, "cache_write": 0.125e-6, "output": 0.50e-6,
+                      "long": {"input": 0.20e-6,  "cached": 0.02e-6, "cache_write": 0.25e-6,  "output": 0.75e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    # promotional; the page says "at least through November 21, 2026"
+    "gpt-5.6-sol":   {"input": 4.00e-6,  "cached": 0.40e-6, "cache_write": 5.00e-6,  "output": 20.00e-6,
+                      "long": {"input": 8.00e-6,  "cached": 0.80e-6, "cache_write": 10.00e-6, "output": 30.00e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-5.6-terra": {"input": 2.00e-6,  "cached": 0.20e-6, "cache_write": 2.50e-6,  "output": 12.00e-6,
+                      "long": {"input": 4.00e-6,  "cached": 0.40e-6, "cache_write": 5.00e-6,  "output": 18.00e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-5.6-luna":  {"input": 0.20e-6,  "cached": 0.02e-6, "cache_write": 0.25e-6,  "output": 1.20e-6,
+                      "long": {"input": 0.40e-6,  "cached": 0.04e-6, "cache_write": 0.50e-6,  "output": 1.80e-6,
+                               "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-5.5-pro":  {"input": 30.00e-6, "cached": 30.00e-6, "output": 180.00e-6,
+                     "long": {"input": 60.00e-6, "cached": 60.00e-6, "output": 270.00e-6,
+                              "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-5.5":      {"input": 5.00e-6,  "cached": 0.50e-6,  "output": 30.00e-6,
+                     "long": {"input": 10.00e-6, "cached": 1.00e-6,  "output": 45.00e-6,
+                              "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
+    "gpt-5.4":      {"input": 2.50e-6,  "cached": 0.25e-6,  "output": 15.00e-6,
+                     "long": {"input": 5.00e-6,  "cached": 0.50e-6,  "output": 22.50e-6,
+                              "threshold": OPENAI_LONG_CONTEXT_THRESHOLD}},
     "gpt-4.1":      {"input": 2.00e-6,  "cached": 0.50e-6,  "output": 8.00e-6},
     "gpt-4.1-mini": {"input": 0.40e-6,  "cached": 0.10e-6,  "output": 1.60e-6},
     "gpt-4.1-nano": {"input": 0.10e-6,  "cached": 0.025e-6, "output": 0.40e-6},
@@ -93,9 +136,6 @@ PRICING: dict[str, dict[str, float]] = {
     # is billed at the output rate.
     # NOTE: only the official bare model ids match — proxy ids like
     # "deepseek/deepseek-v4-flash" (openai-next) bill differently and fall back.
-    # The Semantic_Embedding interpretation backends keep a sibling table:
-    # contrib/Semantic_Embedding/Isabelle_Semantic_Embedding/
-    # interpretation_config_template.yaml — update both when prices move.
     "deepseek-v4-flash": {"input": 0.44e-6, "cached": 0.014e-6, "output": 1.32e-6},
     "deepseek-v4-pro":   {"input": 1.32e-6, "cached": 0.044e-6, "output": 3.96e-6},
 }
@@ -122,7 +162,7 @@ def _parse_effort_suffix(argument: str | None, default_model: str,
     return raw, default_effort
 
 
-@dataclass
+@dataclass(frozen=True)
 class Usage:
     """Canonical per-call token usage (see docs/COST_ACCOUNTING.md).
 
@@ -132,10 +172,30 @@ class Usage:
     build via the factories below — they encode each provider's convention so
     the invariant holds by construction rather than by remembering to subtract.
     """
-    input_tokens: int
-    output_tokens: int
-    cached_tokens: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
     cache_creation_tokens: int = 0
+
+    @property
+    def prompt_tokens(self) -> int:
+        """The whole prompt: input + cached + cache_creation (``total_prompt``)."""
+        return self.input_tokens + self.cached_tokens + self.cache_creation_tokens
+
+    def __add__(self, other: 'Usage') -> 'Usage':
+        return Usage(self.input_tokens + other.input_tokens,
+                     self.output_tokens + other.output_tokens,
+                     self.cached_tokens + other.cached_tokens,
+                     self.cache_creation_tokens + other.cache_creation_tokens)
+
+    def cost(self, rates: dict) -> float:
+        """USD at one price tier — a partition sum with NO subtraction, because
+        ``input_tokens`` is already uncached. ``cache_write`` falls back to the
+        input rate for providers that don't bill cache creation."""
+        return (self.input_tokens * rates["input"]
+                + self.cache_creation_tokens * rates.get("cache_write", rates["input"])
+                + self.cached_tokens * rates["cached"]
+                + self.output_tokens * rates["output"])
 
     @classmethod
     def from_uncached(cls, input_tokens: int, output_tokens: int,
@@ -239,21 +299,18 @@ class LMDriver(Session):
 
     def _compute_cost(self) -> None:
         """Recompute ``total_cost_usd`` from the canonical token partition and the
-        driver's pricing (see docs/COST_ACCOUNTING.md). Partition sum with NO
-        subtraction — ``total_input_tokens`` is already uncached. ``cache_write``
-        falls back to the input rate for providers that don't bill cache creation."""
-        p = self._pricing()
-        self.total_cost_usd = (
-            self.total_input_tokens * p["input"]
-            + self.total_cache_creation_input_tokens * p.get("cache_write", p["input"])
-            + self.total_cache_read_input_tokens * p["cached"]
-            + self.total_output_tokens * p["output"]
-        )
+        driver's pricing (see docs/COST_ACCOUNTING.md): ``Usage.cost`` over the
+        four totals. An assignment, so calling it again changes nothing."""
+        self.total_cost_usd = Usage(self.total_input_tokens,
+                                    self.total_output_tokens,
+                                    self.total_cache_read_input_tokens,
+                                    self.total_cache_creation_input_tokens).cost(self._pricing())
 
-    def _accumulate_usage(self, usage: Usage) -> None:
+    def _accumulate_usage(self, usage: Usage, **meta) -> None:
         """Add one call's canonical ``Usage`` into the running token totals (and log
-        it). Touches ONLY the token counters — never ``total_cost_usd`` — so it is
-        safe alongside drivers that take a remote-reported cost (e.g. Claude Code)."""
+        it, with any extra ``meta`` fields). Touches ONLY the token counters — never
+        ``total_cost_usd`` — so it is safe alongside drivers that take a
+        remote-reported cost (e.g. Claude Code)."""
         self.total_input_tokens += usage.input_tokens
         self.total_output_tokens += usage.output_tokens
         self.total_cache_read_input_tokens += usage.cached_tokens
@@ -262,7 +319,8 @@ class LMDriver(Session):
                        input_tokens=usage.input_tokens,
                        output_tokens=usage.output_tokens,
                        cached_tokens=usage.cached_tokens,
-                       cache_creation_tokens=usage.cache_creation_tokens)
+                       cache_creation_tokens=usage.cache_creation_tokens,
+                       **meta)
 
     # --- Worker spawning ---
 

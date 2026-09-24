@@ -533,6 +533,23 @@ class OpenAIChatProvider(OpenAIBase):
 OpenAIProvider = OpenAIChatProvider
 
 
+def _responses_usage(um: Any) -> Usage:
+    """Canonical ``Usage`` from a Responses ``usage`` object. ``input_tokens``
+    INCLUDES the cached and cache-written tokens (``input_tokens_details``), so
+    ``from_inclusive`` recovers the uncached input. ``cache_write_tokens`` is not
+    in the SDK's typed model yet but the backend sends it (probed 2026-09-25 on
+    the codex backend); the SDK keeps unknown fields, so ``getattr`` reaches it."""
+    if not um:
+        return Usage()
+    details = getattr(um, 'input_tokens_details', None)
+    return Usage.from_inclusive(
+        prompt_tokens=um.input_tokens or 0,
+        output_tokens=um.output_tokens or 0,
+        cached=(getattr(details, 'cached_tokens', 0) or 0) if details else 0,
+        cache_creation=(getattr(details, 'cache_write_tokens', 0) or 0) if details else 0,
+    )
+
+
 class OpenAIResponsesProvider(OpenAIBase):
     """Responses protocol (/v1/responses).
 
@@ -809,19 +826,7 @@ class OpenAIResponsesProvider(OpenAIBase):
                     if t:
                         text_parts.append(t)
 
-        um = response.usage
-        cached = 0
-        if um:
-            details = getattr(um, 'input_tokens_details', None)
-            if details:
-                cached = getattr(details, 'cached_tokens', 0) or 0
-
-        # OpenAI input_tokens INCLUDES cached → normalize to uncached input.
-        usage = Usage.from_inclusive(
-            prompt_tokens=(um.input_tokens or 0) if um else 0,
-            output_tokens=(um.output_tokens or 0) if um else 0,
-            cached=cached,
-        )
+        usage = _responses_usage(response.usage)
 
         self._last_output_items = output_items
         self.validate_tool_call_json(tool_calls)
@@ -1011,6 +1016,30 @@ class APIDriver_OpenAI(APIDriver):
                 reasoning_effort=effort,
             )
         super().__init__(*args, provider=provider, **kwargs)
+        # Two-tier billing (docs/COST_ACCOUNTING.md §4): every call goes into
+        # exactly one of these tallies, decided by its prompt size against the
+        # model's long-context threshold. Their sum is the four Session totals.
+        self.short_context_usage = Usage()
+        self.long_context_usage = Usage()
+
+    def _accumulate_usage(self, usage: Usage, **meta) -> None:
+        tier = self._pricing().get("long")
+        long_context = tier is not None and usage.prompt_tokens > tier["threshold"]
+        if long_context:
+            self.long_context_usage += usage
+        else:
+            self.short_context_usage += usage
+        super()._accumulate_usage(usage, long_context=long_context, **meta)
+
+    def _accumulate_subagent_costs(self, sub: 'APIDriver_OpenAI'):
+        super()._accumulate_subagent_costs(sub)
+        self.short_context_usage += sub.short_context_usage
+        self.long_context_usage += sub.long_context_usage
+
+    def _compute_cost(self) -> None:
+        p = self._pricing()
+        self.total_cost_usd = (self.short_context_usage.cost(p)
+                               + self.long_context_usage.cost(p.get("long", p)))
 
     def __str__(self) -> str:
         prov = self._provider

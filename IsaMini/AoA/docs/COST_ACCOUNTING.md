@@ -28,7 +28,7 @@ each is normalized once at ingestion:
 | Provider | Reported prompt count | Cache creation reported? | Normalization |
 |---|---|---|---|
 | Anthropic | already **excludes** cache | yes | pass through (`from_uncached`) |
-| OpenAI | **includes** cached | no (always 0) | subtract cached (`from_inclusive`) |
+| OpenAI | **includes** cached and cache-written | Responses: `input_tokens_details.cache_write_tokens` (read since 2026-09-25; 0 unless the request sets cache breakpoints, which AoA does not); Chat Completions: no | subtract both (`from_inclusive`) |
 | Gemini | **includes** cached | no (always 0) | subtract cached (`from_inclusive`) |
 
 Sources:
@@ -73,6 +73,26 @@ exposes its rate dict via `_pricing()`.
 
 Claude cache pricing uses the **5-minute ephemeral TTL**: `cache_write` =
 1.25× input, `cached` (read) = 0.1× input.
+
+**Long context (OpenAI).** The OpenAI pricing page's Short / Long context
+columns are "≤272K input tokens" / ">272K input tokens" (its column tooltips),
+input tokens being input, cached input or cache write together; every row with
+a long-context price lists 2× input / cached / cache_write and 1.5× output. AoA
+reads this as: a request whose prompt exceeds the threshold is billed at the
+long rates as a whole, output included. Such a model's `PRICING` row carries a
+`long` sub-dict (the same keys plus `threshold`).
+
+Only the OpenAI API driver (`APIDriver_OpenAI`, hence `Codex-API`) bills in two
+tiers, because it is the driver whose `Usage` is exactly one request; the
+Codex CLI and Claude Code drivers report per-turn sums and stay on the flat
+formula above. The driver keeps two disjoint tallies, `short_context_usage`
+and `long_context_usage`, each a `Usage`; `_accumulate_usage` adds every call
+to exactly one of them (a call is long when its `prompt_tokens` exceed the
+model's `long.threshold`; a model without a `long` tier is always short) and
+logs the USAGE record with `long_context: true/false`, meaning "billed at the
+long rates". `_compute_cost` is then `short.cost(rates) + long.cost(long rates)`
+— the same partition sum applied twice, with no subtraction. The four Session
+totals (the exported DB fields) are their sum and are unchanged.
 
 ## 5. DB compatibility — pre-fix warning (2026-06-04)
 
