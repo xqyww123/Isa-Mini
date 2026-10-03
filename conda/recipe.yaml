@@ -283,12 +283,15 @@ requirements:
     # The three sessions ROOT names.  Performant_Isabelle_ML is deliberately NOT listed:
     # this ROOT does not name it, it arrives through auto-sledgehammer and isabelle-rpc,
     # and declaring transitive session deps is how a version bound ends up in two places.
-    - auto-sledgehammer >=0.2.0,<0.3.0        # ROOT:1  Minilang = Auto_Sledgehammer
-    - isabelle-rpc >=0.4.0                    # ROOT:7  Minilang_AoA sessions
-    # ROOT:8  ditto; also a pyproject dependency.  Floor raised 2026-07-26:
-    # 0.6.0's AoA imports snapshot_sync (the layered semantic DB), which first
-    # ships in embedding 0.3.0 -- older embedding is a hard `by aoa` ImportError.
-    - isabelle-semantic-embedding >=0.3.0
+    - auto-sledgehammer >=0.2.0,<0.3.0        # ROOT:2  Minilang = Auto_Sledgehammer
+    # ROOT:9  Minilang_AoA sessions; also a pyproject dependency.  >=0.5.0:
+    # Agent/agent_packer.ML instantiates RPC_Term_Codec, which first ships in 0.5.0.
+    - isabelle-rpc >=0.5.0
+    # ROOT:10  ditto; also a pyproject dependency.  >=0.5.0: Record.from_collection,
+    # which apply_live_name_if_member reads, first ships in embedding 0.5.0 (the
+    # pyproject floor, same reason).  Superseded floor, for the record: >=0.3.0 was
+    # for snapshot_sync (the layered semantic DB), which 0.6.0's AoA imports.
+    - isabelle-semantic-embedding >=0.5.0
     #
     # The pyproject dependencies under their CONDA names.  TWO differ from PyPI, and in
     # both cases the WRONG name resolves, installs green, and dies at `import`:

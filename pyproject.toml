@@ -37,15 +37,18 @@ classifiers = [
 ]
 # Distribution names, not import names: `Isabelle_RPC_Host` is what you import, but
 # `isabelle-rpc` is what pip resolves -- the former 404s on PyPI, so the published
-# 0.3.5 could never be installed. The floor is 0.3.0 because that is the only release
-# under this name, and Isabelle_Semantic_Embedding already requires it.
+# 0.3.5 could never be installed.  The floor is 0.5.0: Isabelle_Semantic_Embedding
+# (required at >=0.5.0 below) demands it.  isabelle-rpc stopped publishing to PyPI
+# after 0.4.0 (0.4.1 and later are conda-only), so pip cannot resolve this floor --
+# deliberate, as in the embedding package's pyproject: an unresolvable floor fails
+# loudly where a lower one would install green and misbehave at runtime.
 #
 # Everything here is reached by a module-level import from `IsaMini` or `IsaMini.AoA`.
 # Nothing that is only reached from a driver, or only from inside a function, belongs
 # in this list -- see optional-dependencies below.
 dependencies = [
     "msgpack>=1.1.2",
-    "isabelle-rpc>=0.4.0",
+    "isabelle-rpc>=0.5.0",
     # >=0.5.0: the first version shipping Record.from_collection, which
     # apply_live_name_if_member reads (DYNAMIC_MEMBER_NAMING_PLAN.md §4)
     "Isabelle_Semantic_Embedding>=0.5.0",
