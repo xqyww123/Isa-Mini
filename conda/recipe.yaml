@@ -287,9 +287,11 @@ requirements:
     # this ROOT does not name it, it arrives through auto-sledgehammer and isabelle-rpc,
     # and declaring transitive session deps is how a version bound ends up in two places.
     - auto-sledgehammer >=0.2.0,<0.3.0        # ROOT:2  Minilang = Auto_Sledgehammer
-    # ROOT:9  Minilang_AoA sessions; also a pyproject dependency.  >=0.5.0:
-    # Agent/agent_packer.ML instantiates RPC_Term_Codec, which first ships in 0.5.0.
-    - isabelle-rpc >=0.5.0
+    # ROOT:9  Minilang_AoA sessions; also a pyproject dependency.  >=0.5.1:
+    # IsaMini/AoA/model.py imports IsaTerm from Isabelle_RPC_Host, which first ships
+    # in 0.5.1 (0.5.0 has the RPC_Term_Codec that Agent/agent_packer.ML instantiates,
+    # but not the class) -- an older isabelle-rpc makes `import IsaMini.AoA` fail.
+    - isabelle-rpc >=0.5.1
     # ROOT:10  ditto; also a pyproject dependency.  >=0.5.0: Record.from_collection,
     # which apply_live_name_if_member reads, first ships in embedding 0.5.0 (the
     # pyproject floor, same reason).  Superseded floor, for the record: >=0.3.0 was
