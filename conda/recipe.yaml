@@ -121,17 +121,20 @@ build:
       shutil.copytree(SRC / "library", dest / "library", ignore=ignore, dirs_exist_ok=True)
 
       # Agent/ is ENUMERATED, not copied wholesale -- the opposite of the choice made for
-      # Isabelle_RPC's Tools/ and Semantic_Embedding's Tools/, and deliberately so.  This
-      # directory holds 60 tracked files of which seven belong to the shipped session, plus
-      # IsaMini_Agent_old/ (33 files), AoA_REPL/ (an Isa_REPL session that must NOT be
-      # exposed), Test/, three Scratch*.thy, *.old.ML, logs/ and secret.sh.  Enumerating
+      # Isabelle_RPC's Tools/ and Semantic_Embedding's Tools/, and deliberately so.  Of
+      # the directory's tracked files only the eight below belong to the shipped session;
+      # the rest is IsaMini_Agent_old/, AoA_REPL/ (an Isa_REPL session that must NOT be
+      # exposed), Test/, *.old.ML, and the untracked logs/ and secret.sh.  Enumerating
       # risks dropping an indirectly-referenced file; copying wholesale risks shipping a
       # secret.  Here the second risk wins, and the ML_file closure was traced by hand:
-      # Minilang_AoA.thy ML_files exactly these six (lines 6,12,19,22,23,24; 20,21,25-27
-      # are commented out), and none of the six ML_files anything further.
+      # Minilang_AoA.thy ML_files exactly these seven (lines 6,12,19,22,23,26,27; 20,21
+      # and 28-30 are commented out), and none of the seven loads anything further.
+      # The first risk is real but loud: 0.7.0's first dry run failed in `verify` on
+      # proof_store_AoA.ML, which the theory had gained and this list had not.
       (dest / "Agent" / "Injector").mkdir(parents=True, exist_ok=True)
       for f in ["Minilang_AoA.thy", "helper.ML", "agent_hint.ML", "agent.ML",
-                "agent_packer.ML", "preprocess.ML", "agent_server.ML"]:
+                "agent_packer.ML", "preprocess.ML", "proof_store_AoA.ML",
+                "agent_server.ML"]:
           shutil.copy2(SRC / "Agent" / f, dest / "Agent" / f)
 
       # Agent/Injector ships WITH its own ROOT but is NOT in the top-level one.  That
