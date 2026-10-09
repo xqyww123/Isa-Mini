@@ -30,7 +30,6 @@ from typing import Any
 
 from io import StringIO
 
-import jsoncomment
 import uvicorn
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -38,6 +37,7 @@ from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
 from .model import (
+    UserNode, OperationMeta,
     bind_session_context, Session, Node, NonLeaf_Node, StdBlock,
     Root, GlobalEnv, GoalNode,
     Resolved_Node, Resolved_Slot,
@@ -87,14 +87,8 @@ from . import config
 # Schema Loading
 # ============================================================================
 
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_json = jsoncomment.JsonComment()
+from .edit_schema import BASE_EDIT_SCHEMA, load_schema as _load_schema
 
-def _load_schema(filename: str) -> dict:
-    with open(os.path.join(_current_dir, "tools", filename), "r", encoding="utf-8") as f:
-        return _json.load(f)
-
-_cc_edit_schema_raw = _load_schema("cc_edit.jsonc")
 _cc_delete_schema = _load_schema("cc_delete.jsonc")
 _cc_read_schema = _load_schema("cc_recall.jsonc")
 _cc_request_lemmas_schema = _load_schema(
@@ -202,14 +196,14 @@ def _flatten_edit_schema(schema: dict) -> dict:
     if po and po.get("type") == "array":
         po["type"] = ["array", "string"]
 
+    _assert_no_refs(flat)
     return flat
 
 
-_cc_edit_schema_flat = _flatten_edit_schema(_cc_edit_schema_raw)
-
-
 def _assert_no_refs(schema: dict) -> None:
-    """Import-time check: flat schema must contain no $ref or $defs."""
+    """A flat schema must contain no $ref or $defs; each flattening checks its
+    output with it (`_flatten_edit_schema` here, `_flatten_edit_schema_deepseek`
+    in driver_openai_api)."""
     def _check(node: Any, path: str = "") -> None:
         if isinstance(node, dict):
             if "$ref" in node:
@@ -222,8 +216,6 @@ def _assert_no_refs(schema: dict) -> None:
             for i, v in enumerate(node):
                 _check(v, f"{path}[{i}]")
     _check(schema)
-
-_assert_no_refs(_cc_edit_schema_flat)
 
 
 def _merge_edit_operations_schema(flat: dict) -> dict:
@@ -264,10 +256,6 @@ def _merge_edit_operations_schema(flat: dict) -> dict:
         "additionalProperties": False,
     }
     return flat
-
-
-_cc_edit_schema_codex = _merge_edit_operations_schema(_cc_edit_schema_flat)
-_assert_no_refs(_cc_edit_schema_codex)
 
 
 # ============================================================================
@@ -2081,7 +2069,9 @@ _MUT = ToolAnnotations(readOnlyHint=False, destructiveHint=True,  openWorldHint=
 _ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "edit":   {"description": "Edit the proof.yaml file", "schema": _cc_edit_schema_raw, "annotations": _MUT},
+    # `edit` carries no schema here: _tool_schemas_for builds the call's own from
+    # the base and the call's user operations (docs/USER_OPERATIONS.md, section 5.3).
+    "edit":   {"description": "Edit the proof.yaml file", "annotations": _MUT},
     "delete": {"description": "Delete proof steps", "schema": _cc_delete_schema, "annotations": _MUT},
     "query":  {"description": "Search for Isabelle entities by semantic similarity, patterns, or exact name/term. "
                 "Use exact_name to look up definitions; "
@@ -2131,6 +2121,20 @@ _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
     k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
 
 
+def _edit_schema_for(operations: 'dict[str, OperationMeta]') -> dict:
+    """The `edit` schema of a call: the base with every user operation's
+    `construct_schema` placed under `$defs/<name>` and a `$ref` to it appended
+    to `$defs/Operation.anyOf`, after the built-ins in the order
+    `tools/cc_edit.jsonc` lists them and in the table's order among themselves,
+    which is name order (docs/USER_OPERATIONS.md, section 5.3)."""
+    schema = copy.deepcopy(BASE_EDIT_SCHEMA)
+    for name, meta in operations.items():
+        if issubclass(meta.cls, UserNode):
+            schema["$defs"][name] = copy.deepcopy(meta.cls.construct_schema)
+            schema["$defs"]["Operation"]["anyOf"].append({"$ref": f"#/$defs/{name}"})
+    return schema
+
+
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     """Tool schemas advertised to ``session``. ``subagent`` / ``cancel_subagent`` are
     DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
@@ -2149,10 +2153,12 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
         base = {k: v for k, v in base.items() if k != TOOL_WRITE_MEMORY}
     if not session.enable_read_memory:
         base = {**base, TOOL_SEARCH: {**base[TOOL_SEARCH], "schema": _cc_query_schema_no_experience}}
-    # Apply the driver's per-tool schema rewrite (default identity). Drivers whose
-    # model/client needs a different schema form override `transform_tool_schema` —
-    # e.g. codex-cli DROPS `$ref`/`$defs` (collapsing `cc_edit.jsonc`'s operation
-    # union to `{}`), so it swaps `edit` for the pre-flattened, `$ref`-free schema.
+    # The call's `edit` schema, from its operation table: the advertised schema
+    # and Parse_Nodes read the same table, so they cannot disagree.
+    base = {**base, TOOL_EDIT: {**base[TOOL_EDIT], "schema": _edit_schema_for(session.operations)}}
+    # Apply the driver's per-tool schema rewrite (default identity), a pure
+    # function of the call's schema: a driver whose model/client needs another
+    # form overrides `transform_tool_schema` (see Codex_Driver.transform_tool_schema).
     # Rebuilt non-destructively so the shared `_TOOL_SCHEMAS` dicts stay intact.
     return {name: {**t, "schema": session.transform_tool_schema(name, t["schema"])}
             for name, t in base.items()}

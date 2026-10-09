@@ -1,0 +1,48 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP ?x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+HaveText on a schematic goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP ?x
+proof:
+  - step id: 1
+    thought: the witness
+    operation: HaveText
+    name: h
+    statement: PP 7
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - pp7: PP (7 :: nat)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  premises:
+    - h: PP (7 :: nat)
+  goal: PP ?x
+--------------------------------------------------
+The schematic goal from the claimed fact
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP ?x
+proof:
+  - step id: 1
+    thought: the witness
+    operation: HaveText
+    name: h
+    statement: PP 7
+    proof:
+      - step id: 1.1
+        operation: Obvious
+        with facts:
+          - pp7: PP (7 :: nat)
+  - step id: 2
+    operation: Obvious
+    with facts:
+      - h: PP (7 :: nat)

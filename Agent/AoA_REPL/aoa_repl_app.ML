@@ -65,7 +65,8 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                                                 then SOME false else NONE,
                                    write_store = NONE,
                                    async_mode = Phi_Sledgehammer_Solver.Sync,
-                                   task = MiniLang_Agent_AoA.Usual} (ctxt, sequent)
+                                   task = MiniLang_Agent_AoA.usual,
+                                   user_operations = []} (ctxt, sequent)
                             (* This join is one of the two sanctioned sync-call-site
                                exceptions (§2.5): the mode is hard-wired Sync here, so
                                `products` is a fulfilled Future.value and the join is

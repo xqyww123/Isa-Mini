@@ -179,7 +179,9 @@ Root(GoalContainer, StdBlock)             sub_nodes[0]=GlobalEnv, [1..]=top-leve
 Node ids look like `"global.1"`, `"2.1"`. Each proof-operation class is registered with
 `@proof_operation(name, ToolArg)` and compiles to a `Minilang_Operation` factory method (`HAVE`,
 `OBTAIN`, `RULE`, `HAMMER`, `INTRO`, `SUFFICES`, `BRANCH`, `CASE_SPLIT`, `INDUCT`,
-`INST_GOAL_VARS`, `END`, `NEXT`, `SORRY_*`, …). `Obvious` compiles to `HAMMER`
+`INST_GOAL_VARS`, `END`, `NEXT`, `SORRY_*`, …); a built-in's class is decorated above
+`BUILTIN_OPERATIONS` in `model.py` and listed in `tools/cc_edit.jsonc`, and the import fails if
+the two disagree. `Obvious` compiles to `HAMMER`
 (Sledgehammer/auto) — it is the planner's "close this routine goal" move, and a failed `Obvious`
 is exactly what triggers worker dispatch. `InstVarsInGoal` (a `Leaf`) compiles to
 `INST_GOAL_VARS` — one round of (name, value) instantiations for schematic variables remaining
@@ -510,4 +512,18 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
 | `driver_api.py` and `driver_{openai,anthropic,gemini,codex}.py` | Provider/driver variants. |
 | `prompts.py`, `retrieval.py`, `../proof_store.py`, `tools/*.jsonc` | Prompts, semantic retrieval, cache, tool schemas. |
 | `test.py`, `Tests/*`, and the runner `../../test_AoA.py` | Test framework + golden YAMLs + `.thy` fixtures. |
+| `edit_schema.py`, `task.py` | The base `edit` schema (`tools/cc_edit.jsonc`), loaded once; the `Task` classes and the task registry (`@aoa_task`). |
+| `Tests/Sample_Plugin.thy`, `Tests/sample_plugin/` | The sample plugin of the test suite: the two halves of four user operations. |
 | `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` | ML side. |
+| `../../Agent/agent_config.ML`, `../../Agent/agent_plugin.ML` | ML side: the agent's `config` type, and the registries of user operations and tasks. |
+
+**User-defined proof operations.** A plugin adds proof operations or tasks to
+AoA without editing it: an Isabelle theory registers them through
+`MiniLang_Agent_Plugin` and names a Python package, which defines each
+operation's node class (a `UserNode` mixin before `Leaf`, `SubgoalMaker` or
+`StdBlock`), its JSON schema and its payload. The design, the wire, the
+checks and the test plan are `docs/USER_OPERATIONS.md`; `Tests/Sample_Plugin.thy`
+with `Tests/sample_plugin/` is the test suite's sample plugin: its `Apply`,
+`HaveText` and `Consider` are the models for a new plugin, while `TwoGoals`
+breaks the one-subgoal rule of a `Leaf` on purpose, for the test that checks
+its refusal.

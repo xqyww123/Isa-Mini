@@ -24,7 +24,8 @@ class TestCase(ABC):
         self.file = file
         self.line = line
     @abstractmethod
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
+    async def run(self, connection: Connection, log_dir: str, global_context: Context,
+                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
         raise NotImplementedError("Subclass must implement run method")
 
 type _TestOpr = Callable[[Root, MyIO], Union[None, Awaitable[None]]]
@@ -33,7 +34,8 @@ class ModelTestCase(TestCase):
     def __init__(self, name : str, file: str, line: int, opr: _TestOpr):
         super().__init__(name, file, line)
         self.opr = opr
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
+    async def run(self, connection: Connection, log_dir: str, global_context: Context, 
+                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
         def save_diff(actual: str, expected_path: str, test_name: str):
             """Write actual output and unified diff next to the golden YAML."""
             tests_dir = os.path.dirname(expected_path)
@@ -51,7 +53,7 @@ class ModelTestCase(TestCase):
             stale = os.path.join(tests_dir, self.name + ext)
             if os.path.exists(stale):
                 os.remove(stale)
-        async with Session(connection.server.logger, log_dir) as session:
+        async with Session(connection.server.logger, log_dir, runtime=runtime) as session:
             root = Root((global_context, ptree), connection)
             await session.initialize(root)
             # Test-harness default: by-hand model tests don't drive an LLM, so
@@ -122,7 +124,8 @@ class TheoryTestCase(TestCase):
     `gen_HAVE'`'s block-CLOSING continuation."""
     def __init__(self, name: str, file: str):
         super().__init__(name, file, -1)
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, ptree: tuple['Goal | None', int]) -> Root:
+    async def run(self, connection: Connection, log_dir: str, global_context: Context,
+                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
         raise AssertionError(
             "TheoryTestCase.run must never be called: run_all_tests evaluates the "
             "theory directly and does not dispatch through the AoA driver.")
@@ -551,7 +554,7 @@ async def _test_memorize_guard(root: Root, file: MyIO):
     session.launch_interaction = stub_launch
 
     # 1) UsualTask -> no-op
-    session.task = UsualTask(); session.role = Role_Major()
+    session.task = UsualTask(""); session.role = Role_Major()
     fired.clear()
     await session.maybe_run_memorize_interaction("proof_done")
     file.write(f"UsualTask_fired={fired}\n")
@@ -3850,6 +3853,171 @@ async def _test_HaveParseError(root: Root, file: MyIO):
 # guard rejects a schematic Have at block OPEN, so no model test can reach
 # `gen_HAVE'`'s block-closing continuation; this theory drives raw Minilang.
 theory_test("HaveSchematicVars_Minilang", "Have_Schematic_Vars_Test.thy")
+
+# The registry of user operations and tasks (docs/USER_OPERATIONS.md): pure ML,
+# below the agent, so a theory test.
+theory_test("UserOperationRegistry_Minilang", "User_Operation_Registry_Test.thy")
+# interpret_i's USER branch, with operations registered inline.
+theory_test("UserOperationInterpret_Minilang", "User_Operation_Interpret_Test.thy")
+# the codec's USER branch: the round trip and its two named errors.
+theory_test("UserOperationCodec_Minilang", "User_Operation_Codec_Test.thy")
+# a stored proof of user operations replays where the plugin is imported, is stale elsewhere.
+theory_test("UserOperationReplay_Minilang", "User_Operation_Replay_Test.thy")
+# the start of a call and its refusals.
+theory_test("UserOperationCall_Minilang", "User_Operation_Call_Test.thy")
+
+
+# --- the sample plugin (Tests/Sample_Plugin.thy, Tests/sample_plugin/): user-defined
+# proof operations end to end (docs/USER_OPERATIONS.md section 9) -------------------
+
+@model_test("UserOp_Apply", "Test_UserOp_Apply.thy", 8)
+async def _test_UserOp_Apply(root: Root, file: MyIO):
+    from .Tests.sample_plugin import Apply
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [Apply.gen_single({
+        "thought": "split the conjunction with a method", "method": "(rule conjI)"})])
+    print_header("Apply (rule conjI): two derived subgoals, the method text echoed by the plugin's own message", file)
+    root.print(0, file)
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    print_header("Both subgoals proven", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("UserOp_WithInduction", "Test_UserOp_WithInduction.thy", 8)
+async def _test_UserOp_WithInduction(root: Root, file: MyIO):
+    from .Tests.sample_plugin import Apply
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [Apply.gen_single({"thought": "split", "method": "(rule conjI)"})])
+    await root.fill("1.1.1", [Induction.gen_single({
+        "thought": "induct on the list",
+        "target_isabelle_term": "l",
+        "variables": [{"name": "l", "status": "fixed"}],
+    })])
+    print_header("An Induction step inside the Apply's first subgoal", file)
+    root.print(0, file)
+    await root.fill("1.1.1.Nil.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.1.1.Cons.1", [Obvious.gen_single({"facts": [{"name": "Cons.IH"}]})])
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    print_header("All proven", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("UserOp_ApplyShared", "Test_UserOp_ApplyShared.thy", 8)
+async def _test_UserOp_ApplyShared(root: Root, file: MyIO):
+    # (rule trans) leaves ?s in both derived subgoals: the ML check refuses the
+    # step with the approved text; the instantiated rule goes through.
+    from .Tests.sample_plugin import Apply
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    result = await root.fill("1", [Apply.gen_single({
+        "thought": "transitivity", "method": "(rule trans)"})])
+    print_header("Apply (rule trans): refused, a schematic variable in two subgoals", file)
+    root.print(0, file)
+    file.write(f"committed: {len(result.committed)}\nfailure: {result.failure}\n")
+    root.session.age += 1
+    await root.fill("1", [Apply.gen_single({
+        "thought": "transitivity, instantiated", "method": "(rule trans[of a b c])"})])
+    print_header("Apply (rule trans[of a b c]): two subgoals without schematic variables", file)
+    root.print(0, file)
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    print_header("Both proven", file)
+    root.print(0, file)
+
+
+@model_test("UserOp_HaveText", "Test_UserOp_HaveText.thy", 8)
+async def _test_UserOp_HaveText(root: Root, file: MyIO):
+    from .Tests.sample_plugin import HaveText
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [HaveText.gen_single({
+        "thought": "claim the goal as a fact", "name": "h", "statement": "x * x \N{GREATER-THAN OR EQUAL TO} 0",
+        "proof": [{"operation": "Obvious", "facts": []}]})])
+    print_header("HaveText: the block opened by the operation and closed by END", file)
+    root.print(0, file)
+    await root.fill("2", [Obvious.gen_single({"facts": [{"name": "h"}]})])
+    print_header("The goal from the claimed fact", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("UserOp_HaveText_Schematic", "Test_UserOp_HaveText_Schematic.thy", 11)
+async def _test_UserOp_HaveText_Schematic(root: Root, file: MyIO):
+    # a StdBlock plugin class keeps Node's gate: a goal with a schematic variable is allowed
+    from .Tests.sample_plugin import HaveText
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [HaveText.gen_single({
+        "thought": "the witness", "name": "h", "statement": "PP 7",
+        "proof": [{"operation": "Obvious", "facts": [{"name": "pp7"}]}]})])
+    print_header("HaveText on a schematic goal", file)
+    root.print(0, file)
+    await root.fill("2", [Obvious.gen_single({"facts": [{"name": "h"}]})])
+    print_header("The schematic goal from the claimed fact", file)
+    root.print(0, file)
+
+
+@model_test("UserOp_Consider", "Test_UserOp_Consider.thy", 11)
+async def _test_UserOp_Consider(root: Root, file: MyIO):
+    # A SubgoalMaker plugin class is gated as Branch is, on the WHOLE sequent:
+    # ?y sits only in the second conjunct, so InferenceRule's conjI is allowed
+    # (the probe sees ?y in one subgoal only) and leaves it in the sibling goal;
+    # Consider on the first child, whose own goal has no schematic variable, is
+    # refused naming ?y.
+    from .Tests.sample_plugin import Consider
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [InferenceRule.gen_single({"thought": "split", "rule": {"name": "conjI"}})])
+    print_header("conjI: the schematic variable stays in the second subgoal", file)
+    root.print(0, file)
+    [n] = (await root.fill("1.1.1", [Consider.gen_single({
+        "thought": "case analysis", "first": "PP 7", "second": "\N{NOT SIGN} PP 7"})])).committed
+    print_header("Consider on the first subgoal: refused at the gate, naming the sibling's variable", file)
+    root.print(0, file)
+    file.write(f"state landed on target: {n._state_after_beginning()._initialized}\n")
+
+
+@model_test("UserOp_ConsiderCases", "Test_UserOp_ConsiderCases.thy", 8)
+async def _test_UserOp_ConsiderCases(root: Root, file: MyIO):
+    # a SubgoalMaker plugin class that opens a block of several cases: the
+    # exhaustiveness goal and the two cases are its children, proved and closed
+    from .Tests.sample_plugin import Consider
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [Consider.gen_single({
+        "thought": "by the sign of x", "first": "x \N{GREATER-THAN OR EQUAL TO} 0", "second": "x < 0"})])
+    print_header("Consider: the exhaustiveness goal and the two cases", file)
+    root.print(0, file)
+    await root.fill("1.0.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.2.1", [Obvious.gen_single({"facts": []})])
+    print_header("All cases proven", file)
+    root.print(0, file)
+    unfinished = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+
+
+@model_test("UserOp_TwoGoals", "Test_UserOp_TwoGoals.thy", 8)
+async def _test_UserOp_TwoGoals(root: Root, file: MyIO):
+    # a Leaf plugin class whose operation leaves two subgoals: the one-subgoal rule
+    from .Tests.sample_plugin import TwoGoals
+    print_header("Initial YAML", file)
+    root.print(0, file)
+    await root.fill("1", [TwoGoals.gen_single({"thought": "a Leaf that splits"})])
+    print_header("TwoGoals: refused by the one-subgoal rule of a Leaf", file)
+    root.print(0, file)
 
 
 @model_test("HaveSchematicVar", "Test_HaveSchematicVar.thy", 13)

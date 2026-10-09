@@ -17,7 +17,7 @@ import platformdirs
 from .model import *
 from .language_model_driver import LMDriver, _TransientError, _QuotaError, PRICING, pricing_for, _parse_effort_suffix, Usage
 
-from .mcp_http_server import ProofMCPHTTPServer, _cc_edit_schema_codex
+from .mcp_http_server import ProofMCPHTTPServer, _flatten_edit_schema, _merge_edit_operations_schema
 
 
 # PreToolUse guard hook source (ALLOWLIST). With the OS sandbox disabled
@@ -159,7 +159,8 @@ class Codex_Driver(LMDriver):
         # the union-MERGED variant: one object with `operation` as an enum and all
         # op field names merged, which survives the sanitizer intact. `edit` is the
         # only proof tool with such a union.
-        return _cc_edit_schema_codex if name == TOOL_EDIT else schema
+        return (_merge_edit_operations_schema(_flatten_edit_schema(schema))
+                if name == TOOL_EDIT else schema)
 
     @classmethod
     def _make_fork(cls, parent: 'LMDriver', role=None) -> 'Codex_Driver':

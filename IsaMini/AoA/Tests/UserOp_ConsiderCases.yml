@@ -1,0 +1,73 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Consider: the exhaustiveness goal and the two cases
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: by the sign of x
+    operation: Consider
+    first: x ≥ 0
+    second: x < 0
+    cases:
+      - goal id: 1.0
+        goal: (0 :: int) ≤ x ∨ x < (0 :: int)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.0.1` to provide the proof.
+      - goal id: 1.1
+        premises:
+          - first: (0 :: int) ≤ x
+        goal: (0 :: int) ≤ x * x
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        premises:
+          - second: x < (0 :: int)
+        goal: (0 :: int) ≤ x * x
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+--------------------------------------------------
+All cases proven
+--------------------------------------------------
+variables:
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x
+proof:
+  - step id: 1
+    thought: by the sign of x
+    operation: Consider
+    first: x ≥ 0
+    second: x < 0
+    cases:
+      - goal id: 1.0
+        goal: (0 :: int) ≤ x ∨ x < (0 :: int)
+        proof:
+          - step id: 1.0.1
+            operation: Obvious
+      - goal id: 1.1
+        premises:
+          - first: (0 :: int) ≤ x
+        goal: (0 :: int) ≤ x * x
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        premises:
+          - second: x < (0 :: int)
+        goal: (0 :: int) ≤ x * x
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+Unfinished nodes: 0

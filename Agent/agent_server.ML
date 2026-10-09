@@ -47,10 +47,11 @@ val banner_of : string -> string
    `auto_interpret_for_embedding` put stays with the caller. *)
 val configure_for_minilang : Proof.context -> Proof.context
 
-(* The Task: what the agent is asked to do.  Sent to Python as a 2-array
-   (kind, payload) — empty payload for Usual, the original Isar proof for
-   Learning. *)
-datatype task = Usual | Learning of string
+(* The task of a call: a registered name and its payload in wire form
+   (docs/USER_OPERATIONS.md, section 5.1).  The two built-in tasks; a plugin's
+   task is built by its caller the same way. *)
+val usual : MiniLang_Agent_Plugin.task
+val learning : string (*the original Isar proof*) -> MiniLang_Agent_Plugin.task
 
 (* The AoA gate (D8/D16): AoA may start only under an interactive frontend, or
    with AOA_ALLOW_NONINTERACTIVE=yes.  Checked in raw_AoA's entry (first cell),
@@ -64,16 +65,20 @@ val aoa_allowed : unit -> bool
 val standard_tac_segment : Proof.context -> thm -> thm
 val merge_segment : Proof.context -> thm -> thm
 
-(* raw_AoA — the pure recording entry (§2.3): gate, three preprocessing
+(* raw_AoA — the pure recording entry (§2.3): gate, the selection and the task
+   resolved (an unregistered name is an error of the call) and their Python
+   packages loaded (docs/USER_OPERATIONS.md section 5.2), three preprocessing
    segments, agent RPC.  NO store or cache logic inside.  Synchronous; the
    by-products are (xcmds, cost, replay time, proof text): the third component
    is what a REPLAY of this proof will spend (entry preprocessing + the final
    op stream's summed ML times, undivided by Timeout.scale); the fourth is the
-   assembled `aoa_replay "<b64>"` — the blob format is known only to this
-   assembler and the aoa_replay decoder.  Futures exist one layer up: run_AoA
-   obtains them from async_prove. *)
+   assembled `aoa_replay "<b64>"`, in the blob format known only to the blob
+   codec (encode_blob and decode_blob, D41).  Futures exist one layer up:
+   run_AoA obtains them from async_prove. *)
 val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
-               budget: MiniLang_Agent.budget, invocation_id: string, task: task}
+               budget: MiniLang_Agent.budget, invocation_id: string,
+               task: MiniLang_Agent_Plugin.task,
+               user_operations: MiniLang_Agent_Plugin.user_operation_selection}
            -> Proof.context * thm
            -> (MiniLang_Agent.xcmd list * agent_cost * Phi_Proof_Store.times * string) * thm
 
@@ -87,7 +92,9 @@ val raw_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
 val run_AoA : {driver: driver, minilang_cfg: MiniLang_Agent.cfg,
                budget: MiniLang_Agent.budget, invocation_id: string,
                read_store: bool option, write_store: bool option,
-               async_mode: Phi_Sledgehammer_Solver.async_mode, task: task}
+               async_mode: Phi_Sledgehammer_Solver.async_mode,
+               task: MiniLang_Agent_Plugin.task,
+               user_operations: MiniLang_Agent_Plugin.user_operation_selection}
            -> Proof.context * thm
            -> (MiniLang_Agent.xcmd list * agent_cost * Phi_Proof_Store.times * string) future * thm
 
@@ -111,18 +118,41 @@ val hammer_or_AoA :
       read_store: bool option,   (*governs level 0's ALL THREE levels (L2 by id,
                                    L2 by goal hash, L1 by id); NONE follows
                                    AoA_read_proof_store*)
-      write_store: bool option}  (*governs EVERY write: level 0's by-hash
+      write_store: bool option,  (*governs EVERY write: level 0's by-hash
                                    promotion and L1 upgrade, and the fork-end
                                    L2 + L1 writes; NONE follows
                                    AoA_write_proof_store.  NOT forwarded to the
                                    inner branches — they are constant SOME false*)
+      task: MiniLang_Agent_Plugin.task,  (*what the agent is asked to do; usual for a proof*)
+      user_operations: MiniLang_Agent_Plugin.user_operation_selection}
+                                 (*(name, include?) pairs that add to or remove from
+                                   the default user operations; see
+                                   MiniLang_Agent_Plugin.active_operations*)
   -> Proof.context -> thm
   -> string future (*proof text; phi's oblg layer discards it*) * thm
+
+(* hammer_or_AoA with the replay times beside the text, in the store's
+   standard-machine form — a level-0 hit's record as stored, a miss's result as
+   the write-back converts it — for a caller that keeps the proof (TAT's proof
+   construction).  hammer_or_AoA is this with the times dropped. *)
+val hammer_or_AoA' :
+     {fact_override: Sledgehammer.fact_override, proof_id: Phi_Proof_Store.proof_id option,
+      hammer_timeout: Time.time option, async_mode: Phi_Sledgehammer_Solver.async_mode,
+      read_store: bool option, write_store: bool option,
+      task: MiniLang_Agent_Plugin.task, user_operations: MiniLang_Agent_Plugin.user_operation_selection}
+  -> Proof.context -> thm
+  -> (Phi_Proof_Store.times * string) future * thm
 
 (* Body of `by hammer_or_aoa` (registered in Minilang_AoA.thy): hammer_or_AoA
    with async_mode = Sync, stores per config.  Renders every give-up reason
    through banner_of; agent_cost goes to plain tracing (§6.2). *)
 val hammer_or_aoa_method : thm list -> context_state -> context_state Seq.result Seq.seq
+
+(* The blob of a stored proof -- base64 of msgpack (split script, op stream) --
+   has exactly this encoder and this decoder (D41); the theory is the codec's,
+   for the user operations' arguments. *)
+val encode_blob : theory -> string * MiniLang_Agent.xcmd list -> string
+val decode_blob : theory -> string -> string * MiniLang_Agent.xcmd list
 
 (* Body of the `aoa_replay` method (registered in Minilang_AoA.thy, D39): pure
    ML replay of an assembled blob — no RPC, no Python.  Fails as a method
@@ -331,13 +361,16 @@ fun minilang_flat_goal_packer ctxt =
         packInt 0
   end
 
-fun minilang_message_packer ctxt =
+fun minilang_message_packer ctxt (running_op : MiniLang_Agent_Plugin.registration option) =
   let val minilang_items_packer = minilang_items_packer ctxt
-      val string_of_term = MiniLang_Agent.string_of_term ctxt
       val string_of_type = MiniLang_Agent.string_of_type ctxt
-      fun pack (Minilang.New_Items items) =
-            packPair (packInt, minilang_items_packer) (0, items)
-        | pack (Minilang.Goals goals) =
+      (* The tagged form of each message Python reads; NONE drops a message, as
+         IH_MAP and REPLACE_CMD are dropped.  A plugin's own message is its own
+         exception, claimed by the running operation's pack_message as tag 21
+         (docs/USER_OPERATIONS.md, section 3). *)
+      fun pack_opt (Minilang.New_Items items) =
+            SOME (packPair (packInt, minilang_items_packer) (0, items))
+        | pack_opt (Minilang.Goals goals) =
             (* Python side only reads the count (for SubgoalMaker's
                `new_subgoals_count`), not the term texts.  Packing just
                the length avoids calling `string_of_term` on every goal
@@ -345,86 +378,70 @@ fun minilang_message_packer ctxt =
                full `term list` is still kept on the ML side — the
                translator still consumes it via `item_reporter` for its
                `(*goal: …*)` diagnostic annotations. *)
-            packPair (packInt, packInt) (1, length goals)
-        | pack (Minilang.Consider_Case (kase, items)) =
-            packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items))
-        | pack (Minilang.Newly_Fixed vars) =
-            packPair (packInt, packList (packPair (packString, packString)))
-                     (6, map (apsnd string_of_type) vars)
-        | pack (Minilang.Internal exn) =
+            SOME (packPair (packInt, packInt) (1, length goals))
+        | pack_opt (Minilang.Consider_Case (kase, items)) =
+            SOME (packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items)))
+        | pack_opt (Minilang.Newly_Fixed vars) =
+            SOME (packPair (packInt, packList (packPair (packString, packString)))
+                           (6, map (apsnd string_of_type) vars))
+        | pack_opt (Minilang.Internal exn) =
             (case exn of
                MiniLang_Agent.INTRO_BINDINGS {missing, auto_introduced, final} =>
-                 packPair (packInt, packTuple3 (
+                 SOME (packPair (packInt, packTuple3 (
                    MiniLang_Agent.pack_bindings,
                    MiniLang_Agent.pack_bindings,
                    MiniLang_Agent.pack_bindings
-                 )) (3, (missing, auto_introduced, final))
+                 )) (3, (missing, auto_introduced, final)))
              | MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS =>
-                 packInt 4
+                 SOME (packInt 4)
              | MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC =>
-                 packInt 9
+                 SOME (packInt 9)
              | MiniLang_Agent.INTRO_STANDARDIZED =>
-                 packInt 16
+                 SOME (packInt 16)
              | MiniLang_Agent.SIMPLIFY_TARGETS_STALE names =>
-                 packPair (packInt, packList packString) (11, names)
+                 SOME (packPair (packInt, packList packString) (11, names))
              (* (fact_name, pretty_printed_proposition) list *)
              | MiniLang_Agent.SPECIALIZE_RESULT result_facts =>
-                 packPair (packInt, packList (packPair (packString, packString)))
-                          (5, result_facts)
-             | Minilang.PAT_COMPLETENESS_PROOF_OPENED => packInt 7
-             | Minilang.TERMINATION_PROOF_OPENED => packInt 8
+                 SOME (packPair (packInt, packList (packPair (packString, packString)))
+                          (5, result_facts))
+             | Minilang.PAT_COMPLETENESS_PROOF_OPENED => SOME (packInt 7)
+             | Minilang.TERMINATION_PROOF_OPENED => SOME (packInt 8)
              | MiniLang_Agent.DEFINE_RESULT (name, ty) =>
-                 packPair (packInt, packPair (packString, packString))
-                          (10, (name, ty))
+                 SOME (packPair (packInt, packPair (packString, packString))
+                          (10, (name, ty)))
              | Minilang.DROPPED_INSERTION_FACTS names =>
-                 packPair (packInt, packList packString) (12, names)
+                 SOME (packPair (packInt, packList packString) (12, names))
              (* How many facts an interpretation brought in, when there were too
                 many to inject into the local items.  They are all registered and
                 reachable by name / `query`; this only tells the agent the count. *)
              | Minilang.INTERPRET_FACTS_COUNT n =>
-                 packPair (packInt, packInt) (19, n)
-             | MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => packInt 13
+                 SOME (packPair (packInt, packInt) (19, n))
+             | MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => SOME (packInt 13)
              | MiniLang_Agent.COMPUTE_RESULT (name, result) =>
-                 packPair (packInt, packPair (packString, packString))
-                          (14, (name, result))
+                 SOME (packPair (packInt, packPair (packString, packString))
+                          (14, (name, result)))
              (* (rendered proof text, (cpu_ms, wall_ms)): the ms pair nested in
                 one slot, as at every wire carrying a Phi_Proof_Store.times. *)
              | Minilang.SH_PRF (prf, times) =>
-                 packPair (packInt, packPair (packString, packPair (packInt, packInt)))
-                          (15, (prf, Phi_Proof_Store.ms_of_times times))
+                 SOME (packPair (packInt, packPair (packString, packPair (packInt, packInt)))
+                          (15, (prf, Phi_Proof_Store.ms_of_times times)))
              (* (assigned fact name, rendered proof text, (cpu_ms, wall_ms)) of a
                 FactInTime just proven live — Python pastes it back into the
                 op's fact field (stage 3a, D37; tag 20 author-approved
                 2026-08-10). *)
              | MiniLang_Agent.FACT_PRF (name, prf, times) =>
-                 packPair (packInt, packTuple3 (packString, packString, packPair (packInt, packInt)))
-                          (20, (name, prf, Phi_Proof_Store.ms_of_times times))
+                 SOME (packPair (packInt, packTuple3 (packString, packString, packPair (packInt, packInt)))
+                          (20, (name, prf, Phi_Proof_Store.ms_of_times times)))
              | Agent_Hint.HINT_NOTICE {name, text} =>
-                 packPair (packInt, packPair (packString, packString))
-                          (17, (name, text))
+                 SOME (packPair (packInt, packPair (packString, packString))
+                          (17, (name, text)))
              | Minilang.DISCARDED_VARS pairs =>
-                 packPair (packInt, packList (packPair (packString, packString)))
-                          (18, pairs)
-             | _ => error "BUG #adli: unexpected Internal message")
-   in packList pack o filter (fn Minilang.Internal (MiniLang_Agent.INTRO_BINDINGS _) => true
-                                 | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_NOSYS => true
-                                 | Minilang.Internal MiniLang_Agent.SIMPLIFY_FALLBACK_ONCE_SIMPROC => true
-                                 | Minilang.Internal MiniLang_Agent.INTRO_STANDARDIZED => true
-                                 | Minilang.Internal (MiniLang_Agent.SIMPLIFY_TARGETS_STALE _) => true
-                                 | Minilang.Internal (MiniLang_Agent.SPECIALIZE_RESULT _) => true
-                                 | Minilang.Internal Minilang.PAT_COMPLETENESS_PROOF_OPENED => true
-                                 | Minilang.Internal Minilang.TERMINATION_PROOF_OPENED => true
-                                 | Minilang.Internal (MiniLang_Agent.DEFINE_RESULT _) => true
-                                 | Minilang.Internal (Minilang.DROPPED_INSERTION_FACTS _) => true
-                                 | Minilang.Internal (Minilang.INTERPRET_FACTS_COUNT _) => true
-                                 | Minilang.Internal MiniLang_Agent.SETUP_REWRITING_MAY_LOOP => true
-                                 | Minilang.Internal (MiniLang_Agent.COMPUTE_RESULT _) => true
-                                 | Minilang.Internal (Minilang.SH_PRF _) => true
-                                 | Minilang.Internal (MiniLang_Agent.FACT_PRF _) => true
-                                 | Minilang.Internal (Agent_Hint.HINT_NOTICE _) => true
-                                 | Minilang.Internal (Minilang.DISCARDED_VARS _) => true
-                                 | Minilang.Internal _ => false
-                                 | _ => true)
+                 SOME (packPair (packInt, packList (packPair (packString, packString)))
+                          (18, pairs))
+             | _ =>
+                 Option.mapPartial (fn reg => #pack_message (#operation reg) exn) running_op
+                 |> Option.map (fn p => packPair (packInt, I) (21, p)))
+   in packList I o map_filter pack_opt
   end
 
 local open Facts Minilang_Helper in
@@ -552,14 +569,12 @@ fun configure_for_minilang ctxt = ctxt
 
 (*** Task ***)
 
-datatype task = Usual | Learning of string
-
-(* Wire format: the task rides the agent-start arg schema as a 2-array
-   (task_kind, payload) — empty payload for Usual, the original Isar proof for
-   Learning. *)
-fun pack_task Usual = ("usual", MessagePackBinIO.Pack.packString "")
-  | pack_task (Learning isar_proof) =
-      ("learning", MessagePackBinIO.Pack.packString isar_proof)
+(* The two built-in tasks, registered in agent_plugin.ML as a plugin's are.
+   The payload is already in wire form; the call sends (name, payload). *)
+val usual : MiniLang_Agent_Plugin.task =
+  {name = "usual", payload = MessagePackBinIO.Pack.packString ""}
+fun learning isar_proof : MiniLang_Agent_Plugin.task =
+  {name = "learning", payload = MessagePackBinIO.Pack.packString isar_proof}
 
 
 (*** The AoA gate (D8/D16) ***)
@@ -886,14 +901,26 @@ fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> strin
 
 end (*local*)
 
-(* raw_AoA — the pure recording entry (§2.3): the gate, the three preprocessing
-   segments, then the agent RPC.  NO store or cache logic anywhere in here.
-   Synchronous: returns the four by-products (xcmds, cost, replay time, proof
-   text) beside the theorem.  run_AoA feeds it to async_prove, which is where
-   futures come into existence. *)
+(*** The blob codec (D41): the one encoder, used by raw_AoA, and the one decoder,
+     used by aoa_replay_method.  base64 of msgpack (split script, op stream). ***)
 
+fun encode_blob thy (split_script, xcmds) =
+  MiniLang_Agent.bytes_of_output
+    (MessagePackBinIO.Pack.packPair
+       (MessagePackBinIO.Pack.packString, MessagePackBinIO.Pack.packList (MiniLang_Agent.xcmd_packer thy))
+       (split_script, xcmds))
+  |> Byte.bytesToString |> Bytes.string |> Base64.encode |> Bytes.content
 
-fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0) =
+fun decode_blob thy b64 =
+  b64 |> Bytes.string |> Base64.decode |> Bytes.content
+      |> Byte.stringToBytes |> MiniLang_Agent.instream_of_bytes
+      |> MessagePackBinIO.Unpack.unpackPair
+           (MessagePackBinIO.Unpack.unpackString,
+            MessagePackBinIO.Unpack.unpackList (MiniLang_Agent.xcmd_unpacker thy))
+      |> #1
+
+(* raw_AoA: what it does and returns is in the signature comment above its declaration. *)
+fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations} (ctxt0, sequent0) =
   let open MessagePackBinIO.Pack MessagePackBinIO.Unpack Remote_Procedure_Calling
       (* THE GATE — first cell of the body (12.18).  Test drivers pass: no LM
          behind them (author ruling 2026-08-10). *)
@@ -902,9 +929,16 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
       (* Captured at receipt, restored (tolerantly) at hand-back — see
          restore_concl above for why the restore may legitimately not apply. *)
       val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent0)
-      val _ = Remote_Procedure_Calling.load ["IsaMini.AoA"]
+      val thy = Proof_Context.theory_of ctxt0
       val cfg : cfg = (minilang_cfg, budget)
-      val (task_kind, task_payload_packer) = pack_task task
+      (* The call's user operations and its task (docs/USER_OPERATIONS.md,
+         section 5.2): their registrations first, so that an unknown name is
+         refused before anything runs; their Python packages are loaded after
+         IsaMini.AoA, so the imports and the checks they make happen now. *)
+      val active_operations = MiniLang_Agent_Plugin.active_operations thy user_operations
+      val task_packages = #python_packages (MiniLang_Agent_Plugin.the_task thy (#name task))
+      val _ = Remote_Procedure_Calling.load
+                ("IsaMini.AoA" :: distinct (op =) (maps #python_packages active_operations @ task_packages))
 
       (* The three preprocessing segments, timed as one block: prep_time is
          the entry's share of the recorded replay cost (D61 — what a replay
@@ -921,6 +955,13 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
         prem_counter = Synchronized.var "prem_counter" 0
       } : MiniLang_Agent.counters
       val replay_mode = Unsynchronized.ref false
+      (* The config of the moment it is read -- live or replay, as Python has
+         set the mode: one function for every callback and for the plugins. *)
+      fun current_config () : MiniLang_Agent.config =
+        let val (cfg', budget) = cfg
+         in (cfg', budget, counters,
+             if !replay_mode then MiniLang_Agent.REPLAY else MiniLang_Agent.LIVE)
+        end
       val messages = Unsynchronized.ref []
       fun listen_report msg = messages := msg :: !messages
       fun clean_report () =
@@ -957,29 +998,34 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
       val proof_opr_callback = {
         name = "IsaMini.proof_opr",
         on_interrupt = Remote_Procedure_Calling.Reraise,
-        arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker),
+        arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker thy),
         (* Third component: this op's ML-side times as (cpu_ms, wall_ms), raw as
            Phi_Proof_Store.timing measures them (D61).  The assembly verification
            replay sums them over the final op stream into assembled_isabelle_time;
            the write layer standardises the sum once. *)
-        ret_schema = (fn (ctxt, msgs, flat_goal, times_ms) =>
-          packTuple3 (minilang_message_packer ctxt, minilang_flat_goal_packer ctxt,
+        ret_schema = (fn (ctxt, running_op, msgs, flat_goal, times_ms) =>
+          packTuple3 (minilang_message_packer ctxt running_op, minilang_flat_goal_packer ctxt,
                       packPair (packInt, packInt))
                      (msgs, flat_goal, times_ms)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
               val s0 = get_state from
               val result = Exn.capture (fn () =>
-                let val (cfg', budget) = cfg
-                    val mode = if !replay_mode then MiniLang_Agent.REPLAY
-                               else MiniLang_Agent.LIVE
-                    val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
-                    val (time, s1) =
-                      Phi_Proof_Store.timing (fn () => MiniLang_Agent.interpret full_config opr s0) ()
+                let val (time, s1) =
+                      Phi_Proof_Store.timing
+                        (fn () => MiniLang_Agent.interpret (current_config ()) opr s0) ()
                     val ctxt' = Minilang.context_of s1
                     val msgs = clean_report ()
                     val _ = state := Symtab.update (to, s1) (!state)
-                 in (ctxt', msgs, Minilang.leading_goal_data s1,
+                    (* the operation interpret_i ran, by the same lookup: its
+                       pack_message may claim a message of this step *)
+                    val running_op =
+                      (case opr of
+                         MiniLang_Agent.USER (name, _) =>
+                           SOME (MiniLang_Agent_Plugin.the_operation
+                                   (Proof_Context.theory_of (Minilang.context_of s0)) name)
+                       | _ => NONE)
+                 in (ctxt', running_op, msgs, Minilang.leading_goal_data s1,
                      Phi_Proof_Store.ms_of_times time) end) ()
               (* Drain reporter messages on EVERY path: the success branch already
                  drained via clean_report, but a NOTICE pushed before a failure
@@ -1283,7 +1329,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
         name = "IsaMini.schematic_vars_of_derived_subgoals",
         on_interrupt = Remote_Procedure_Calling.Reraise,
         (* (state_id, opr): opr in the same (cmd, arg) shape as proof_opr's. *)
-        arg_schema = unpackPair (unpackString, MiniLang_Agent.xcmd_unpacker),
+        arg_schema = unpackPair (unpackString, MiniLang_Agent.xcmd_unpacker thy),
         (* per derived subgoal: (term-vars, type-vars), each a list of
            (display-name, type-or-sort) — same convention as
            IsaMini.schematic_variables_of. *)
@@ -1292,12 +1338,8 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
            packList (packPair (packString, packString)))),
         function = (fn (state_id, opr) =>
           let val s0 = get_state state_id
-              val (cfg', budget) = cfg
-              val mode = if !replay_mode then MiniLang_Agent.REPLAY
-                         else MiniLang_Agent.LIVE
-              val full_config = (cfg', budget, counters, mode) : MiniLang_Agent.config
               val (s1, prerun_msgs) =
-                Minilang.record_reporter (MiniLang_Agent.interpret full_config opr) s0
+                Minilang.record_reporter (MiniLang_Agent.interpret (current_config ()) opr) s0
               val subgoals = Minilang.derived_subgoals_of s0 s1 prerun_msgs
               val ctxt = Minilang.context_of s1
               val string_of_type = MiniLang_Agent.string_of_type ctxt
@@ -1782,42 +1824,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
            introduction_rules, elimination_rules,
            induction_rules, case_split_rules} =
         Semantic_Store.make_entity_callbacks (Context.Proof ctxt) au
-      val aoa_cmd = {
-        name = "IsaMini.AoA",
-        arg_schema = (fn (global_context, driver, invocation_id) =>
-            let val log_dir = Config.get ctxt AoA_log_dir
-                val retrieval_forking = Config.get ctxt AoA_retrieval_forking
-                val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
-                val (_, budget) = cfg
-                val enable_write_memory = Config.get ctxt AoA_enable_write_memory
-                val enable_read_memory = Config.get ctxt AoA_enable_read_memory
-            in packTuple11 (context_packer ctxt, minilang_flat_goal_packer ctxt,
-                           packString, packString, packString, packString, packString,
-                           packTuple3 (packInt, packInt, packInt),
-                           packPair (packString, fn () => task_payload_packer),
-                           packBool, packBool)
-                          (global_context, s0_flat_goal, driver, log_dir, invocation_id,
-                           retrieval_forking, interactive_retrieval,
-                           (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           (task_kind, ()), enable_write_memory, enable_read_memory)
-            end),
-        (* Stats tuple: the 10th element is assembled_isabelle_time as
-           (cpu_ms, wall_ms) (D61) — the per-op ML execution times summed over
-           the assembly verification replay of the final op stream.  It is NOT
-           part of agent_cost; raw_AoA folds it into the replay-time by-product
-           right below.  No blob comes back over this wire: raw_AoA assembles
-           the blob itself from the returned op stream (D41 — the blob never
-           leaves the raw_AoA/aoa_replay codec pair). *)
-        ret_schema = unpackTuple5 (unpackList MiniLang_Agent.xcmd_unpacker,
-                                   unpackOption unpackString,
-                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt,ait), src') =
-                                      unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,
-                                                     unpackPair (unpackInt, unpackInt)) src
-                                    in (({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, ait), src') end),
-                                   unpackOption unpackString,
-                                   unpackOption unpackString),
-        timeout = NONE,
-        callback = [
+      val framework_callbacks = [
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
           mk_callback set_replay_mode_callback,
@@ -1855,6 +1862,58 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
           Context_Callbacks.make_loaded_theory_hashes_callback au,
           Semantic_Store.make_interpret_theory_callback au
         ]
+
+      (* The active operations' callbacks (docs/USER_OPERATIONS.md, section 5.2),
+         after AoA's own: a name AoA, a global callback or another user
+         operation holds is refused. *)
+      val env : MiniLang_Agent_Plugin.env =
+        {state_of = fn id => Symtab.lookup (!state) id, config = current_config}
+      val user_callbacks = maps (fn reg => #callbacks (#operation reg) env) active_operations
+      val _ = fold (fn (cb : callback') => fn taken =>
+                if member (op =) taken (#name cb)
+                   orelse is_some (Remote_Procedure_Calling.get_global_callback (#name cb))
+                then error ("Callback " ^ quote (#name cb) ^ " of a user operation: the name is already taken")
+                else #name cb :: taken)
+              user_callbacks (map #name framework_callbacks)
+
+      val aoa_cmd = {
+        name = "IsaMini.AoA",
+        arg_schema = (fn (global_context, driver, invocation_id) =>
+            let val log_dir = Config.get ctxt AoA_log_dir
+                val retrieval_forking = Config.get ctxt AoA_retrieval_forking
+                val interactive_retrieval = Config.get ctxt AoA_interactive_retrieval
+                val (_, budget) = cfg
+                val enable_write_memory = Config.get ctxt AoA_enable_write_memory
+                val enable_read_memory = Config.get ctxt AoA_enable_read_memory
+            in packTuple12 (context_packer ctxt, minilang_flat_goal_packer ctxt,
+                           packString, packString, packString, packString, packString,
+                           packTuple3 (packInt, packInt, packInt),
+                           packPair (packString, I),
+                           packBool, packBool,
+                           packList packString)
+                          (global_context, s0_flat_goal, driver, log_dir, invocation_id,
+                           retrieval_forking, interactive_retrieval,
+                           (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
+                           (#name task, #payload task), enable_write_memory, enable_read_memory,
+                           map (#name o #operation) active_operations)
+            end),
+        (* Stats tuple: the 10th element is assembled_isabelle_time as
+           (cpu_ms, wall_ms) (D61) — the per-op ML execution times summed over
+           the assembly verification replay of the final op stream.  It is NOT
+           part of agent_cost; raw_AoA folds it into the replay-time by-product
+           right below.  No blob comes back over this wire: raw_AoA assembles
+           the blob itself from the returned op stream (D41 — the blob never
+           leaves ML: the blob codec, encode_blob and decode_blob). *)
+        ret_schema = unpackTuple5 (unpackList (MiniLang_Agent.xcmd_unpacker thy),
+                                   unpackOption unpackString,
+                                   (fn src => let val ((i,cw,cr,o_,c,tc,it,mt,qwt,ait), src') =
+                                      unpackTuple10 (unpackInt,unpackInt,unpackInt,unpackInt,unpackReal,unpackInt,unpackReal,unpackReal,unpackReal,
+                                                     unpackPair (unpackInt, unpackInt)) src
+                                    in (({input=i,cache_write=cw,cache_read=cr,output=o_,cost=c,tool_calls=tc,isabelle_time=it,model_time=mt,quota_wait_time=qwt}, ait), src') end),
+                                   unpackOption unpackString,
+                                   unpackOption unpackString),
+        timeout = NONE,
+        callback = framework_callbacks @ user_callbacks
       }
 
       val timer = Timer.startRealTimer ()
@@ -1882,20 +1941,11 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
                          | _ => false) xcmds
            then error "Internal Error: the returned proofs contains axiomatic sorry."
            else ()
-           ; let (* D41: raw_AoA itself assembles the blob — the split script
-                    never left this function, and Python already handed the
-                    final op stream back in the return value.  The blob is the
-                    internal secret of exactly this assembler and the
-                    aoa_replay decoder. *)
-                 val prf_text =
-                   let val buf = BytesIO.mkOutstream ()
-                       val () = MessagePackBytesIO.Pack.packPair
-                                  (MessagePackBytesIO.Pack.packString,
-                                   MessagePackBytesIO.Pack.packList MiniLang_Agent.xcmd_packer_bytes)
-                                  (split_script, xcmds) buf
-                       val b64 = BytesIO.toString buf |> Bytes.string
-                                 |> Base64.encode |> Bytes.content
-                    in "aoa_replay " ^ quote b64 end
+           ; let (* D41: raw_AoA itself assembles the blob with the blob codec —
+                    the split script never left this function, and Python
+                    already handed the final op stream back in the return
+                    value. *)
+                 val prf_text = "aoa_replay " ^ quote (encode_blob thy (split_script, xcmds))
                  (* D61: what a REPLAY of this proof will cost — entry
                     preprocessing plus the final op stream's summed ML time
                     (measured over the assembly verification replay).  LLM
@@ -1924,7 +1974,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task} (ctxt0, sequent0
      entry). ***)
 
 fun run_AoA {driver, minilang_cfg, budget, invocation_id,
-             read_store, write_store, async_mode, task} (ctxt, sequent) =
+             read_store, write_store, async_mode, task, user_operations} (ctxt, sequent) =
   let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (D59): the all-goals key of the ORIGINAL,
@@ -1939,7 +1989,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
           (* Level-0 hit: the agent never ran — [] and zero_cost are statements
              of fact, not placeholders (§2.3).  The recorded standard-machine
              times are scaled back to this machine's clock; the stored text goes
-             out verbatim (the blob never leaves the aoa_replay codec pair). *)
+             out verbatim (the blob never leaves ML: the blob codec, encode_blob
+             and decode_blob). *)
           (Future.value ([], zero_cost, Phi_Proof_Store.machine_time std_time, prf_text),
            sequent')
       | NONE =>
@@ -1947,7 +1998,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
                 Phi_Sledgehammer_Solver.async_prove async_mode
                   Phi_Sledgehammer_Solver.All_At_Once
                   (raw_AoA {driver = driver, minilang_cfg = minilang_cfg, budget = budget,
-                            invocation_id = invocation_id, task = task})
+                            invocation_id = invocation_id, task = task,
+                            user_operations = user_operations})
                   (ctxt, sequent)
            in case futs of
                 [fut] =>
@@ -1986,7 +2038,7 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
   end
 
 
-(*** aoa_replay — the pure-ML decoder half of the blob codec (§2.7).  The
+(*** aoa_replay — the replay of a blob decode_blob reads (§2.7).  The
      method itself is registered in Minilang_AoA.thy (D39); this is its body.
      Failure is METHOD failure (an empty result sequence), so eval_prf_str's
      caller reads it as "cached proof no longer works". ***)
@@ -1994,13 +2046,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
 (* Execute the recorded split script (D41): a method text applied to the whole
    state — replaces the recording-side race, never re-runs it. *)
 fun exec_split_script ctxt script st =
-  let val kws = Keyword.no_major_keywords
-                  (Thy_Header.get_keywords (Proof_Context.theory_of ctxt))
-      val seq =
-        Method.evaluate_runtime
-          (Parse.read_embedded ctxt kws (Method.parser 0) (Input.string script)
-             |> fst |> Method.check_text ctxt)
-          ctxt [] (ctxt, st)
+  let val seq =
+        Method.evaluate_runtime (MiniLang_Agent.read_method_text ctxt script) ctxt [] (ctxt, st)
    in case Position.setmp_thread_data Position.none Seq.pull seq of
         SOME (Seq.Result (_, st'), _) => st'
       | _ => error ("aoa_replay: the recorded split script failed: " ^ script)
@@ -2021,13 +2068,8 @@ fun aoa_replay_method b64 _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
      failed, and the REAL state is never tried — which tombstones a healthy
      store record (the D29 breaker caught by stage 5's first live replay). *)
   if is_dummy sequent then NONE else \<^try>\<open>
-  let (* 0: decode blob = base64(msgpack((script, xcmd list))) (D30/D31) *)
-      val ((script, ops), _) =
-        b64 |> Bytes.string |> Base64.decode |> Bytes.content
-            |> BytesIO.fromString
-            |> MessagePackBytesIO.Unpack.unpackPair
-                 (MessagePackBytesIO.Unpack.unpackString,
-                  MessagePackBytesIO.Unpack.unpackList MiniLang_Agent.xcmd_unpacker_bytes)
+  let (* 0: decode the blob (D30) *)
+      val (script, ops) = decode_blob (Proof_Context.theory_of ctxt) b64
       (* Same verbatim-conclusion contract as raw_AoA (stage 4e): replay and
          live are symmetric consumers of the round trip below. *)
       val orig_concl = Drule.strip_imp_concl (Thm.cprop_of sequent)
@@ -2084,7 +2126,8 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
            val (agent_cfg, budget) = MiniLang_Agent.default_cfg
         in run_AoA {driver = driver, minilang_cfg = agent_cfg, budget = budget,
                     invocation_id = invocation_id, read_store = NONE, write_store = NONE,
-                    async_mode = Phi_Sledgehammer_Solver.Sync, task = Usual} (ctxt, sequent)
+                    async_mode = Phi_Sledgehammer_Solver.Sync, task = usual,
+                    user_operations = []} (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
            handle Agent_Give_Up (reason, detail, _) =>
              error (banner_of reason ^ "\n" ^ detail)
@@ -2098,8 +2141,8 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
      read, so hammer_or_AoA does the (one) write: both inner branches are
      constant read_store = write_store = SOME false and only produce proofs. ***)
 
-fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
-                   read_store, write_store} ctxt sequent =
+fun hammer_or_AoA' {fact_override, proof_id, hammer_timeout, async_mode,
+                    read_store, write_store, task, user_operations} ctxt sequent =
   let val read  = case read_store  of SOME b => b | NONE => Config.get ctxt AoA_read_proof_store
       val write = case write_store of SOME b => b | NONE => Config.get ctxt AoA_write_proof_store
       (* One call, one key (§2.3): a given id verbatim, else the all-goals key
@@ -2114,12 +2157,12 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
             then Proof_Store_AoA.store_hit_replay {key = key, hash = hash, write_store = write}
                                                   (ctxt, sequent)
             else NONE) of
-        SOME (_, prf_text, sequent') =>
-          (* Level-0 hit: the stored text goes out verbatim.  A hit by id wrote
+        SOME (std_time, prf_text, sequent') =>
+          (* Level-0 hit: the stored record goes out verbatim.  A hit by id wrote
              nothing; a hit by goal hash was promoted under `key`, and an L1 hit
              was upgraded into L2 -- both inside store_hit_replay, both gated by
              the same write_store. *)
-          (Future.value prf_text, sequent')
+          (Future.value (std_time, prf_text), sequent')
       | NONE =>
           let (* The MISS path, run once inside the (single) fork: engine
                  first, AoA on Auto_Fail.  Both branches yield the same shape
@@ -2163,7 +2206,7 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
                                  budget = budget, invocation_id = invocation_id,
                                  read_store = SOME false, write_store = SOME false,
                                  async_mode = Phi_Sledgehammer_Solver.Sync,
-                                 task = Usual} (ctxt, sequent)
+                                 task = task, user_operations = user_operations} (ctxt, sequent)
                       (* run_AoA's third and fourth by-products: what a replay
                          will spend (raw, un-divided) and the assembled
                          `aoa_replay "<b64>"` text — the same shape the engine
@@ -2200,15 +2243,21 @@ fun hammer_or_AoA {fact_override, proof_id, hammer_timeout, async_mode,
                                    end
                                | Exn.Exn _ => () (*no proof came out: nothing to write*)))
                         else ()
-                   in (Future.map snd fut, sequent') end
+                   in (Future.map (fn (time, text) => (Phi_Proof_Store.standard_time time, text)) fut,
+                       sequent')
+                  end
               | _ =>
                   (* async_prove's zero-subgoal short circuit: nothing to
                      prove, nothing ran; the empty future list means the
                      write-back above cannot trigger, so this "" is
                      structurally unreachable for L2/L1 (§2.3). *)
-                  (Future.value "", sequent')
+                  (Future.value (Phi_Proof_Store.zero_times, ""), sequent')
           end
   end
+
+fun hammer_or_AoA args ctxt sequent =
+  let val (fut, sequent') = hammer_or_AoA' args ctxt sequent
+   in (Future.map snd fut, sequent') end
 
 (* `by hammer_or_aoa` ≈ hammer_or_AoA (§2.3); always async_mode = Sync.  All five
    give-up reasons render through the one banner_of (§6.2); the core layers
@@ -2227,7 +2276,8 @@ fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
             hammer_or_AoA {fact_override = Sledgehammer_Fact.no_fact_override,
                            proof_id = NONE, hammer_timeout = NONE,
                            async_mode = Phi_Sledgehammer_Solver.Sync,
-                           read_store = NONE, write_store = NONE} ctxt sequent) of
+                           read_store = NONE, write_store = NONE,
+                           task = usual, user_operations = []} ctxt sequent) of
        Exn.Res (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)
      | Exn.Exn (Agent_Give_Up (reason, detail, cost)) =>
          (tracing (string_of_cost cost);

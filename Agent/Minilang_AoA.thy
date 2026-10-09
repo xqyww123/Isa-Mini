@@ -11,6 +11,12 @@ ML_file "helper.ML"
    Agent_Hint.HINT_NOTICE). *)
 ML_file "agent_hint.ML"
 
+(* The parts of MiniLang_Agent.config, then the registry of user operations
+   and tasks (docs/USER_OPERATIONS.md): both load before agent.ML, which
+   consults the registry, as it consults Agent_Hint. *)
+ML_file "agent_config.ML"
+ML_file "agent_plugin.ML"
+
 attribute_setup xsymmetric = \<open>
   Scan.succeed (Thm.rule_attribute [] (fn context => fn th =>
     Minilang_Helper.xsymmetric (Context.proof_of context) th))

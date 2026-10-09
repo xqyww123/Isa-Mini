@@ -1,0 +1,59 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x ∧ (0 :: int) ≤ y * y
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Apply (rule conjI): two derived subgoals, the method text echoed by the plugin's own message
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x ∧ (0 :: int) ≤ y * y
+proof:
+  - step id: 1
+    thought: split the conjunction with a method
+    operation: Apply
+    method: (rule conjI)
+    applied: (rule conjI)
+    derived subgoals:
+      - goal id: 1.1
+        goal: (0 :: int) ≤ x * x
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: (0 :: int) ≤ y * y
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+--------------------------------------------------
+Both subgoals proven
+--------------------------------------------------
+variables:
+  - y: int
+  - x: int
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: int) ≤ x * x ∧ (0 :: int) ≤ y * y
+proof:
+  - step id: 1
+    thought: split the conjunction with a method
+    operation: Apply
+    method: (rule conjI)
+    applied: (rule conjI)
+    derived subgoals:
+      - goal id: 1.1
+        goal: (0 :: int) ≤ x * x
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: (0 :: int) ≤ y * y
+        proof:
+          - step id: 1.2.1
+            operation: Obvious
+Unfinished nodes: 0

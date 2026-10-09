@@ -1,14 +1,7 @@
 signature MINILANG_AGENT = sig
 
-type budget = {
-      timeout_seconds: int,
-      max_tool_calls: int,
-      max_retries: int
-  }
-
-type cfg = {
-      auto_interpret_for_embedding: bool option
-  }
+type budget = MiniLang_Agent_Config.budget
+type cfg = MiniLang_Agent_Config.cfg
 
 type var_name = {internal_name: string, external_name: string, typ_pretty: string}
 type prem_name = {internal_term: term, external_name: string, pretty: string}
@@ -95,16 +88,16 @@ datatype ('term, 'thm, 'fact) command =
         name marks a type variable.  Plain strings in both xcmd and icmd —
         parsed at interpret time, same shape as one post-rule instantiation
         round.*)
+  | USER of string (*the operation's name*)
+          * Universal.universal (*its argument, in the type its registration hides;
+                                  docs/USER_OPERATIONS.md*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
 
-datatype exec_mode = LIVE | REPLAY
-
-type counters = {
-    prem_counter: int Synchronized.var
-  }
-type config = cfg * budget * counters * exec_mode
+datatype exec_mode = datatype MiniLang_Agent_Config.exec_mode
+type counters = MiniLang_Agent_Config.counters
+type config = MiniLang_Agent_Config.config
 
 val check_command : Minilang.state -> xcmd -> icmd
 val reject_undeclared_frees : string -> string -> Minilang.state -> term list -> unit
@@ -171,20 +164,16 @@ val read_prop : Proof.context -> string -> term
 val read_prop_schematic : Proof.context -> string -> term
 val read_props : Proof.context -> string list -> term list
 val read_thms : Proof.context -> string -> thm list
+val read_method_text : Proof.context -> string -> Method.text
+val check_authored_props : Proof.context -> string list -> string list -> unit
+val check_authored_terms : Proof.context -> string list -> string list -> unit
 
 end
 
 structure MiniLang_Agent : MINILANG_AGENT = struct
 
-type budget = {
-      timeout_seconds: int,
-      max_tool_calls: int,
-      max_retries: int
-  }
-
-type cfg = {
-      auto_interpret_for_embedding: bool option
-  }
+type budget = MiniLang_Agent_Config.budget
+type cfg = MiniLang_Agent_Config.cfg
 
 val default_cfg : cfg * budget = ({auto_interpret_for_embedding = NONE}, {
       timeout_seconds = 14400,
@@ -213,12 +202,9 @@ exception DEFINE_RESULT of string * string
 exception SETUP_REWRITING_MAY_LOOP
 exception COMPUTE_RESULT of string * string
 
-datatype exec_mode = LIVE | REPLAY
-
-type counters = {
-    prem_counter: int Synchronized.var
-  }
-type config = cfg * budget * counters * exec_mode
+datatype exec_mode = datatype MiniLang_Agent_Config.exec_mode
+type counters = MiniLang_Agent_Config.counters
+type config = MiniLang_Agent_Config.config
 
 datatype ('term, 'fact) extended_fact =
     FactByName of 'fact
@@ -297,6 +283,9 @@ datatype ('term, 'thm, 'fact) command =
         name marks a type variable.  Plain strings in both xcmd and icmd —
         parsed at interpret time, same shape as one post-rule instantiation
         round.*)
+  | USER of string (*the operation's name*)
+          * Universal.universal (*its argument, in the type its registration hides;
+                                  docs/USER_OPERATIONS.md*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -438,6 +427,41 @@ fun read_props ctxt ss =
   \<^try>\<open>Inner_Syntax_Error.read_positioned_list Syntax.read_props ctxt ss
    catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names)
+
+(*The one reader of method text: a recorded split script, a cached hammer
+  proof, a user operation's method argument.  The value comes from the plain
+  text; a failure is reported the way read_term reports one -- the text,
+  marked at the failing spot -- since the text may be the agent's own, and
+  only through the four approved texts, never through a text of Isabelle's.*)
+fun read_method_text ctxt text =
+  let
+    val keywords = Keyword.no_major_keywords (Thy_Header.get_keywords' ctxt)
+    fun tokens input = Parse.read_embedded ctxt keywords (Scan.many Token.not_eof) input
+    val parse = Scan.error (Scan.finite Token.stopper (Parse.!!! (Method.parser 0)))
+    (*the text marked where the failure lies: the same text read again
+      positioned, a probe whose value is never used (Inner_Syntax_Error), the
+      spot taken from its error's position markup or from its leftover token;
+      the text unmarked when neither gives one*)
+    val id = "Minilang.method_text"
+    val positioned = Input.source true text (Position.put_id id Position.start, Position.none)
+    fun located () =
+      (case Exn.result (fn () => parse (tokens positioned)) () of
+         Exn.Exn (ERROR msg) => Inner_Syntax_Error.last_offset (equal id) msg
+       | Exn.Res (_, tok :: _) => Option.map (fn off => (off, off + 1)) (Position.offset_of (Token.pos_of tok))
+       | _ => NONE)
+      |> Option.mapPartial (Inner_Syntax_Error.mark_window text)
+      |> the_default text
+    fun fail prefix = error (prefix ^ located ())
+    val toks = tokens (Input.string text) handle ERROR _ => fail "Outer syntax error: "
+    val _ = if null toks then error "The tactic text is empty." else ()
+    val ((m, _), rest) = parse toks handle ERROR _ => fail "Outer syntax error: "
+    val _ = if null rest then () else fail "Unexpected text after the tactic: "
+  in
+    (*the name check alone, with the name the agent wrote*)
+    Method.map_source (fn src =>
+      Method.check_src ctxt src
+      handle ERROR _ => error ("Undefined tactic: " ^ quote (Token.content_of (hd src)))) m
+  end
 
 (* Agent Hint Registry — proposition path. For each agent-authored prop string,
    parse it (plain) and fire any registered constant hint (notice/reject).
@@ -1491,6 +1515,27 @@ fun reject_schematic_goal opr_kind s =
            (if many then "them" else "it") ^ " in `for_any` instead.")
       end
 
+(*A schematic variable left in two or more of the subgoals a user operation
+  derived: a sibling would commit the choice for another.  The built-in subgoal
+  makers keep this invariant by probing and instantiating; a USER command
+  carries no instantiation rounds, so it is checked and not repaired
+  (docs/USER_OPERATIONS.md, section 4.1).*)
+fun reject_shared_schematics name subgoals =
+  let val vars_of = fn g =>
+        map (Term.string_of_vname o #1) (Term.add_vars g []) @
+        map (Term.string_of_vname o #1) (Term.add_tvars g [])
+      val per_subgoal = map vars_of subgoals
+      val shared = distinct (op =) (flat per_subgoal)
+        |> filter (fn v => length (filter (fn vs => member (op =) vs v) per_subgoal) >= 2)
+        |> sort string_ord
+   in if null shared then ()
+      else raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL,
+        name ^ " left the schematic " ^
+        (case shared of [v] => "variable " ^ v | vs => "variables " ^ commas vs) ^
+        " in more than one of the subgoals it produced. A schematic variable may \
+        \be left in at most one subgoal, so this step is rejected.")
+  end
+
 fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
   case cmd of
       SIMPLIFY (simp_facts_with_targets, use_system_simps, premise_names, simplify_goal, user_bindings_opt) =>
@@ -1697,15 +1742,8 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           (*The limits wrap the whole operation: APPLY's own timeout is wall
             clock only, so it gets none.*)
           fun try_cached_apply (prf, times) =
-            let val kws = Thy_Header.get_keywords (Proof_Context.theory_of ctxt_r)
-                val toks = Input.source_explode (Input.string prf)
-                        |> Token.tokenize (Keyword.no_major_keywords kws) {strict = false}
-                        |> filter Token.is_proper
-                val method_text = case Scan.read Token.stopper (Method.parser 0 >> #1) toks of
-                    SOME m => m
-                  | NONE => error ("Cannot parse cached method: " ^ quote prf)
-                val s' = Thread_CPU.apply (embedded_replay_limits times)
-                           (Minilang.APPLY NONE [] (Method.check_text ctxt_r method_text))
+            let val s' = Thread_CPU.apply (embedded_replay_limits times)
+                           (Minilang.APPLY NONE [] (read_method_text ctxt_r prf))
                            s_resolved
                 val _ = Minilang.get_reporter ()
                           (Minilang.Internal (Minilang.SH_PRF (prf, times)))
@@ -1972,6 +2010,17 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
               |> #1
          in Minilang.OPEN_MODULE'' {auto_unfold_locale=true} expr s
         end
+    | USER (name, arg) =>
+        let val reg = MiniLang_Agent_Plugin.the_operation (Proof_Context.theory_of (Minilang.context_of s)) name
+            val (s', msgs) = Minilang.record_reporter (#run (#operation reg) config arg) s
+            val derived = Minilang.derived_subgoals_of s s' msgs
+            val _ = reject_shared_schematics name derived
+            (*what the run reported, its Goals replaced by the one Goals of the
+              derived subgoals: the boundary the agent sees*)
+            val report = Minilang.get_reporter ()
+            val _ = List.app (fn Minilang.Goals _ => () | m => report m) msgs
+            val _ = report (Minilang.Goals derived)
+         in s' end
 
 local
 val keywords = Thy_Header.get_keywords @{theory Pure}
@@ -2212,6 +2261,7 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
               end
       in COMPUTE (name, term)
       end
+  | check_command_i _ (USER x) = USER x
 
 fun check_command s x = check_command_i s x
     handle ERROR msg => raise Minilang.OPR_FAIL (Minilang.TERMLANG, msg)

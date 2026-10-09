@@ -297,6 +297,9 @@ requirements:
     # pyproject floor, same reason).  Superseded floor, for the record: >=0.3.0 was
     # for snapshot_sync (the layered semantic DB), which 0.6.0's AoA imports.
     - isabelle-semantic-embedding >=0.5.0
+    # model.py validates a plugin's schema with jsonschema.Draft202012Validator, first
+    # shipped in 4.0.0; also a pyproject dependency.
+    - jsonschema >=4.0.0
     #
     # The pyproject dependencies under their CONDA names.  TWO differ from PyPI, and in
     # both cases the WRONG name resolves, installs green, and dies at `import`:
@@ -364,7 +367,7 @@ tests:
       # executes.  Metadata is the wrong instrument for this project's real failure mode --
       # naming conda's `xxhash` (the C library) instead of `python-xxhash` resolves,
       # installs green, and dies only at `import xxhash`.
-      - python -c "import openai, tiktoken, anthropic, httpx, xxhash, msgpack, rich, yaml, jsoncomment, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
+      - python -c "import openai, tiktoken, anthropic, httpx, xxhash, msgpack, rich, yaml, jsoncomment, jsonschema, mcp, uvicorn, zstandard, platformdirs; print('all declared dependencies import')"
       # The drivers that must be present in a conda install.  This is the assertion that
       # catches the silent-vanish failure the folded extras exist to prevent: it names the
       # drivers rather than trusting that the dependencies imply them.

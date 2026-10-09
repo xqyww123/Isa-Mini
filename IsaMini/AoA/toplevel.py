@@ -2,6 +2,7 @@ from re import I
 from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from .model import interrupts_are_cancellations
+from .task import TASK_REGISTRY
 from . import usage_count
 from typing import Any
 import json
@@ -192,9 +193,12 @@ async def _ensure_semantic_db(connection) -> None:
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     task_info, enable_write_memory, enable_read_memory) = data
-    # Task = (kind, payload); "usual" (empty payload) or "learning" (Isar proof).
-    task_kind, task_payload = task_info
+     task_info, enable_write_memory, enable_read_memory,
+     user_operation_names) = data
+    # Task = (name, payload); "usual" and "learning" are the two built-in tasks.
+    # user_operation_names: the call's active user operations, in name order
+    # (docs/USER_OPERATIONS.md section 5.2).
+    task_name, task_payload = task_info
     # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
     # tool is dropped from every advertised tool set and memorize is a no-op.
     # AoA_enable_read_memory=false requires it: write_memory's duplicate check
@@ -204,6 +208,18 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
             "AoA_enable_read_memory = false requires AoA_enable_write_memory = false "
             "(write_memory's duplicate check would read stored experiences).")
     timeout_seconds, max_tool_calls, max_retries = budget_tuple
+
+    # The call's Runtime (docs/USER_OPERATIONS.md, section 5.2): its task and its
+    # operation table, built before the semantic-DB checks and the split by
+    # driver, so that a name no imported package registers is refused first
+    # (section 8).
+    task_cls = TASK_REGISTRY.get(task_name)
+    if task_cls is None:
+        raise AoA_Error(
+            f'User task "{task_name}": no imported Python package registers a task class '
+            f'under this name.')
+    runtime = Runtime(user_operation_names)
+    runtime.task = task_cls(task_payload)
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
     env_log_dir = os.environ.get('AoA_LOG_DIR')
@@ -270,7 +286,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         if argument is None or argument not in TESTS:
             raise ValueError(f"Test Not Found on '{argument}'")
         case = TESTS[argument]
-        root = await case.run(connection, actual_log_path, global_context, ptree)
+        root = await case.run(connection, actual_log_path, global_context, ptree, runtime)
         cost = zero_cost
         is_test = True
         quit_obj = None
@@ -292,9 +308,6 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                     f"falling back to 'no'. "
                     f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
             interactive_retrieval = InteractiveRetrievalMode.NO
-        from .task import UsualTask, LearningTask
-        task_obj = (LearningTask(task_payload) if task_kind == "learning"
-                    else UsualTask())
         # Past the cache, about to enter the agent.  Sits inside this `else`, so
         # the test driver -- handled by the branch above -- reports nothing.
         # Note this says "entered the agent", NOT "spent model tokens": a user
@@ -306,11 +319,8 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                        interactive_retrieval=interactive_retrieval,
                        timeout_seconds=timeout_seconds,
                        max_tool_calls=max_tool_calls,
-                       max_retries=max_retries) as session:
-            # Set the Task on the runtime (via the session shim) before init/run so
-            # the system prompt and initial message pick it up. Forks inherit it
-            # through the shared runtime singleton.
-            session.task = task_obj
+                       max_retries=max_retries,
+                       runtime=runtime) as session:
             session.enable_write_memory = enable_write_memory
             # AoA_enable_read_memory (Isabelle declaration): when False, the
             # "experience" kind is stripped from every query and hidden from the

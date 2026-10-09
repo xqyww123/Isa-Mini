@@ -148,5 +148,8 @@ async def _test_Have1(root: Root, file: MyIO):
 - `language_model_driver.py` — driver base + worker plumbing.
 - `driver_*.py` — concrete drivers (`driver_claude_code.py` is default).
 - `test.py` / `Tests/*` (this directory) + the runner `../../test_AoA.py` — test framework + goldens.
+- `edit_schema.py` — the base `edit` schema, loaded once; `task.py` — the `Task` classes and the task registry (`@aoa_task`).
+- `Tests/Sample_Plugin.thy` + `Tests/sample_plugin/` — the sample plugin: user-defined proof operations end to end (design: `docs/USER_OPERATIONS.md`).
 - `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` — ML side.
+- `../../Agent/agent_config.ML`, `../../Agent/agent_plugin.ML` — ML side: the agent's `config` type; the registries of user operations and tasks.
 - `docs/DEVELOP.md` — the longer-form design document (same material, with rationale).

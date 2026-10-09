@@ -56,6 +56,11 @@ dependencies = [
     "PyYAML>=6.0.3",
     "platformdirs>=4.9.4",
     "jsoncomment>=0.4.2",
+    # model.py checks a plugin's construct_schema with jsonschema.Draft202012Validator
+    # at import time (docs/USER_OPERATIONS.md section 4.1); 4.0.0 is the first
+    # release with that validator.  (mcp depends on jsonschema too; declared
+    # here for the direct use.)
+    "jsonschema>=4.0.0",
     "claude-agent-sdk>=0.1.72",
     "zstandard>=0.23.0",
     # mcp_http_server._write_memory_tool_logic hashes the record into its universal key.
@@ -114,6 +119,8 @@ version = { file = "VERSION" }
 
 [tool.setuptools.packages.find]
 include = ["IsaMini", "IsaMini.*"]
+# The test suite's sample plugin (Tests/sample_plugin) is not part of the wheel.
+exclude = ["IsaMini.AoA.Tests*"]
 
 [tool.setuptools.package-data]
 # tools/ holds one .json and 23 .jsonc; mcp_http_server._load_schema opens the .jsonc

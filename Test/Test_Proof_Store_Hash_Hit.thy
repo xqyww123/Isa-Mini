@@ -153,7 +153,8 @@ val (fut24, st24) =
   MiniLang_Agent_AoA.hammer_or_AoA
     {fact_override = Sledgehammer_Fact.no_fact_override, proof_id = SOME "TPSHH.K24",
      hammer_timeout = NONE, async_mode = Phi_Sledgehammer_Solver.Sync,
-     read_store = SOME true, write_store = SOME false} ctxt g24
+     read_store = SOME true, write_store = SOME false,
+     task = MiniLang_Agent_AoA.usual, user_operations = []} ctxt g24
 val _ = assert (Future.join fut24 = "(simp)[1]") "test24 verbatim"
 val _ = assert (Thm.no_prems st24) "test24 closed"
 \<close>

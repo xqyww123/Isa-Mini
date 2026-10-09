@@ -803,49 +803,41 @@ fun record_reporter f x =
       val y = Thread_Data.setmp reporter (SOME (fn m => buf := m :: !buf)) f x
    in (y, rev (!buf)) end
 
-(* Derived-subgoal query for gate/probe preruns.  Discriminates STRUCTURALLY,
-   never by operation name:
-   - block-opening operation (new HHF :: ENDBLK frames above the entry frame,
-     e.g. CASE_SPLIT): the derived subgoals are the terms of the FIRST Goals
-     message captured during the run — the final stack materializes only
-     case 1; the remaining cases live in a MAGIC closure until NEXT, so the
-     final state cannot count them;
-   - single-frame operation (stack depth unchanged, e.g. SPLIT_CONJS2, RULE):
-     the derived subgoals are the first n_new = |goals| - n0 + 1 goals of the
-     final leading sequent.  The final-state read is REQUIRED here, not just
-     an alternative to the message: a prerun op may carry baked post-rule
-     instantiation rounds, and the op's Goals message is emitted BEFORE
-     apply_post_insts runs — a pre-instantiation snapshot — whereas the
-     final state is post-instantiation.  A message-based read would make the
-     post-inst probe's convergence check blind to its own progress.
-   Known boundaries (decision-neutral for the current callers, which only
-   compare the count against <=1 / >=2 or read post-inst variable sets):
-   - if the prerun op SOLVES the frame's last goal above a MAGIC frame,
-     `maintain` fires the continuation and the stack shrinks — the result
-     then reports the PARENT frame's leftover goals, and a negative n_new
-     makes `take` silently return the whole list;
-   - a single-case CASE_SPLIT/INDUCT pushes HHF :: MAGIC with no ENDBLK and
-     is therefore classified single-frame.
-   Only valid for operations whose dispatch path does not advance session-
-   shared counters (HAVE / SUFFICES / SETUP_REWRITING / AUTO_INTRO /
-   AUTO_SIMPLIFY advance prem_counter — prerunning those would permanently
-   skip numbering).  Current callers — CASE_SPLIT (CaseSplit gate),
-   SPLIT_CONJS2 (SplitConjs gate), RULE (InferenceRule post-inst probe) —
-   are verified counter-clean; verify that property before adding any new
-   caller. *)
+(* The subgoals an operation derived, read from the state before, the state
+   after and the messages the operation reported, structurally, never by the
+   operation's name:
+   - the stack shrank (the operation closed a frame): none;
+   - the stack grew (the operation opened a block): the goals of the FIRST
+     Goals message -- a block opener such as CASE_SPLIT materializes only
+     case 1 and keeps the other cases in a MAGIC closure until NEXT, so the
+     final state cannot count them -- or, for an opener that reported no
+     Goals, as HAVE, the goals of the new leading frame;
+   - the depth is unchanged (SPLIT_CONJS2, RULE): the first
+     n_new = |goals| - n0 + 1 goals of the final leading sequent.  The state
+     is read here, not the message: an operation with post-rule instantiation
+     rounds reports Goals BEFORE apply_post_insts runs, and the post-inst
+     probe's convergence check must see the instantiated goals.
+   Callers: the CaseSplit gate, the SplitConjs gate and the InferenceRule
+   probe prerun an operation under record_reporter -- only sound for an
+   operation whose dispatch path advances no session-shared counter (HAVE /
+   SUFFICES / SETUP_REWRITING / AUTO_INTRO / AUTO_SIMPLIFY advance
+   prem_counter; prerunning those would permanently skip numbering) -- and
+   interpret_i's USER branch, which reads the real run and never preruns. *)
 fun derived_subgoals_of (((_, SK0), _, _) : state) (((_, SK1), _, _) : state) msgs =
-  if length SK1 > length SK0
-     andalso (case SK1 of HHF _ :: ENDBLK _ :: _ => true | _ => false)
-  then (case get_first (fn Goals gs => SOME gs | _ => NONE) msgs of
-          SOME gs => gs
-        | NONE => raise Fail "derived_subgoals_of: block-opening operation \
-                             \emitted no Goals message")
-  else
-    let val n0 = (case SK0 of HHF (st, _) :: _ => length (goals_of' st)
-                            | _ => raise BROKEN_INVARIANT)
-        val gs = (case SK1 of HHF (st, _) :: _ => goals_of' st
-                            | _ => raise BROKEN_INVARIANT)
-     in take (length gs - n0 + 1) gs end
+  let fun leading_goals SK =   (*a solved sequent derives none: goals_of' spells it [True]*)
+        (case SK of
+           HHF (st, _) :: _ => if no_goal' st then [] else goals_of' st
+         | _ => raise BROKEN_INVARIANT)
+   in if length SK1 < length SK0 then []
+      else if length SK1 > length SK0 then
+        (case get_first (fn Goals gs => SOME gs | _ => NONE) msgs of
+           SOME gs => gs
+         | NONE => leading_goals SK1)
+      else
+        let val n0 = length (leading_goals SK0)
+            val gs = leading_goals SK1
+         in take (length gs - n0 + 1) gs end
+  end
 
 fun report_goal (ctxt, SK) = (
           (case SK of HHF (st, _) :: _ =>

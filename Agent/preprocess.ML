@@ -31,8 +31,8 @@ signature GOAL_PREPROCESS = sig
      performed (D41); replay executes that text instead of re-racing.  "" means
      the segment did nothing.  The texts are compositions of the three
      aoa_split_* methods registered below.  The script stays ML-side: raw_AoA
-     packs it into the blob itself (the blob never leaves the
-     raw_AoA/aoa_replay codec pair). *)
+     packs it into the blob itself (the blob never leaves ML: the blob codec,
+     encode_blob and decode_blob in agent_server.ML). *)
   val preprocess_split_recorded : Proof.context -> thm -> thm * string
 end
 

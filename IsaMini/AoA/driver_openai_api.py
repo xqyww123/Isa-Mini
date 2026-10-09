@@ -26,7 +26,7 @@ from .model import *
 from .language_model_driver import (_TransientError, _CorruptedSampleError, _QuotaError,
                                     PRICING, pricing_for, _parse_effort_suffix, Usage)
 
-from .mcp_http_server import _cc_edit_schema_flat, _cc_edit_schema_raw
+from .mcp_http_server import _flatten_edit_schema, _assert_no_refs
 from .driver_api import (Provider, APIDriver, ToolCall, ProviderResponse,
                          Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg)
 
@@ -70,8 +70,12 @@ def _strictify_schema(schema: dict, *, nullify: bool = True) -> dict:
                         if prop_name not in required:
                             _make_nullable(props, prop_name)
                 node["required"] = list(props.keys())
-            for v in node.values():
-                _walk(v)
+            for k, v in node.items():
+                if k == "properties" and isinstance(v, dict):
+                    for sub in v.values():     # its keys are field names, not schema keywords
+                        _walk(sub)
+                else:
+                    _walk(v)
         elif isinstance(node, list):
             for v in node:
                 _walk(v)
@@ -105,21 +109,26 @@ def _flatten_edit_schema_deepseek(raw: dict) -> dict:
     path that silently drops the schema from the prompt (the model then
     hallucinates field names).
     So we fully inline (no ``$ref``) and additionally:
-      - remove every ``proof``/``proofs`` field (no inline sub-proofs; the agent
-        builds the tree incrementally — a bodiless op auto-opens a fillable
-        child, so absent==open-block on the parser side);
+      - remove every field named ``proof``/``proofs`` (no inline sub-proofs;
+        the agent builds the tree incrementally — a bodiless op auto-opens a
+        fillable child, so absent==open-block on the parser side).  A plugin's
+        sub-proof field is named ``proof`` or ``proofs`` by convention, and no
+        other field is (docs/USER_OPERATIONS.md section 4.1), so it leaves here
+        too; a field named ``simplify`` gets " Most cases: true." appended to
+        its description;
       - collapse the self-recursive ``FactByName.discharge`` to plain name
         strings (``null`` kept for skip-a-premise; DeepSeek strict accepts null);
       - ``const`` (string) -> single-value ``enum`` (strict has no string const);
-      - drop ``minItems``/``maxItems``/``default`` (unsupported by strict);
-      - all object props ``required`` + ``additionalProperties:false`` WITHOUT
+      - drop the schema keywords ``minItems``/``maxItems``/``default``
+        (unsupported by strict); a field so named is kept;
+      - all object fields ``required`` + ``additionalProperties:false`` WITHOUT
         nullify (the model sends empty values; parser treats empty == absent).
     """
     import copy
     raw = copy.deepcopy(raw)
     defs = raw.pop("$defs", {})
-    _PROOF_KEYS = {"proof", "proofs"}
-    _DROP_KEYS = {"minItems", "maxItems", "default"}
+    _PROOF_KEYS = {"proof", "proofs"}          # field names
+    _DROP_KEYS = {"minItems", "maxItems", "default"}   # schema keywords
     _flat_fbn: dict | None = None
 
     def _factbyname() -> dict:
@@ -133,7 +142,20 @@ def _flatten_edit_schema_deepseek(raw: dict) -> dict:
             _flat_fbn = fbn
         return copy.deepcopy(_flat_fbn)
 
+    def _properties(props: dict) -> dict:
+        """The value of a ``properties`` keyword: its keys are field names."""
+        out: dict[str, Any] = {}
+        for name, sub in props.items():
+            if name in _PROOF_KEYS:
+                continue
+            rv = _resolve(sub)
+            if name == "simplify" and isinstance(rv, dict) and rv.get("description"):
+                rv["description"] = rv["description"].rstrip() + " Most cases: true."
+            out[name] = rv
+        return out
+
     def _resolve(node: Any) -> Any:
+        """A schema node: its keys are schema keywords."""
         if isinstance(node, dict):
             ref = node.get("$ref")
             if isinstance(ref, str) and ref.startswith("#/$defs/"):
@@ -143,16 +165,13 @@ def _flatten_edit_schema_deepseek(raw: dict) -> dict:
                 return _resolve(copy.deepcopy(defs[name]))
             out: dict[str, Any] = {}
             for k, v in node.items():
-                if k in _PROOF_KEYS or k in _DROP_KEYS:
+                if k in _DROP_KEYS:
                     continue
                 if k == "const" and isinstance(v, str):
                     out["enum"] = [v]
                     out.setdefault("type", "string")
                     continue
-                rv = _resolve(v)
-                if k == "simplify" and isinstance(rv, dict) and rv.get("description"):
-                    rv["description"] = rv["description"].rstrip() + " Most cases: true."
-                out[k] = rv
+                out[k] = _properties(v) if k == "properties" and isinstance(v, dict) else _resolve(v)
             return out
         if isinstance(node, list):
             return [_resolve(x) for x in node]
@@ -160,18 +179,9 @@ def _flatten_edit_schema_deepseek(raw: dict) -> dict:
 
     flat = _resolve(raw)
     # all-required + additionalProperties:false, but NO nullify (empty == absent).
-    return _strictify_schema(flat, nullify=False)
-
-
-_cc_edit_schema_deepseek_cache: dict | None = None
-
-
-def _deepseek_edit_schema() -> dict:
-    """Lazily build + cache the DeepSeek-strict ``edit`` schema (import-safe)."""
-    global _cc_edit_schema_deepseek_cache
-    if _cc_edit_schema_deepseek_cache is None:
-        _cc_edit_schema_deepseek_cache = _flatten_edit_schema_deepseek(_cc_edit_schema_raw)
-    return _cc_edit_schema_deepseek_cache
+    flat = _strictify_schema(flat, nullify=False)
+    _assert_no_refs(flat)
+    return flat
 
 
 class OpenAIBase(Provider):
@@ -285,7 +295,7 @@ class OpenAIBase(Provider):
 
     def _strict_schema(self, name: str, schema: dict) -> dict:
         if name == "edit":
-            return _strictify_schema(_cc_edit_schema_flat)
+            return _strictify_schema(_flatten_edit_schema(schema))
         return _strictify_schema(schema)
 
     def _strict_for_tool(self, name: str) -> bool:
@@ -1279,7 +1289,7 @@ class DeepSeekProvider(OpenAIChatProvider):
 
     def _strict_schema(self, name: str, schema: dict) -> dict:
         if name == "edit":
-            return _deepseek_edit_schema()
+            return _flatten_edit_schema_deepseek(schema)
         return schema
 
 

@@ -18,7 +18,7 @@ from .driver_api import (
     Msg, SystemMsg, UserMsg, AssistantMsg, ToolResultMsg,
     APIDriver, ForkingMode, agent_driver,
 )
-from .mcp_http_server import _cc_edit_schema_flat
+from .mcp_http_server import _flatten_edit_schema
 
 
 class GeminiProvider(Provider):
@@ -161,7 +161,7 @@ class GeminiProvider(Provider):
             name=name,
             description=info["description"],
             parameters_json_schema=(
-                _cc_edit_schema_flat if name == "edit" else info["schema"]),
+                _flatten_edit_schema(info["schema"]) if name == "edit" else info["schema"]),
         ) for name, info in tool_info.items()]
         return [genai_types.Tool(function_declarations=decls)]  # type: ignore[list-item]
 

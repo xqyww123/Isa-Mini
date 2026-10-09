@@ -1,3 +1,6 @@
+import inspect
+
+
 def alpha_to_num(s: str) -> int:
     """
     Convert an alphabetic string to a number in base-26 (1-indexed).
@@ -270,3 +273,17 @@ class MyIO:
         if hasattr(self._wrapped, '__exit__'):
             return self._wrapped.__exit__(exc_type, exc_val, exc_tb)
         return False
+
+
+def check_name_and_abstractness(kind: str, name: str, held: 'type | None', cls: type) -> None:
+    """The two refusals `@proof_operation` and `@aoa_task` share, made before
+    either registry is written: a name another class holds -- the same class,
+    by module and qualified name, re-registers on a re-import after a failed
+    one -- and an abstract class, which would raise in the middle of a run."""
+    if held is not None and (held.__module__, held.__qualname__) != (cls.__module__, cls.__qualname__):
+        raise ValueError(
+            f'{kind} "{name}" is already registered by {held.__module__}.{held.__qualname__}')
+    if inspect.isabstract(cls):
+        raise TypeError(
+            f'{kind} "{name}": the class {cls.__qualname__} is abstract; missing: '
+            + ", ".join(sorted(cls.__abstractmethods__)))

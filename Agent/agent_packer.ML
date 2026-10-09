@@ -1,36 +1,29 @@
 signature MINILANG_AGENT = sig
 include MINILANG_AGENT
 
-val xcmd_packer : xcmd MessagePackBinIO.Pack.packer
-val xcmd_unpacker : xcmd MessagePackBinIO.Unpack.unpacker
-
-(*BytesIO twins, for decoding a blob held in memory (D31): BinIO's instream
-  cannot be fed from a string.*)
-val xcmd_packer_bytes : xcmd MessagePackBytesIO.Pack.packer
-val xcmd_unpacker_bytes : xcmd MessagePackBytesIO.Unpack.unpacker
+(*The one codec of the op stream: the live wire, the proof store's blob and
+  its replay.  It takes the theory for the USER branch, which reads and writes
+  a user operation's argument with the registration under that name
+  (docs/USER_OPERATIONS.md, section 2).*)
+val xcmd_packer : theory -> xcmd MessagePackBinIO.Pack.packer
+val xcmd_unpacker : theory -> xcmd MessagePackBinIO.Unpack.unpacker
 
 val pack_bindings : bindings MessagePackBinIO.Pack.packer
 val pack_raw_term : term MessagePackBinIO.Pack.packer
 val unpack_raw_term : term MessagePackBinIO.Unpack.unpacker
 
-(*
-val serialize : driver * xcmd list -> string
-val deserialize : string -> driver * xcmd list
-*)
+(*In-memory BinIO streams, so that the one codec above serves the wire, the
+  proof store's aoa_replay blob and its replay alike.*)
+val instream_of_bytes : Word8Vector.vector -> BinIO.StreamIO.instream
+val bytes_of_output : (BinIO.StreamIO.outstream -> unit) -> Word8Vector.vector
 
 end
 
-functor MiniLang_Agent_Pack(S : sig
-                      type instream
-                      type outstream
-                      val input1 : instream -> (Word8.word * instream) option
-                      val inputN : instream * int -> Word8Vector.vector * instream
-                      val output : outstream * Word8Vector.vector -> unit
-                      val output1 : outstream * Word8.word -> unit
-                    end) = struct
-structure MP = MessagePack(S)
-structure Codec = RPC_Term_Codec(MP)
-local open MiniLang_Agent MP.Unpack MP.Pack
+structure MiniLang_Agent : MINILANG_AGENT = struct
+open MiniLang_Agent
+
+structure Codec = RPC_Term_Codec(MessagePackBinIO)
+local open MessagePackBinIO.Unpack MessagePackBinIO.Pack
 in
 
 val unpack_opt_var_names =
@@ -39,7 +32,7 @@ val unpack_opt_var_names =
 val pack_opt_var_names =
   packOption (packList (packOption packString))
 
-(*The raw term codec, an instance of Isabelle_RPC's functor over this MP.*)
+(*The raw term codec, Isabelle_RPC's functor over MessagePackBinIO.*)
 open Codec
 
 (* Bindings serialization using term packer *)
@@ -105,7 +98,7 @@ val unpack_extended_fact =
 val unpack_post_insts = unpackList (unpackList (unpackPair (unpackString, unpackString)))
 val pack_post_insts   = packList   (packList   (packPair   (packString,   packString)))
 
-val unpacker =
+fun xcmd_unpacker thy =
   unpackPair_dep unpackString (
     fn "SIMPLIFY" => apfst SIMPLIFY o unpackTuple5 (
                         unpackList (unpackPair (unpack_extended_fact, unpackOption (unpackList unpack_raw_term))),
@@ -193,10 +186,15 @@ val unpacker =
                        unpackList (unpackPair (unpackString, unpackString)))
      | "INST_GOAL_VARS" => apfst INST_GOAL_VARS o
          unpackList (unpackPair (unpackString, unpackString))
+     | "USER" => apfst USER o unpackPair_dep unpackString (fn name =>
+         let val unpack_arg = #unpack_arg (#operation (MiniLang_Agent_Plugin.the_operation thy name))
+          in fn s => unpack_arg s
+               handle Unpack => error ("User operation " ^ quote name ^ ": its argument does not decode")
+         end)
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
-fun packer (SIMPLIFY data) =
+fun xcmd_packer _ (SIMPLIFY data) =
       packPair (packString, packTuple5 (
                   packList (packPair (pack_extended_fact, packOption (packList pack_raw_term))),
                   packBool,
@@ -204,18 +202,18 @@ fun packer (SIMPLIFY data) =
                   packBool,
                   packOption pack_bindings
                 )) ("SIMPLIFY", data)
-  | packer (UNFOLD data) =
+  | xcmd_packer _ (UNFOLD data) =
       packPair (packString, packList pack_extended_fact) ("UNFOLD", data)
-  | packer (WITNESS data) =
+  | xcmd_packer _ (WITNESS data) =
       packPair (packString, packList packString) ("WITNESS", data)
-  | packer (RULE data) =
+  | xcmd_packer _ (RULE data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_post_insts))
         ("RULE", data)
-  | packer (CASE_SPLIT data) =
+  | xcmd_packer _ (CASE_SPLIT data) =
       packPair (packString, packTuple5 (packString, pack_opt_var_names, packOption packString,
                                          packBool, pack_post_insts))
         ("CASE_SPLIT", data)
-  | packer (INDUCT data) =
+  | xcmd_packer _ (INDUCT data) =
       packPair (packString, packTuple7 (packString, pack_opt_var_names,
                                          packList packString,
                                          packList packString,
@@ -223,120 +221,108 @@ fun packer (SIMPLIFY data) =
                                          packBool,
                                          pack_post_insts))
         ("INDUCT", data)
-  | packer (NEXT_OR_END data) =
+  | xcmd_packer _ (NEXT_OR_END data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
         ("NEXT_or_END", data)
-  | packer (NEXT data) =
+  | xcmd_packer _ (NEXT data) =
       packPair (packString, packPair (packList pack_extended_fact, pack_opt_var_names))
         ("NEXT", data)
-  | packer (END data) = packPair (packString, packList pack_extended_fact) ("END", data)
-  | packer (BRANCH data) =
+  | xcmd_packer _ (END data) = packPair (packString, packList pack_extended_fact) ("END", data)
+  | xcmd_packer _ (BRANCH data) =
       packPair (packString, packList (packPair (packOption packString, packString))) ("BRANCH", data)
-  | packer (HAVE (name, fixes, assumes, conclusion, auto_apply)) =
+  | xcmd_packer _ (HAVE (name, fixes, assumes, conclusion, auto_apply)) =
       packPair (packString, packTuple5 (
           packString,
           packList (packPair (packString, packOption packString)),
           packList (packPair (packOption packString, packString)),
           packString,
           packBool)) ("HAVE", (name, fixes, assumes, conclusion, auto_apply))
-  | packer (SUFFICES (fixes, assumes, conclusion)) =
+  | xcmd_packer _ (SUFFICES (fixes, assumes, conclusion)) =
       packPair (packString, packTuple3 (
           packList (packPair (packString, packOption packString)),
           packList (packPair (packOption packString, packString)),
           packString)) ("SUFFICES", (fixes, assumes, conclusion))
-  | packer (OBTAIN data) =
+  | xcmd_packer _ (OBTAIN data) =
       packPair (packString, packPair (
           packList (packPair (packString, packOption packString)),
           packList (packPair (packOption packString, packString))))
         ("OBTAIN", data)
-  | packer (SORRY_NEXT data) =
+  | xcmd_packer _ (SORRY_NEXT data) =
       packPair (packString, pack_opt_var_names)
         ("SORRY_NEXT", data)
-  | packer (SORRY_END_ALL data) =
+  | xcmd_packer _ (SORRY_END_ALL data) =
       packPair (packString, pack_opt_var_names)
         ("SORRY_END_ALL", data)
-  | packer SORRY_ONLY =
+  | xcmd_packer _ SORRY_ONLY =
       packPair (packString, packUnit) ("SORRY_ONLY", ())
-  | packer (HAMMER (facts, timeout, cached)) =
+  | xcmd_packer _ (HAMMER (facts, timeout, cached)) =
       packPair (packString, packTuple3 (packList pack_extended_fact, packInt,
                 packOption pack_recorded_proof))
         ("HAMMER", (facts, timeout, cached))
-  | packer (INTRO (bindings, allow_standard_fallback)) =
+  | xcmd_packer _ (INTRO (bindings, allow_standard_fallback)) =
       packPair (packString, packPair (packOption pack_bindings, packBool))
                ("INTRO", (bindings, allow_standard_fallback))
-  | packer SPLIT_CONJS = packPair (packString, packUnit) ("SPLIT_CONJS", ())
-  | packer SPLIT_CONJS2 = packPair (packString, packUnit) ("SPLIT_CONJS2", ())
-  | packer (SPECIALIZE data) =
+  | xcmd_packer _ SPLIT_CONJS = packPair (packString, packUnit) ("SPLIT_CONJS", ())
+  | xcmd_packer _ SPLIT_CONJS2 = packPair (packString, packUnit) ("SPLIT_CONJS2", ())
+  | xcmd_packer _ (SPECIALIZE data) =
       packPair (packString, packTuple4 (
           packString,
           pack_extended_fact,
           packList (packPair (packString, packString)),
           packList pack_extended_fact))
         ("SPECIALIZE", data)
-  | packer (CHAINING data) =
+  | xcmd_packer _ (CHAINING data) =
       packPair (packString,
                 packPair (packOption packString, packList pack_extended_fact))
         ("CHAINING", data)
-  | packer (DEFINE data) =
+  | xcmd_packer _ (DEFINE data) =
       packPair (packString,
                 packTuple4 (packString,
                             packOption packString,
                             packList packString,
                             packList packString))
         ("DEFINE", data)
-  | packer SKIP = packPair (packString, packUnit) ("SKIP", ())
-  | packer (CONTRADICTION data) =
+  | xcmd_packer _ SKIP = packPair (packString, packUnit) ("SKIP", ())
+  | xcmd_packer _ (CONTRADICTION data) =
       packPair (packString, packString) ("CONTRADICTION", data)
-  | packer (SETUP_REWRITING (name, for_any, conditions, redex, residue)) =
+  | xcmd_packer _ (SETUP_REWRITING (name, for_any, conditions, redex, residue)) =
       packPair (packString, packTuple5 (
           packString,
           packList (packPair (packString, packOption packString)),
           packList (packPair (packOption packString, packString)),
           packString, packString))
         ("SETUP_REWRITING", (name, for_any, conditions, redex, residue))
-  | packer (COMPUTE (name, term)) =
+  | xcmd_packer _ (COMPUTE (name, term)) =
       packPair (packString, packPair (packString, packString)) ("COMPUTE", (name, term))
-  | packer (INTERPRET (qualifier, locale, insts)) =
+  | xcmd_packer _ (INTERPRET (qualifier, locale, insts)) =
       packPair (packString, packTuple3 (
           packString, packString, packList (packPair (packString, packString))))
         ("INTERPRET", (qualifier, locale, insts))
-  | packer (INST_GOAL_VARS pairs) =
+  | xcmd_packer _ (INST_GOAL_VARS pairs) =
       packPair (packString, packList (packPair (packString, packString)))
         ("INST_GOAL_VARS", pairs)
-(* | packer (ROLLBACK data) = packPair (packString, packInt) ("ROLLBACK", data) *)
+  | xcmd_packer thy (USER (name, arg)) =
+      packPair (packString,
+                packPair (packString, #pack_arg (#operation (MiniLang_Agent_Plugin.the_operation thy name))))
+        ("USER", (name, arg))
 
 end
 
-end
+fun instream_of_bytes v =
+  BinIO.StreamIO.mkInstream (BinPrimIO.openVector v, Word8Vector.fromList [])
 
-structure MiniLang_Agent : MINILANG_AGENT = struct
-open MiniLang_Agent
-
-structure ML_BinIO = MiniLang_Agent_Pack(BinIO.StreamIO)
-structure ML_Bytes = MiniLang_Agent_Pack(BytesIO)
-
-val xcmd_packer = ML_BinIO.packer
-val xcmd_unpacker = ML_BinIO.unpacker
-val xcmd_packer_bytes = ML_Bytes.packer
-val xcmd_unpacker_bytes = ML_Bytes.unpacker
-val pack_bindings = ML_BinIO.pack_bindings
-val pack_raw_term = ML_BinIO.pack_raw_term
-val unpack_raw_term = ML_BinIO.unpack_raw_term
-
-(*
-fun serialize cfg_cmds =
-  let val buf = BytesIO.mkOutstream ()
-      open ML_Bytes.MP.Pack
-   in packPair (packString, packList ML_Bytes.packer) cfg_cmds buf
-    ; BytesIO.toString buf
-  end
-
-fun deserialize str =
-  let val buf = BytesIO.fromString str
-      open ML_Bytes.MP.Unpack
-   in unpackPair (unpackString, unpackList ML_Bytes.unpacker) buf
-   |> fst
-  end
-*)
+fun bytes_of_output write =
+  let val chunks = Unsynchronized.ref ([] : Word8Vector.vector list)
+      fun write_vec slice =
+        (chunks := Word8VectorSlice.vector slice :: ! chunks; Word8VectorSlice.length slice)
+      val writer = BinPrimIO.augmentWriter (BinPrimIO.WR {
+            name = "bytes_of_output", chunkSize = 4096,
+            writeVec = SOME write_vec, writeArr = NONE, writeVecNB = NONE, writeArrNB = NONE,
+            block = NONE, canOutput = NONE, getPos = NONE, setPos = NONE, endPos = NONE,
+            verifyPos = NONE, close = I, ioDesc = NONE})
+      val outs = BinIO.StreamIO.mkOutstream (writer, IO.BLOCK_BUF)
+      (*closeOut flushes and drops the stream from Poly/ML's global stream list*)
+      val () = \<^try>\<open>write outs finally BinIO.StreamIO.closeOut outs\<close>
+   in Word8Vector.concat (rev (! chunks)) end
 
 end

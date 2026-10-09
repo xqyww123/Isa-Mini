@@ -5,10 +5,11 @@ from time import time
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO
+from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO, check_name_and_abstractness
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 from . import config
 from .task import Task, UsualTask
+from .edit_schema import BASE_EDIT_SCHEMA
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
 import functools
@@ -59,6 +60,8 @@ def _clean_warning(w: str) -> str:
 def trunc_expr(s: 'str | IsaTerm') -> str:
     return _trunc_expr_base(s.unicode if isinstance(s, IsaTerm) else s, AGENT_EXPR_LIMIT)
 from abc import ABC, abstractmethod
+from types import MappingProxyType
+import jsonschema
 from dataclasses import dataclass, field
 from enum import Enum, auto
 import json
@@ -1026,10 +1029,10 @@ class ArgumentError(AoA_Error):
     def __str__(self) -> str:
         return f"Bad Argument\n{self.reason}"
 class ArgumentError_UnknownProofOperation(ArgumentError):
-    def __init__(self, arg: ToolCall_arg):
+    def __init__(self, arg: ToolCall_arg, operations: 'Iterable[str]'):
         super().__init__(arg,
             f"Unknown proof operation {arg["operation"]}. " +
-            f"Available operations: {list(OPERATION_REGISTRY.keys())}"
+            f"Available operations: {list(operations)}"
         )
 
 class ArgumentError_MissingRequiredKeys(ArgumentError):
@@ -1501,7 +1504,9 @@ class Hint_Notice_Msg(Message):
         self.name = name
         self.text = text
 
-def unpack_message(data) -> Message:
+def unpack_message(data, user_cls: 'type[UserNode] | None') -> Message:
+    """`user_cls`: the node class of the user operation that ran, for a `USER`
+    step; `None` for a built-in step (docs/USER_OPERATIONS.md, section 3)."""
     match data:
         case (0, x):
             return New_Item_Msg.unpack(x)
@@ -1545,6 +1550,10 @@ def unpack_message(data) -> Message:
             return Interpret_Facts_Count_Msg(int(n))
         case (20, (fact_name, method, times_ms)):
             return FACT_PRF_Msg(fact_name, method, times_ms)
+        case (21, x):
+            if user_cls is None:
+                raise InternalError(f"BUG: a message of a user operation arrived for a built-in step: {data}")
+            return user_cls.unpack_own_message(x)
         case _:
             raise Exception(f"BUG bad message kind: {data}")
 
@@ -1632,6 +1641,18 @@ def _gate_rejection(op_name: str, names: 'list[str]') -> str:
         pronoun = "them"
     return (f"The proof goal contains {vars_part}. You must first instantiate "
             f"{pronoun} using InstVarsInGoal before applying {op_name}.")
+
+
+async def _refuse_schematic_goal(state: 'Minilang_State', op_name: str) -> str | None:
+    """The gate of an operation that copies the WHOLE goal sequent into every
+    case it opens (Branch; a SubgoalMaker plugin class): a schematic variable
+    anywhere in the sequent would land in every case body, so any hit refuses.
+    No prerun and no proposition parsing: the criterion reads only the current
+    state."""
+    term_vars, type_vars = await state.schematic_variables_of(whole=True)
+    if not term_vars and not type_vars:
+        return None
+    return _gate_rejection(op_name, [v.unicode for v in (*term_vars, *type_vars)])
 
 
 def _pack_post_insts(insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> list[list[tuple[str, str]]]:
@@ -1999,7 +2020,9 @@ class Minilang_State:
                 raise
             session.on_operation_end(self.name, opr.command, opr.arg,
                 EvaluationStatus.Success(time() - now))
-            msgs = [unpack_message(msg) for msg in msgs]
+            user_cls = (session.operations[opr.arg[0]].cls
+                        if opr.command == "USER" else None)
+            msgs = [unpack_message(msg, user_cls) for msg in msgs]
             (assign_to.leading_goal, assign_to.display_goals_count) = \
                 Minilang_State._unpack_flat_goal(flat_goal)
             assign_to._initialized = True
@@ -4370,6 +4393,12 @@ class Node(ABC):
         subgoals cannot spread a schematic variable across sibling subgoals,
         so the property holds vacuously."""
         return None
+
+    @classmethod
+    def _check_registration(cls, operation: str) -> None:
+        """Run by `@proof_operation` before the class is registered; raises on
+        a violation, which fails the import.  Accepts by default; `UserNode`
+        checks its `construct_schema`."""
 
     @classmethod
     def _validate_arg(cls, arg: Any, path: str) -> Any:
@@ -6888,6 +6917,9 @@ class SubgoalMaker(GoalContainer, StdBlock):
     @abstractmethod
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         ...
+    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
+        # a subgoal maker has no ending operation: NEXT closes each child but the last
+        raise InternalError(f"A {type(self).__name__} doesn't have an ending operation")
     def has_ending_opr(self) -> bool:
         # By default the operation (RULE/BRANCH/INDUCT/CASE_SPLIT/
         # INTRO) transforms the current top goal in place — no new
@@ -7647,6 +7679,121 @@ class CaseSplit_Like(SubgoalMaker):
         self.case_hyps = None
     
 
+### User-defined proof operations (docs/USER_OPERATIONS.md, section 4.1)
+
+def _refs_of(node: Any) -> 'Iterable[str]':
+    """Every `$ref` in a schema, in document order."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            yield ref
+        for v in node.values():
+            yield from _refs_of(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _refs_of(v)
+
+
+class UserNode(Node):
+    """The mixin of a plugin's node class, listed before its base (`Leaf`,
+    `SubgoalMaker` or `StdBlock`).  It sends the base's operation as the `USER`
+    command carrying the class's payload, gates a `SubgoalMaker` as `Branch` is
+    gated, keeps a `Leaf` to one derived subgoal, and asks the class for its
+    schema, its payload and its message decoder."""
+
+    construct_schema: ClassVar[dict]
+    """This operation's `$defs` entry of the `edit` schema (section 5.3):
+    `properties.operation` a const of the name, `thought`, the fields,
+    `description`, `additionalProperties: false`.  A sub-proof field is named
+    `proof` (one) or `proofs` (a list), and no other field, at any depth, is
+    named so: DeepSeek's derived form drops fields by these names (section 4.1)."""
+
+    @abstractmethod
+    def payload(self) -> Any:
+        """The Python value sent as the argument, read by the ML registration's
+        `unpack_arg`; Isabelle text in it already through `ascii_of_unicode`."""
+        ...
+
+    @classmethod
+    def unpack_own_message(cls, value: Any) -> Message:
+        """Decodes a tag-21 message of this operation (section 3)."""
+        raise InternalError(
+            f'User operation "{cls.operation_name()}": its pack_message reported '
+            f'a message its node class does not decode.')
+
+    @classmethod
+    def operation_name(cls) -> str:
+        return OPERATION_REGISTRY_BY_CLS[cls]
+
+    def _user_operation(self) -> Minilang_Operation:
+        return Minilang_Operation("USER", (self.operation_name(), self.payload()))
+
+    def the_operation(self) -> Minilang_Operation:       # a Leaf's
+        return self._user_operation()
+
+    def beginning_opr(self) -> Minilang_Operation:       # a block's
+        return self._user_operation()
+
+    async def can_operate_on_schematic_goal(
+            self, state: 'Minilang_State',
+            opr: 'Minilang_Operation') -> str | None:
+        if isinstance(self, SubgoalMaker):
+            return await _refuse_schematic_goal(state, self.operation_name())
+        return await super().can_operate_on_schematic_goal(state, opr)
+
+    async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
+        failure = await super()._refresh_the_beginning_opr()
+        # A StdBlock that is not a SubgoalMaker takes a `proof` field: its
+        # parsed body, stored in `_proof` by the constructor, is attached at the
+        # first refresh, as Have attaches its own.
+        if failure is None and isinstance(self, StdBlock) and not isinstance(self, SubgoalMaker):
+            failure = await self._attach_proof(auto_intro=False)
+        return failure
+
+    async def _execute_opr(self, from_state: 'Minilang_State',
+                           opr: 'Minilang_Operation',
+                           dest: 'Minilang_State | None') -> None:
+        await super()._execute_opr(from_state, opr, dest)
+        # The one-subgoal rule of a Leaf: a second derived subgoal would have no
+        # NEXT to reach it.
+        if not isinstance(self, Leaf):
+            return
+        # interpret_i reports one Goals for every USER step
+        assert dest is not None and dest.new_subgoals_count is not None
+        if dest.new_subgoals_count > 1:
+            raise IsabelleError([
+                f'User operation "{self.operation_name()}" left {dest.new_subgoals_count} '
+                f'subgoals, but its node class is a Leaf, which may leave at most one; '
+                f'the plugin must make it a SubgoalMaker.'], None)
+
+    @classmethod
+    def _check_registration(cls, operation: str) -> None:
+        def refuse(reason: str) -> None:
+            raise ValueError(f'User operation "{operation}": {reason}')
+        defs = BASE_EDIT_SCHEMA["$defs"]
+        schema = getattr(cls, "construct_schema", None)
+        if not isinstance(schema, dict):
+            refuse("its node class defines no construct_schema dict")
+        try:
+            jsonschema.Draft202012Validator.check_schema(schema)
+        except jsonschema.SchemaError as e:
+            refuse(f"construct_schema is not a valid JSON schema: {e.message}")
+        if schema.get("additionalProperties") is not False:
+            refuse("construct_schema must set additionalProperties to false")
+        op = schema.get("properties", {}).get("operation")
+        if not isinstance(op, dict) or op.get("const") != operation:
+            refuse(f'construct_schema must declare properties.operation as the const "{operation}"')
+        if operation in defs:
+            refuse(f'the name "{operation}" is a definition of the base schema')
+        for ref in _refs_of(schema):
+            name = ref[len("#/$defs/"):] if ref.startswith("#/$defs/") else None
+            if name == "Operation":
+                refuse("construct_schema must not refer to #/$defs/Operation; "
+                       "a sub-proof field refers to Proof or GivenLater")
+            if name is None or name not in defs:
+                refuse(f"construct_schema refers to {ref}, which the base schema does not define")
+
+
 ### Operation registry for tool calls
 
 class OperationMeta(NamedTuple):
@@ -7669,6 +7816,10 @@ def proof_operation(operation: str, toolarg_typed_dict: type[Any]):
     check `remaining is not None` themselves and raise.
     """
     def decorator(cls: type[Any]):
+        # Checked before either registry is written; a violation fails the import.
+        held = OPERATION_REGISTRY.get(operation)
+        check_name_and_abstractness("Proof operation", operation, held.cls if held else None, cls)
+        cls._check_registration(operation)
         OPERATION_REGISTRY[operation] = OperationMeta(toolarg_typed_dict, cls)
         OPERATION_REGISTRY_BY_CLS[cls] = operation
         return cls
@@ -10411,8 +10562,6 @@ class SplitConjs(SubgoalMaker):
         return FailureReason(f"Failed to split conjunctive goal: {'\n'.join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child: Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err: IsabelleError) -> FailureReason:
-        raise InternalError("A SplitConjs doesn't have an ending operation")
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         if len(self.sub_nodes) <= 1:
             return (None, indent-1)
@@ -10695,8 +10844,6 @@ class InferenceRule(SubgoalMaker):
         return FailureReason("\n".join(parts))
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("An InferenceRule doesn't have an ending operation")
     def _title_of_children(self, indent: int) -> tuple[str | None, int]:
         if len(self.sub_nodes) <= 1:
             return (None, indent-1)
@@ -10873,15 +11020,8 @@ class Branch(SubgoalMaker):
     async def can_operate_on_schematic_goal(
             self, state: 'Minilang_State',
             opr: 'Minilang_Operation') -> str | None:
-        # S21: every branch receives a copy of the WHOLE goal sequent, so any
-        # schematic variable anywhere in it lands in every case body — hence
-        # `whole=True`, and any hit refuses. No prerun and no proposition
-        # parsing needed: the criterion reads only the current state.
-        term_vars, type_vars = await state.schematic_variables_of(whole=True)
-        if not term_vars and not type_vars:
-            return None
-        return _gate_rejection("Branch",
-            [v.unicode for v in (*term_vars, *type_vars)])
+        # S21: every branch receives a copy of the WHOLE goal sequent.
+        return await _refuse_schematic_goal(state, "Branch")
 
     def __init__(self, config: NodeConfig, arg: Branch_ToolArg,
                  parsed_cases: 'list[proof | None] | None' = None):
@@ -10935,8 +11075,6 @@ class Branch(SubgoalMaker):
         return FailureReason(f"Fail to anlysis the proof goal by cases because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         for case in self.cases:
             stmt = case["statement"]
@@ -11033,8 +11171,6 @@ class CaseSplit(CaseSplit_Like):
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("A Branch doesn't have an ending operation")
     async def _refresh_the_beginning_opr(self) -> 'FailureReason | None':
         if not self._rule_resolved:
             fail = await self._resolve_rule(
@@ -11319,8 +11455,27 @@ class Induction(CaseSplit_Like):
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
         return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _ending_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        raise InternalError("A Branch doesn't have an ending operation")
+
+def _check_builtins_advertised(builtins: 'Mapping[str, Any]', base_schema: dict) -> None:
+    """The built-in operations and the base schema's `Operation.anyOf` name the
+    same operations, or the import fails, naming the odd ones out."""
+    advertised = {alternative["$ref"].removeprefix("#/$defs/")
+                  for alternative in base_schema["$defs"]["Operation"]["anyOf"]}
+    if set(builtins) != advertised:
+        raise ImportError(
+            "the built-in operations and tools/cc_edit.jsonc disagree; decorated only: "
+            f"{sorted(set(builtins) - advertised)}, advertised only: "
+            f"{sorted(advertised - set(builtins))}")
+
+
+### The built-in operations, frozen here: every @proof_operation above is one,
+### every one below (a plugin's) is a user operation (docs/USER_OPERATIONS.md,
+### section 5.2).  The snapshot keeps the order the classes were registered in,
+### which the agent is shown on an unknown operation; the check keeps it equal,
+### as a set, to the operations tools/cc_edit.jsonc advertises, so a built-in
+### decorated below this line or missing from the schema fails the import.
+BUILTIN_OPERATIONS: 'Mapping[str, OperationMeta]' = MappingProxyType(dict(OPERATION_REGISTRY))
+_check_builtins_advertised(BUILTIN_OPERATIONS, BASE_EDIT_SCHEMA)
 
 ### Top Root
 
@@ -11647,9 +11802,10 @@ def Parse_Nodes(
     operation = data.get("operation")
     if operation is None:
         raise ArgumentError_MissingRequiredKeys(data, path, ["operation"])
-    meta = OPERATION_REGISTRY.get(operation)
+    operations = the_session().operations
+    meta = operations.get(operation)
     if meta is None:
-        raise ArgumentError_UnknownProofOperation(data)
+        raise ArgumentError_UnknownProofOperation(data, operations)
     op_path = f"{path} ({operation})"
     data = validate(meta.toolarg_typed_dict, data, op_path)
     return meta.cls.gen(cast(Any, data), remaining.tail, op_path)
@@ -11854,7 +12010,11 @@ Role = Role_Major | Role_Worker | Role_Interaction
 class Runtime:
     """Global singleton shared across all Sessions operating on the same proof tree.
     Holds counters and limits that must be unique/shared."""
-    def __init__(self):
+    def __init__(self, user_operations: 'Iterable[str]' = ()):
+        """`user_operations`: the names of the call's user operations, in the
+        order ML sent them (name order); each must be held in
+        OPERATION_REGISTRY by a UserNode class (docs/USER_OPERATIONS.md,
+        section 8)."""
         # The RPC Connection this proof tree talks to Isabelle over. One per tree,
         # hence here rather than on Session: planner, workers and interaction forks
         # share this Runtime and must all report over the same connection. Set once
@@ -11909,7 +12069,26 @@ class Runtime:
         # top-level session at construction from the ML-supplied task payload;
         # forks inherit it through this shared runtime singleton. Drives the
         # system prompt and initial-message injection (see Session.task).
-        self.task: Task = UsualTask()
+        self.task: Task = UsualTask("")
+        # The call's operation table (docs/USER_OPERATIONS.md, section 5.2): the
+        # built-in operations, then the call's user operations in the order
+        # given.  Parse_Nodes accepts exactly these, and _tool_schemas_for
+        # builds the call's `edit` schema from them.  One table per Runtime, so
+        # two calls in one host process with different selections do not see
+        # each other's.  OPERATION_REGISTRY itself is only what imports register
+        # into.
+        self.operations: dict[str, OperationMeta] = dict(BUILTIN_OPERATIONS)
+        for name in user_operations:
+            meta = OPERATION_REGISTRY.get(name)
+            if meta is None:
+                raise AoA_Error(
+                    f'User operation "{name}": no imported Python package registers a '
+                    f'node class under this name.')
+            if not issubclass(meta.cls, UserNode):
+                raise AoA_Error(
+                    f'User operation "{name}": its node class {meta.cls.__qualname__} '
+                    f'is not a UserNode.')
+            self.operations[name] = meta
         # Whether the `write_memory` tool exists this run (from the Isabelle
         # `AoA_enable_write_memory` declaration, threaded via the RPC payload).
         # When False, write_memory is dropped from every advertised tool set (so it
@@ -12237,6 +12416,9 @@ class Session:
     @task.setter
     def task(self, v: Task):
         self.runtime.task = v
+    @property
+    def operations(self) -> 'dict[str, OperationMeta]':
+        return self.runtime.operations
     @property
     def enable_write_memory(self) -> bool:
         return self.runtime.enable_write_memory
@@ -14325,7 +14507,8 @@ class SessionConstructor(Protocol):
                  interactive_retrieval: InteractiveRetrievalMode = ...,
                  timeout_seconds: float = ...,
                  max_tool_calls: int = ...,
-                 max_retries: int = ...) -> Session: ...
+                 max_retries: int = ...,
+                 runtime: 'Runtime | None' = ...) -> Session: ...
 
 def agent_driver(name : str):
     """Register a Session constructor (class or factory function) under ``name``."""

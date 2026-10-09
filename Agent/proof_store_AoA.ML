@@ -54,6 +54,12 @@ signature PROOF_STORE_AoA = sig
                       -> Proof.context * thm
                       -> (Phi_Proof_Store.times * string * thm) option
 
+  (* store_hit_replay's per-record step, for a caller holding a record of its
+     own (TAT's proof check): the text evaluated as a method on the goal under
+     replay_limits of the record's std_time; SOME th on success, NONE on
+     Auto_Fail, anything else logged and re-raised.  Reads and writes no store. *)
+  val replay_record : Proof.context * thm -> Phi_Proof_Store.times * string -> thm option
+
 end
 
 structure Proof_Store_AoA : PROOF_STORE_AoA = struct
@@ -107,30 +113,33 @@ fun l1_invalidate key =
 
 end (*local*)
 
-fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
+(* SOME th on success; NONE only on Auto_Fail (eval_prf_str's whole failure
+   vocabulary) — anything else is a bug and must escape.  Capture site
+   (EVENT_LOG_PLAN 7): anything escaping the replay — including a traceless
+   Interrupt_Breakdown record — is logged before it is re-raised unchanged;
+   Auto_Fail is the ordinary miss and is excluded from the record predicate.
+   The region is bounded by the replay_limits applied inside eval_prf_str. *)
+fun replay_record (ctxt, sequent) (std_time, prf_text) =
   let val thy = Proof_Context.theory_of ctxt
       val kws = Keyword.no_major_keywords (Thy_Header.get_keywords thy)
       val n = Thm.nprems_of sequent
-      (* SOME th on success; NONE only on Auto_Fail (eval_prf_str's whole
-         failure vocabulary) — anything else is a bug and must escape.
-         Capture site (EVENT_LOG_PLAN 7): anything escaping the replay —
-         including a traceless Interrupt_Breakdown record — is logged before
-         it is re-raised unchanged; Auto_Fail is the ordinary miss and is
-         excluded from the record predicate.  The region is bounded by the
-         replay_limits applied inside eval_prf_str. *)
-      fun replay (std_time, prf_text) =
-        (case Exn.capture_body (fn () =>
-                Exception_Log.capture
-                  {site = "store replay",
-                   record = fn Phi_Sledgehammer_Solver.Auto_Fail _ => false
-                             | e => Exception_Log.default_record e}
-                  (fn () =>
-                    Phi_Sledgehammer_Solver.eval_prf_str kws n
-                      (Phi_Proof_Store.replay_limits std_time) prf_text (ctxt, sequent)
-                    |> (fn (_, (_, th)) => th))) of
-           Exn.Res th => SOME th
-         | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail _) => NONE
-         | Exn.Exn exn => Exn.reraise exn)
+   in case Exn.capture_body (fn () =>
+            Exception_Log.capture
+              {site = "store replay",
+               record = fn Phi_Sledgehammer_Solver.Auto_Fail _ => false
+                         | e => Exception_Log.default_record e}
+              (fn () =>
+                Phi_Sledgehammer_Solver.eval_prf_str kws n
+                  (Phi_Proof_Store.replay_limits std_time) prf_text (ctxt, sequent)
+                |> (fn (_, (_, th)) => th))) of
+        Exn.Res th => SOME th
+      | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail _) => NONE
+      | Exn.Exn exn => Exn.reraise exn
+  end
+
+fun store_hit_replay {key, hash, write_store} (ctxt, sequent) =
+  let val thy = Proof_Context.theory_of ctxt
+      val replay = replay_record (ctxt, sequent)
       (* `failed` holds the records earlier levels gave up on: one of them met
          again is a failure without another replay. *)
       fun replay_unless failed (s as (std_time, prf_text)) =

@@ -1,0 +1,99 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - assms(1): a = b
+  - assms(2): b = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - b: nat
+goal: a = c
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Apply (rule trans): refused, a schematic variable in two subgoals
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - assms(1): a = b
+  - assms(2): b = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - b: nat
+goal: a = c
+proof:
+  - step id: 1
+    thought: transitivity
+    operation: Apply
+    method: (rule trans)
+    Error: |
+      Fail to apply the method.
+      Apply left the schematic variable ?s in more than one of the subgoals it produced. A schematic variable may be left in at most one subgoal, so this step is rejected.
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  a = c
+committed: 1
+failure: None
+--------------------------------------------------
+Apply (rule trans[of a b c]): two subgoals without schematic variables
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - assms(1): a = b
+  - assms(2): b = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - b: nat
+goal: a = c
+proof:
+  - step id: 1
+    thought: transitivity, instantiated
+    operation: Apply
+    method: (rule trans[of a b c])
+    applied: (rule trans[of a b c])
+    derived subgoals:
+      - goal id: 1.1
+        goal: a = b
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: b = c
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+--------------------------------------------------
+Both proven
+--------------------------------------------------
+variables:
+  - c: nat
+  - a: nat
+premises:
+  - assms(1): a = b
+  - assms(2): b = c
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+variables:
+  - b: nat
+goal: a = c
+proof:
+  - step id: 1
+    thought: transitivity, instantiated
+    operation: Apply
+    method: (rule trans[of a b c])
+    applied: (rule trans[of a b c])
+    derived subgoals:
+      - goal id: 1.1
+        goal: a = b
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: b = c
+        proof:
+          - step id: 1.2.1
+            operation: Obvious

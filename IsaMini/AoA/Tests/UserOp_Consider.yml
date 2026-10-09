@@ -1,0 +1,56 @@
+--------------------------------------------------
+Initial YAML
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP (7 :: nat) ∧ QQ ?y
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+conjI: the schematic variable stays in the second subgoal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP (7 :: nat) ∧ QQ ?y
+proof:
+  - step id: 1
+    thought: split
+    operation: Inference Rule
+    rule:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+    derived subgoals:
+      - goal id: 1.1
+        goal: PP (7 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: QQ ?y
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+--------------------------------------------------
+Consider on the first subgoal: refused at the gate, naming the sibling's variable
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: PP (7 :: nat) ∧ QQ ?y
+proof:
+  - step id: 1
+    thought: split
+    operation: Inference Rule
+    rule:
+      - conjI: ?P ⟶ ?Q ⟶ ?P ∧ ?Q
+    derived subgoals:
+      - goal id: 1.1
+        goal: PP (7 :: nat)
+        proof:
+          - step id: 1.1.1
+            thought: case analysis
+            operation: Consider
+            first: PP 7
+            second: ¬ PP 7
+            Error: The proof goal contains schematic variable ?y. You must first instantiate it using InstVarsInGoal before applying Consider.
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.2` to provide the proof for the following goal.
+        pending proof goal:
+          PP (7 :: nat)
+      - goal id: 1.2
+        goal: QQ ?y
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.1` to provide the proof.
+state landed on target: False
