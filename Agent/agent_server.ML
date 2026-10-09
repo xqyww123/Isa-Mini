@@ -39,8 +39,15 @@ val string_of_cost : agent_cost -> string
 exception Agent_Give_Up of string * string * agent_cost
 
 (* Failure-dispatch banners (PHI_VC_SOLVER D51): one line per give-up reason;
-   consumers render `error (banner_of reason ^ "\n" ^ detail)`. *)
+   method_error renders a give-up as `banner_of reason ^ "\n" ^ detail`. *)
 val banner_of : string -> string
+
+(* The one rendering, for a method, of what an agent run raises: a give-up
+   under its banner; the engine's Internal_Failure by its own message, since
+   it says the PROVER broke, not that the goal is hard, and nothing between a
+   method and Isar renders it; anything else re-raised.  The `aoa` and
+   `hammer_or_aoa` methods and TAT's construct share it. *)
+val method_error : exn -> 'a
 
 (* The Minilang configuration shared by live agent runs and `aoa_replay` (D35).
    Twelve unconditional Config.puts; the conditional
@@ -210,6 +217,11 @@ fun banner_of "refute" =
       "The proof agent stopped for a technical reason:"
   | banner_of reason =
       "The proof agent gave up for an unrecognized reason (" ^ reason ^ "):"
+
+fun method_error (Agent_Give_Up (reason, detail, _)) = error (banner_of reason ^ "\n" ^ detail)
+  | method_error (Phi_Sledgehammer_Solver.Auto_Fail (Phi_Sledgehammer_Solver.Internal_Failure msg)) =
+      error msg
+  | method_error exn = Exn.reraise exn
 
 type driver = string
 val default_driver = "ClaudeCode"
@@ -2129,8 +2141,7 @@ fun method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
                     async_mode = Phi_Sledgehammer_Solver.Sync, task = usual,
                     user_operations = []} (ctxt, sequent)
            |> (fn (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty))
-           handle Agent_Give_Up (reason, detail, _) =>
-             error (banner_of reason ^ "\n" ^ detail)
+           handle give_up as Agent_Give_Up _ => method_error give_up
        end )
 
 
@@ -2279,20 +2290,15 @@ fun hammer_or_aoa_method _ (*using*) (ctxt, sequent) = Seq.make (fn () =>
                            read_store = NONE, write_store = NONE,
                            task = usual, user_operations = []} ctxt sequent) of
        Exn.Res (_, sequent') => SOME (Seq.Result (ctxt, sequent'), Seq.empty)
-     | Exn.Exn (Agent_Give_Up (reason, detail, cost)) =>
-         (tracing (string_of_cost cost);
-          error (banner_of reason ^ "\n" ^ detail))
-       (* The engine's Internal_Failure says the PROVER broke, not that the
-          goal is hard; hammer_or_AoA reraises it on purpose (§2.9) and
-          nothing between here and Isar renders it, so without this arm the
-          method leaks a bare structured exception.  The payload IS the
-          message — the same rendering the engine's own Isar method faces
-          give it.  No agent ran, so no cost line. *)
-     | Exn.Exn (Phi_Sledgehammer_Solver.Auto_Fail
-                  (Phi_Sledgehammer_Solver.Internal_Failure msg)) => error msg
+       (* a give-up gets its cost line; the engine's Internal_Failure, which
+          hammer_or_AoA reraises on purpose (§2.9), none, since no agent ran;
+          anything else is recorded, and method_error re-raises it *)
      | Exn.Exn exn =>
-         (Exception_Log.record_breakdown "hammer_or_aoa_method (arrival at Isar)" exn;
-          Exn.reraise exn)))
+         ((case exn of
+             Agent_Give_Up (_, _, cost) => tracing (string_of_cost cost)
+           | Phi_Sledgehammer_Solver.Auto_Fail (Phi_Sledgehammer_Solver.Internal_Failure _) => ()
+           | _ => Exception_Log.record_breakdown "hammer_or_aoa_method (arrival at Isar)" exn);
+          method_error exn)))
 
 
 (*** Query by name RPC — reuses the AoA query tool's Python core ***)

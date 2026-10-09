@@ -54,10 +54,10 @@ signature PROOF_STORE_AoA = sig
                       -> Proof.context * thm
                       -> (Phi_Proof_Store.times * string * thm) option
 
-  (* store_hit_replay's per-record step, for a caller holding a record of its
-     own (TAT's proof check): the text evaluated as a method on the goal under
-     replay_limits of the record's std_time; SOME th on success, NONE on
-     Auto_Fail, anything else logged and re-raised.  Reads and writes no store. *)
+  (* One stored record replayed on a goal: its text evaluated as a method
+     under replay_limits of the record's std_time; SOME th on success, NONE
+     on Auto_Fail, anything else re-raised.  Reads and writes no store;
+     store_hit_replay's per-record step. *)
   val replay_record : Proof.context * thm -> Phi_Proof_Store.times * string -> thm option
 
 end

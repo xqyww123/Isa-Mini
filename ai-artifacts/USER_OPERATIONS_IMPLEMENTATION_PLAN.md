@@ -511,13 +511,23 @@ hint deleted, the built-ins check inverted, its two lists swapped; ML (REPL
 restart, sources restored byte-for-byte) the decode guard removed, which let
 yxml.ML's Fail escape exactly as the finding traced.
 
-Left: commit (authorised by the owner on 2026-10-09 for after round 3; Isa-Mini own paths plus the TAT session's two riding changes;
-Isabelle_RPC submodule; phi-system `reasoners.ML` only; the main repo's
-`learning.ML` and submodule bumps). The spec's status line is updated at
-commit time. Not mine, not to be staged: `PlainAgent/`,
-`IsaMini/AoA/docs/TACTIC_DESIGN.md`; the `Query*`/`SemanticKNN_*`
+Committed 2026-10-09 (authorised by the owner for after round 3): Isa-Mini
+62f6b89 (own paths plus the TAT session's two riding changes), Isabelle_RPC
+6d09e25, phi-system 23a18343 (`reasoners.ML` only), the main repo d91a7de2
+(`learning.ML` and the three submodule pointers). Not staged, not mine:
+`PlainAgent/`, `IsaMini/AoA/docs/TACTIC_DESIGN.md`, the
+`Performant_Isabelle_ML` pointer; the `Query*`/`SemanticKNN_*`
 `.actual.yml`/`.diff` files under `Tests/` are the environmental golden
 diffs of the earlier regression run, left for the owner.
+
+Follow-up (2026-10-09, the two items TAT's review passed on, both taken on
+the implementer's recommendation and the owner's go-ahead): `method_error`
+in `agent_server.ML`, the one rendering of what an agent run raises (a
+give-up under its banner, the engine's Internal_Failure by its message,
+anything else re-raised), exported for TAT's construct to call in place of
+its copy, used by the `aoa` and `hammer_or_aoa` methods; the signature
+comment of `replay_record` in `proof_store_AoA.ML` says what the function
+does and no longer names its caller.
 
 ## 4. Texts
 
