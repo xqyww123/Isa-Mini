@@ -1,0 +1,66 @@
+--------------------------------------------------
+Tactic simp foo
+--------------------------------------------------
+variables:
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + (0 :: nat) = x
+proof:
+  - step id: 1
+    thought: a bad argument
+    operation: Tactic
+    tactic: simp
+    arguments: foo
+    Error: |
+      Fail to apply the tactic.
+      Bad arguments for method "HOL.simp":
+        foo
+      The current proof goal is:
+        x + (0 :: nat) = x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x + (0 :: nat) = x
+status: FAILURE
+--------------------------------------------------
+Tactic simp ‹junk
+--------------------------------------------------
+variables:
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + (0 :: nat) = x
+proof:
+  - step id: 1
+    thought: an unclosed cartouche
+    operation: Tactic
+    tactic: simp
+    arguments: ‹junk
+    Error: |
+      Fail to apply the tactic.
+      Outer lexical error: unclosed text cartouche at ‹junk
+      The current proof goal is:
+        x + (0 :: nat) = x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x + (0 :: nat) = x
+status: FAILURE
+--------------------------------------------------
+Tactic rule conjI
+--------------------------------------------------
+variables:
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + (0 :: nat) = x
+proof:
+  - step id: 1
+    thought: a rule that does not match
+    operation: Tactic
+    tactic: rule
+    arguments: conjI
+    Error: |
+      Fail to apply the tactic
+      The current proof goal is:
+        x + (0 :: nat) = x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  x + (0 :: nat) = x
+status: FAILURE

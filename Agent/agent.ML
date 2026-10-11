@@ -91,6 +91,12 @@ datatype ('term, 'thm, 'fact) command =
   | USER of string (*the operation's name*)
           * Universal.universal (*its argument, in the type its registration hides;
                                   docs/USER_OPERATIONS.md*)
+  | TACTIC of string                              (*tactic: full method name*)
+           * string                               (*arguments, as written after the name in Isar*)
+           * ('term, 'fact) extended_fact list    (*chained facts (Isar `using`)*)
+           * (string * string) list list          (*post-rule schematic instantiation rounds, as RULE*)
+           * Phi_Proof_Store.times option         (*standard-machine times of the live run;
+                                                    NONE until assembled (docs/TACTIC_DESIGN.md)*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -118,6 +124,11 @@ exception FACT_IN_TIME_FAIL of term
    proof into the op's fact field (stage 3a, D37).  Mirrors Minilang.SH_PRF,
    plus the fact name — one op can carry several FactInTime facts. *)
 exception FACT_PRF of string * string * Phi_Proof_Store.times
+(* Reporter message fired by a TACTIC run that no record caps: the
+   standard-machine times of the method's run.  Python records LIVE's into the
+   op at assembly, so that a REPLAY is capped by embedded_replay_limits
+   (docs/TACTIC_DESIGN.md); nothing reads a REPLAY's. *)
+exception TACTIC_TIMES of Phi_Proof_Store.times
 exception INTRO_BINDINGS of {
     missing: bindings,
     auto_introduced: bindings,
@@ -286,6 +297,12 @@ datatype ('term, 'thm, 'fact) command =
   | USER of string (*the operation's name*)
           * Universal.universal (*its argument, in the type its registration hides;
                                   docs/USER_OPERATIONS.md*)
+  | TACTIC of string                              (*tactic: full method name*)
+           * string                               (*arguments, as written after the name in Isar*)
+           * ('term, 'fact) extended_fact list    (*chained facts (Isar `using`)*)
+           * (string * string) list list          (*post-rule schematic instantiation rounds, as RULE*)
+           * Phi_Proof_Store.times option         (*standard-machine times of the live run;
+                                                    NONE until assembled (docs/TACTIC_DESIGN.md)*)
 
 type xcmd = (string, string, string) command
 type icmd = (term, thm, Facts.ref * Token.src list) command
@@ -428,6 +445,13 @@ fun read_props ctxt ss =
    catch exn => release_par_error exn\<close>
   |> map (Minilang.deconflict_bound_names)
 
+(*The strict lexer of agent-written Isar text (the theory's keywords minus
+  the major ones): the tokens of a method text below, the argument tokens of
+  a TACTIC.  A lexical error is an ERROR ("Outer lexical error: ...").*)
+fun lex_embedded ctxt input =
+  Parse.read_embedded ctxt (Keyword.no_major_keywords (Thy_Header.get_keywords' ctxt))
+    (Scan.many Token.not_eof) input
+
 (*The one reader of method text: a recorded split script, a cached hammer
   proof, a user operation's method argument.  The value comes from the plain
   text; a failure is reported the way read_term reports one -- the text,
@@ -435,8 +459,7 @@ fun read_props ctxt ss =
   only through the four approved texts, never through a text of Isabelle's.*)
 fun read_method_text ctxt text =
   let
-    val keywords = Keyword.no_major_keywords (Thy_Header.get_keywords' ctxt)
-    fun tokens input = Parse.read_embedded ctxt keywords (Scan.many Token.not_eof) input
+    val tokens = lex_embedded ctxt
     val parse = Scan.error (Scan.finite Token.stopper (Parse.!!! (Method.parser 0)))
     (*the text marked where the failure lies: the same text read again
       positioned, a probe whose value is never used (Inner_Syntax_Error), the
@@ -1124,6 +1147,7 @@ fun AUTO_SIMPLIFY
 
 exception FACT_IN_TIME_FAIL of term
 exception FACT_PRF of string * string * Phi_Proof_Store.times
+exception TACTIC_TIMES of Phi_Proof_Store.times
 
 (* Limits for replaying a record embedded in the op stream (HAMMER's
    cached_proof, FactInTime's recorded proof): the proof store's formula with
@@ -1567,6 +1591,37 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
     | RULE (facts, insts) =>
         with_resolved_refs exec_mode s facts (fn s' => fn refs =>
           apply_post_insts insts (Minilang.RULE refs [] s'))
+    | TACTIC (name, args, facts, insts, recorded) =>
+        with_resolved_refs exec_mode s facts (fn s' => fn refs =>
+          let val ctxt = Minilang.context_of s'
+              (* The tokens alone, no method expression: no combinators, no
+                 nested text.  evaluate_runtime (inside APPLY'') resolves the
+                 full name and runs the method's own argument parser, whose
+                 errors reach the agent verbatim. *)
+              val toks = lex_embedded ctxt (Input.string args)
+              val text = Method.Source (Token.make_src (name, Position.none) toks)
+              val timeout = Config.get ctxt Minilang.mini_single_cmd_timeout
+                            |> Time.fromMilliseconds
+              fun run limit () = Minilang.APPLY'' limit refs text s'
+              (* The record caps a REPLAY only; LIVE always runs and measures
+                 anew.  As for HAMMER's cached proof, the limits wrap the whole
+                 operation and APPLY'' gets no timeout of its own: that one is
+                 wall clock only, and it would override the cap's slack.  The
+                 cap fires as an interrupt, passes through Minilang.apply
+                 (whose handler catches only TIMEOUT) and becomes TIMEOUT in
+                 Thread_CPU.apply's own frame, hence the handler here. *)
+              val s'' =
+                case (recorded, exec_mode) of
+                  (SOME times, REPLAY) =>
+                    (Thread_CPU.apply (embedded_replay_limits times) (run NONE) ()
+                     handle Timeout.TIMEOUT _ =>
+                       raise Minilang.OPR_FAIL (Minilang.PROOF_FAIL, "Tactic replay timed out"))
+                | _ =>
+                    let val (time, s'') = Phi_Proof_Store.timing (run (SOME timeout)) ()
+                        val _ = Minilang.get_reporter ()
+                                  (Minilang.Internal (TACTIC_TIMES (Phi_Proof_Store.standard_time time)))
+                    in s'' end
+          in apply_post_insts insts s'' end)
     | CASE_SPLIT (target, vars, rule, no_simp, insts) =>
         apply_post_insts insts
           (Minilang.CASE_SPLIT (no_simp, ([[SOME target]], rule)) vars [] s)
@@ -2104,6 +2159,15 @@ fun check_command_i s (SIMPLIFY (facts_with_targets, use_sys, prems, simp_goal, 
   | check_command_i s (RULE (facts, insts)) =
       let val ctxt = Minilang.context_of s
       in RULE (map (check_extended_fact s ctxt) facts, insts) (*insts: parsed at interpret time*) end
+  | check_command_i s (TACTIC (name, args, facts, insts, recorded)) =
+      (* No whitelist check here: Python checks it at parse time on every
+         driver (Tactic.gen_single), and a REPLAY must accept any recorded
+         TACTIC.  `args` is not hint-scanned: the method's own parser reads
+         it at interpret time, and Isabelle marks a token's Fact/Term value
+         only for some argument forms (`of`, `where`, `rule_tac` read their
+         strings late), so a scan would cover it only in part. *)
+      let val ctxt = Minilang.context_of s
+      in TACTIC (name, args, map (check_extended_fact s ctxt) facts, insts, recorded) end
   | check_command_i s (UNFOLD facts) =
       let val ctxt = Minilang.context_of s
       in UNFOLD (map (check_extended_fact s ctxt) facts) end

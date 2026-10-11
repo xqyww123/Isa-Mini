@@ -3,6 +3,7 @@ from Isabelle_RPC_Host import isabelle_remote_procedure, Connection
 from .model import *
 from .model import interrupts_are_cancellations
 from .task import TASK_REGISTRY
+from Isabelle_Semantic_Embedding.semantics import Semantic_DB
 from . import usage_count
 from typing import Any
 import json
@@ -193,11 +194,14 @@ async def _ensure_semantic_db(connection) -> None:
 async def IsaMini_AoA(data: tuple, connection: Connection):
     (global_context, ptree, driver, log_dir, invocation_id,
      retrieval_forking_str, interactive_retrieval_str, budget_tuple,
-     task_info, enable_write_memory, enable_read_memory,
-     user_operation_names) = data
+     task_info, (enable_write_memory, enable_read_memory),
+     user_operation_names, tactics) = data
     # Task = (name, payload); "usual" and "learning" are the two built-in tasks.
     # user_operation_names: the call's active user operations, in name order
-    # (docs/USER_OPERATIONS.md section 5.2).
+    # (docs/USER_OPERATIONS.md section 5.2).  tactics: the call's tactic
+    # whitelist, (agent-visible name, full name, interpretation, in_prompt,
+    # universal key) in whitelist order (docs/TACTIC_DESIGN.md); the two memory
+    # flags share a slot, the tuple being at mlmsgpack's widest.
     task_name, task_payload = task_info
     # AoA_enable_write_memory (Isabelle declaration): when False, the write_memory
     # tool is dropped from every advertised tool set and memorize is a no-op.
@@ -218,7 +222,7 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
         raise AoA_Error(
             f'User task "{task_name}": no imported Python package registers a task class '
             f'under this name.')
-    runtime = Runtime(user_operation_names)
+    runtime = Runtime(user_operation_names, tactics)
     runtime.task = task_cls(task_payload)
 
     # Environment variable AoA_LOG_DIR overrides user-provided log_dir
@@ -253,6 +257,14 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     # network.  Skipped under the test driver: snapshot tests must stay silent.
     if not is_test_driver:
         await _ensure_semantic_db(connection)
+    # The tactic whitelist's interpretations go into the Semantic DB
+    # (docs/TACTIC_DESIGN.md): its own step, after the empty-DB hint above has
+    # read the DB and before the split by driver; NOT best-effort -- a failure
+    # here is the call's failure, as the DB or the code is broken.  Nothing is
+    # touched when the whitelist is empty.
+    for entry in runtime.tactics.values():
+        Semantic_DB.declare_interpretation(entry.key, entry.interpretation)
+    if not is_test_driver:
         # The interpretation policy shell: at most ONE startup check per
         # `by aoa` (none once the user has declined it for the session) --
         # gate, dry run over this proof's context (an

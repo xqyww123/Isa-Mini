@@ -1,0 +1,14 @@
+--------------------------------------------------
+After simp
+--------------------------------------------------
+variables:
+  - x: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + (0 :: nat) = x
+proof:
+  - step id: 1
+    thought: simp closes it
+    operation: Tactic
+    tactic: simp
+derived-subgoal preruns: 0
+Unfinished nodes: 0

@@ -17,9 +17,12 @@ structure User_Operation_Test = struct
 fun assert msg b = if b then () else error msg
 
 (*the message of an exception: a remote failure's own text (exn_message would
-  escape its quotes), any other's rendering*)
+  escape its quotes), any other's rendering with its markup stripped (under
+  PIDE a quoted name may carry markup, invisible in the REPL's output); a
+  message that is no YXML at all -- a text whose own symbols break it -- is
+  kept as it is, which is what clean_output does*)
 fun message_of (Remote_Procedure_Calling.Remote_Calling_Failure {message, ...}) = message
-  | message_of exn = Runtime.exn_message exn
+  | message_of exn = Protocol_Message.clean_output (Runtime.exn_message exn)
 
 (*the message of the exception f raises (an interrupt is not one)*)
 fun failure_of f =

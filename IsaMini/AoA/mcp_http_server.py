@@ -36,8 +36,9 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
 
 from Isabelle_RPC_Host import pretty_unicode
+from Isabelle_RPC_Host.universal_key import EntityKind
 from .model import (
-    UserNode, OperationMeta,
+    Runtime, BUILTIN_OPERATIONS,
     bind_session_context, Session, Node, NonLeaf_Node, StdBlock,
     Root, GlobalEnv, GoalNode,
     Resolved_Node, Resolved_Slot,
@@ -78,6 +79,8 @@ from .retrieval import (
     _query_tool_logic,
     _cc_query_schema,
     _cc_query_schema_no_experience,
+    _with_enum_value,
+    PROOF_TACTIC_LABEL,
 )
 from . import prompts as P
 from . import config
@@ -2121,16 +2124,19 @@ _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
     k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
 
 
-def _edit_schema_for(operations: 'dict[str, OperationMeta]') -> dict:
-    """The `edit` schema of a call: the base with every user operation's
-    `construct_schema` placed under `$defs/<name>` and a `$ref` to it appended
-    to `$defs/Operation.anyOf`, after the built-ins in the order
-    `tools/cc_edit.jsonc` lists them and in the table's order among themselves,
-    which is name order (docs/USER_OPERATIONS.md, section 5.3)."""
+def _edit_schema_for(runtime: Runtime) -> dict:
+    """The `edit` schema of a call: the base with the `schema_for_call` entry
+    of every operation of the call's table that is not a built-in -- Tactic
+    when the whitelist is non-empty (docs/TACTIC_DESIGN.md), then the user
+    operations -- placed under `$defs/<name>` and a `$ref` to it appended to
+    `$defs/Operation.anyOf`, after the built-ins in the order
+    `tools/cc_edit.jsonc` lists them and in the table's order among
+    themselves, which is name order for the user operations
+    (docs/USER_OPERATIONS.md, section 5.3)."""
     schema = copy.deepcopy(BASE_EDIT_SCHEMA)
-    for name, meta in operations.items():
-        if issubclass(meta.cls, UserNode):
-            schema["$defs"][name] = copy.deepcopy(meta.cls.construct_schema)
+    for name, meta in runtime.operations.items():
+        if name not in BUILTIN_OPERATIONS:
+            schema["$defs"][name] = meta.cls.schema_for_call(runtime)
             schema["$defs"]["Operation"]["anyOf"].append({"$ref": f"#/$defs/{name}"})
     return schema
 
@@ -2153,9 +2159,15 @@ def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
         base = {k: v for k, v in base.items() if k != TOOL_WRITE_MEMORY}
     if not session.enable_read_memory:
         base = {**base, TOOL_SEARCH: {**base[TOOL_SEARCH], "schema": _cc_query_schema_no_experience}}
+    # The "proof tactic" kind of `query`, iff the call's tactic whitelist has
+    # `query` entries (docs/TACTIC_DESIGN.md): the prompt entries' interpretations
+    # are already in the prompt, so a whitelist of those alone offers no kind.
+    if any(not entry.in_prompt for entry in session.runtime.tactics.values()):
+        base = {**base, TOOL_SEARCH: {**base[TOOL_SEARCH], "schema": _with_enum_value(
+            base[TOOL_SEARCH]["schema"], EntityKind.THEOREM.label, PROOF_TACTIC_LABEL)}}
     # The call's `edit` schema, from its operation table: the advertised schema
     # and Parse_Nodes read the same table, so they cannot disagree.
-    base = {**base, TOOL_EDIT: {**base[TOOL_EDIT], "schema": _edit_schema_for(session.operations)}}
+    base = {**base, TOOL_EDIT: {**base[TOOL_EDIT], "schema": _edit_schema_for(session.runtime)}}
     # Apply the driver's per-tool schema rewrite (default identity), a pure
     # function of the call's schema: a driver whose model/client needs another
     # form overrides `transform_tool_schema` (see Codex_Driver.transform_tool_schema).

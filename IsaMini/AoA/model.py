@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import re
 from time import time
 from datetime import datetime
@@ -21,7 +22,7 @@ from Isabelle_RPC_Host.universal_key import (
 )
 from Isabelle_Semantic_Embedding.semantics import (
     Semantic_Vector_Store, SemanticRecord, trunc_expr as _trunc_expr_base,
-    apply_live_name, apply_live_name_if_member)
+    apply_live_name, apply_live_name_if_member, normalize_interpretation)
 
 # Max number of members shown when an exact_name lookup hits a multi-theorem
 # fact (a bundle); any beyond this are summarised with a "use foo(k)…" note.
@@ -1493,6 +1494,14 @@ class FACT_PRF_Msg(Message):
         self.method = method
         self.times_ms = times_ms
 
+class Tactic_Times_Msg(Message):
+    """The (thread CPU ms, wall ms) of a LIVE Tactic's run, standard-machine
+    time as the ML side measures it.  `Tactic.assembled_beginning_opr` packs
+    the last one into the op, which caps its replay (docs/TACTIC_DESIGN.md)."""
+    def __init__(self, times_ms: tuple[int, int]):
+        super().__init__()
+        self.times_ms = times_ms
+
 class Hint_Notice_Msg(Message):
     """Agent Hint Registry NOTICE: the operation used a registered constant/fact
     that has a soft hint. `name` is the registered (fully-qualified) name — the
@@ -1550,6 +1559,8 @@ def unpack_message(data, user_cls: 'type[UserNode] | None') -> Message:
             return Interpret_Facts_Count_Msg(int(n))
         case (20, (fact_name, method, times_ms)):
             return FACT_PRF_Msg(fact_name, method, times_ms)
+        case (22, (cpu_ms, wall_ms)):
+            return Tactic_Times_Msg((cpu_ms, wall_ms))
         case (21, x):
             if user_cls is None:
                 raise InternalError(f"BUG: a message of a user operation arrived for a built-in step: {data}")
@@ -1775,6 +1786,16 @@ class Minilang_Operation(NamedTuple):
     def HAMMER(fact_refs: 'list[IsabelleFact]', timeout: int = 20,
                cached_proof: 'tuple[str, tuple[int, int]] | None' = None) -> 'Minilang_Operation':
         return Minilang_Operation("HAMMER", ([r.pack() for r in fact_refs], timeout, cached_proof))
+    @staticmethod
+    def TACTIC(tactic_full: str, arguments: str, fact_refs: 'list[IsabelleFact]',
+               insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None,
+               recorded_times: 'tuple[int, int] | None' = None) -> 'Minilang_Operation':
+        """`tactic_full` is the method's full name (the whitelist's, never the
+        agent-visible one); `recorded_times` is None on a live op and the live
+        run's (cpu_ms, wall_ms) once assembled (docs/TACTIC_DESIGN.md)."""
+        return Minilang_Operation("TACTIC", (
+            tactic_full, ascii_of_unicode(arguments), [r.pack() for r in fact_refs],
+            _pack_post_insts(insts), recorded_times))
     @staticmethod
     def CHAINING(name: xname, fact_refs: 'list[IsabelleFact]') -> 'Minilang_Operation':
         # The ML side turns `name` into a real binding (Binding.name), so an
@@ -2212,6 +2233,14 @@ class Minilang_State:
             if not kinds:
                 return [], [], 0
 
+        # The tactic whitelist (docs/TACTIC_DESIGN.md): the METHOD candidates of
+        # a ranked or pattern query are its `query` entries and nothing else
+        # (the method enumeration of an AoA call is empty); exact_name looks
+        # the whole whitelist up; and a whitelisted method is shown with its
+        # declared interpretation, whatever the DB record says.
+        tactics = the_session().runtime.tactics if EntityKind.METHOD in kinds else {}
+        tactics_by_full = the_session().runtime.tactics_by_full if tactics else {}
+
         # Exact name lookup — bypass all search criteria
         # scored_recs elements are (score, rec, override) in ALL branches below:
         # override is None except for abbreviation constants hit by exact_name,
@@ -2230,6 +2259,14 @@ class Minilang_State:
             # truncation note. None when no bundle resolved.
             bundle_N: int | None = None
             for tag in kinds:
+                if tag == EntityKind.METHOD:
+                    # the whole whitelist, by agent-visible name or full name,
+                    # the agent's spelling read as every name is; no DB read
+                    wanted = ascii_of_unicode(exact_name)
+                    entry = tactics.get(wanted) or tactics_by_full.get(wanted)
+                    if entry is not None:
+                        scored_recs.append((1.0, SemanticRecord(tag, entry.full, None, None), None))
+                    continue
                 if tag in THM_RULE_KINDS:
                     # A fact name may bind several theorems (`foo`, members
                     # `foo(1)/foo(2)`). Expand to its members (up to the cap)
@@ -2324,17 +2361,28 @@ class Minilang_State:
             term_patterns = [ascii_of_unicode(p) for p in term_patterns]
             type_patterns = [ascii_of_unicode(p) for p in type_patterns]
             target_type = ascii_of_unicode(target_type)
+            # The whitelist's `query` entries a query may list: name_contains
+            # applies to them as the ML enumeration applies it to every other
+            # kind (each pattern a case-insensitive substring of the full name);
+            # the term/type patterns and theories_include do not.
+            name_pats = [ascii_of_unicode(p).lower() for p in name_contains]
+            query_entries = [entry for entry in tactics.values() if not entry.in_prompt
+                             and all(p in entry.full.lower() for p in name_pats)]
             # Build domain
+            extra: list[Semantic_Vector_Store.ExtraKey] = []
             if EntityKind.THEOREM in kinds:
                 local_entries: list[tuple] = await self.connection.callback(
                     "IsaMini.contextual_thms", self.name)
                 # contextual_thms are the proof-context-local lemmas → tag them
                 # is_local=True so any no-embedding ones get the local default score.
-                domain: Semantic_Vector_Store.Domain = Semantic_Vector_Store.ContextExtended(
-                    [Semantic_Vector_Store.ExtraKey(key=bytes(k_), name=name, is_local=True)
-                     for k_, name in local_entries])
-            else:
-                domain = Semantic_Vector_Store.ContextAll
+                extra += [Semantic_Vector_Store.ExtraKey(key=bytes(k_), name=name, is_local=True)
+                          for k_, name in local_entries]
+            # the query entries, ranked by their declared interpretations
+            extra += [Semantic_Vector_Store.ExtraKey(key=entry.key, name=entry.full)
+                      for entry in query_entries]
+            domain: Semantic_Vector_Store.Domain = (
+                Semantic_Vector_Store.ContextExtended(extra)
+                if extra or EntityKind.THEOREM in kinds else Semantic_Vector_Store.ContextAll)
             store: Semantic_Vector_Store = await self.connection.semantic_vector_store()  # type: ignore
             # AoA never interprets at query time: the check belongs to the
             # by-aoa startup sweep (update_interpretations in toplevel.py; none
@@ -2407,6 +2455,15 @@ class Minilang_State:
                             scored_recs.append((hr, rec, None))
                     scored_recs.sort(key=lambda x: x[0], reverse=True)
                     scored_recs = scored_recs[:k_fetch]
+                # The query entries, in whitelist order and FIRST, so that the k
+                # cap below cannot remove them (the agent cannot reach them by
+                # reordering `kinds`, as it can with every other kind); no
+                # record is read for them.
+                tactic_recs = [(store.emb_provider.default_score,
+                                SemanticRecord(EntityKind.METHOD, entry.full, None, None), None)
+                               for entry in query_entries]
+                scored_recs = tactic_recs + scored_recs
+                total += len(tactic_recs)
         if not scored_recs:
             return [], warnings, total
         # Resolve entities via RPC — but NOT experiences, which are not Isabelle
@@ -2467,6 +2524,8 @@ class Minilang_State:
                     experience=rec.experience))
                 continue
             heading, interp = override if override is not None else (None, rec.interpretation)
+            if rec.kind == EntityKind.METHOD and rec.name in tactics_by_full:
+                interp = tactics_by_full[rec.name].interpretation   # the declared text, never the DB's
             out.append(self._make_retrieved_entity(
                 rec.kind, rec.name, info_by_idx[i], score,
                 ' '.join(interp.split()) if interp else None,
@@ -4374,8 +4433,9 @@ class Node(ABC):
         """Chokepoint for executing this node's own operation, taking an
         explicit `from_state` (the four call sites execute from two different
         receivers). The base is a plain execute; `SubgoalMaker` overrides it to
-        detect residual schematic variables after RULE/CaseSplit/Induction and
-        prompt the agent to instantiate them before the op is committed."""
+        detect residual schematic variables after an op whose class sets
+        `_probes_post_insts` and prompt the agent to instantiate them before
+        the op is committed."""
         await from_state.execute(opr, dest)
 
     async def can_operate_on_schematic_goal(
@@ -4398,7 +4458,15 @@ class Node(ABC):
     def _check_registration(cls, operation: str) -> None:
         """Run by `@proof_operation` before the class is registered; raises on
         a violation, which fails the import.  Accepts by default; `UserNode`
-        checks its `construct_schema`."""
+        and `Tactic` check their `construct_schema`."""
+
+    @classmethod
+    def schema_for_call(cls, runtime: 'Runtime') -> dict:
+        """This operation's `$defs` entry of a call's `edit` schema: a copy of
+        its `construct_schema`.  Asked only of the operations outside the base
+        schema -- a plugin's and Tactic, which all carry that attribute; Tactic
+        fills its enum from the call's whitelist (docs/TACTIC_DESIGN.md)."""
+        return copy.deepcopy(cls.construct_schema)  # type: ignore[attr-defined]
 
     @classmethod
     def _validate_arg(cls, arg: Any, path: str) -> Any:
@@ -5925,10 +5993,15 @@ class StdBlock(NonLeaf_Node):
         return self._state_after_beginning()
     def goal(self) -> 'Goal | None':
         return self._state_after_beginning().leading_goal
+    def assembled_beginning_opr(self) -> 'Minilang_Operation | FailureReason | None':
+        """The beginning op as `assemble` packs it: `beginning_opr()`, unless
+        the subclass adds what only the final stream carries (Tactic adds the
+        live run's times, which cap its replay)."""
+        return self.beginning_opr()
     def assemble(self, output: list[Minilang_Operation] | None = None) -> list[Minilang_Operation]:
         if output is None:
             output = []
-        opr = self.beginning_opr()
+        opr = self.assembled_beginning_opr()
         if isinstance(opr, FailureReason):
             raise InternalError(f"Cannot assemble a node with failed beginning operation: {opr.reason}")
         if opr is not None:
@@ -6722,15 +6795,18 @@ PREFIX_OLD = "old-"
 CASE_EXISTING = "the-existing-proof"
 
 
-# Operations whose result may carry residual schematic variables that the
-# post-rule instantiation probe must eliminate.
-_POST_INST_COMMANDS = frozenset({"RULE", "CASE_SPLIT", "INDUCT"})
 # Backstop on the post-instantiation fixpoint loop (real need is 1-3 rounds;
 # generous so cross-round type dependencies converge, not a shrink measure).
 _MAX_POST_INST_ROUNDS = 16
 
 class SubgoalMaker(GoalContainer, StdBlock):
     _can_host_inherited_children = False
+    # Whether this node's beginning op may leave residual schematic variables
+    # that the post-rule instantiation probe (`_execute_opr`) must eliminate:
+    # True on Tactic_Like and CaseSplit_Like; False on UserNode, which a plugin
+    # class lists first, so a USER command (it carries no instantiation
+    # rounds) never probes, whichever base the class picks.
+    _probes_post_insts: ClassVar[bool] = False
     def _nearest_goal_for_subagent(self) -> 'Node | None':
         # A subgoal-maker's subgoals aren't independently delegatable; redirect up
         # to the enclosing goal (overriding GoalContainer's None).
@@ -6748,13 +6824,13 @@ class SubgoalMaker(GoalContainer, StdBlock):
         self._opened_closing_block: bool = False
         self._opened_count: int = 0
         self._supplied_proofs: 'dict[str, proof_with_case_vars] | None' = None
-        # Post-rule schematic instantiation (RULE/CaseSplit/Induction only).
-        # `None` = not yet probed; otherwise the ordered list of instantiation
-        # rounds (each a list of (var-name, value) pairs) baked into the op so
-        # that no schematic variable is shared by ≥2 derived subgoals (a
-        # variable confined to one subgoal may remain), and the op replays
-        # from cache. Reset on upstream change (see _on_upstream_change). For
-        # non-rule subgoal makers it stays None and is never read.
+        # Post-rule schematic instantiation, used when `_probes_post_insts` is
+        # True.  `None` = not yet probed; otherwise the ordered list of
+        # instantiation rounds (each a list of (var-name, value) pairs) baked
+        # into the op so that no schematic variable is shared by ≥2 derived
+        # subgoals (a variable confined to one subgoal may remain), and the op
+        # replays from cache. Reset on upstream change (see _on_upstream_change).
+        # When `_probes_post_insts` is False it stays None and is never read.
         self._post_insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None
 
     def _on_upstream_change(self) -> None:
@@ -6806,7 +6882,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
     async def _execute_opr(self, from_state: 'Minilang_State',
                            opr: 'Minilang_Operation',
                            dest: 'Minilang_State | None') -> None:
-        if opr.command in _POST_INST_COMMANDS and self._post_insts is None:
+        if self._probes_post_insts and self._post_insts is None:
             rounds: 'list[list[tuple[str, xterm | xtyp]]]' = []
             for _ in range(_MAX_POST_INST_ROUNDS):
                 scratch_op = self._beginning_opr_with_insts(rounds)
@@ -7262,6 +7338,7 @@ class SubgoalMaker(GoalContainer, StdBlock):
 
 
 class CaseSplit_Like(SubgoalMaker):
+    _probes_post_insts: ClassVar[bool] = True
     # Subclass-specific "kind" label — overridden on CaseSplit / Induction.
     # Used by `_rematch` when building `Interaction_MapCase`.  Named
     # `_case_kind` (not `_kind`) to avoid shadowing Node's instance-level
@@ -7694,12 +7771,45 @@ def _refs_of(node: Any) -> 'Iterable[str]':
             yield from _refs_of(v)
 
 
+def _check_construct_schema(what: str, operation: str, schema: Any) -> None:
+    """The checks on an operation's `construct_schema` (docs/USER_OPERATIONS.md,
+    section 5.3), the same for a plugin's class and for Tactic; `what` names
+    the operation in a refusal ('User operation "Foo"')."""
+    def refuse(reason: str) -> None:
+        raise ValueError(f'{what}: {reason}')
+    defs = BASE_EDIT_SCHEMA["$defs"]
+    if not isinstance(schema, dict):
+        refuse("its node class defines no construct_schema dict")
+    try:
+        jsonschema.Draft202012Validator.check_schema(schema)
+    except jsonschema.SchemaError as e:
+        refuse(f"construct_schema is not a valid JSON schema: {e.message}")
+    if schema.get("additionalProperties") is not False:
+        refuse("construct_schema must set additionalProperties to false")
+    op = schema.get("properties", {}).get("operation")
+    if not isinstance(op, dict) or op.get("const") != operation:
+        refuse(f'construct_schema must declare properties.operation as the const "{operation}"')
+    if operation in defs:
+        refuse(f'the name "{operation}" is a definition of the base schema')
+    for ref in _refs_of(schema):
+        name = ref[len("#/$defs/"):] if ref.startswith("#/$defs/") else None
+        if name == "Operation":
+            refuse("construct_schema must not refer to #/$defs/Operation; "
+                   "a sub-proof field refers to Proof or GivenLater")
+        if name is None or name not in defs:
+            refuse(f"construct_schema refers to {ref}, which the base schema does not define")
+
+
 class UserNode(Node):
     """The mixin of a plugin's node class, listed before its base (`Leaf`,
     `SubgoalMaker` or `StdBlock`).  It sends the base's operation as the `USER`
     command carrying the class's payload, gates a `SubgoalMaker` as `Branch` is
     gated, keeps a `Leaf` to one derived subgoal, and asks the class for its
     schema, its payload and its message decoder."""
+
+    # A USER command carries no instantiation rounds, so a plugin class never
+    # runs the post-instantiation probe, whichever base it lists after this mixin.
+    _probes_post_insts: ClassVar[bool] = False
 
     construct_schema: ClassVar[dict]
     """This operation's `$defs` entry of the `edit` schema (section 5.3):
@@ -7768,30 +7878,8 @@ class UserNode(Node):
 
     @classmethod
     def _check_registration(cls, operation: str) -> None:
-        def refuse(reason: str) -> None:
-            raise ValueError(f'User operation "{operation}": {reason}')
-        defs = BASE_EDIT_SCHEMA["$defs"]
-        schema = getattr(cls, "construct_schema", None)
-        if not isinstance(schema, dict):
-            refuse("its node class defines no construct_schema dict")
-        try:
-            jsonschema.Draft202012Validator.check_schema(schema)
-        except jsonschema.SchemaError as e:
-            refuse(f"construct_schema is not a valid JSON schema: {e.message}")
-        if schema.get("additionalProperties") is not False:
-            refuse("construct_schema must set additionalProperties to false")
-        op = schema.get("properties", {}).get("operation")
-        if not isinstance(op, dict) or op.get("const") != operation:
-            refuse(f'construct_schema must declare properties.operation as the const "{operation}"')
-        if operation in defs:
-            refuse(f'the name "{operation}" is a definition of the base schema')
-        for ref in _refs_of(schema):
-            name = ref[len("#/$defs/"):] if ref.startswith("#/$defs/") else None
-            if name == "Operation":
-                refuse("construct_schema must not refer to #/$defs/Operation; "
-                       "a sub-proof field refers to Proof or GivenLater")
-            if name is None or name not in defs:
-                refuse(f"construct_schema refers to {ref}, which the base schema does not define")
+        _check_construct_schema(f'User operation "{operation}"', operation,
+                                getattr(cls, "construct_schema", None))
 
 
 ### Operation registry for tool calls
@@ -8097,6 +8185,30 @@ def _filter_unfound(facts: list[IsabelleFact]) -> tuple[list[IsabelleFact], list
             kept.append(f)
     return kept, warnings
 
+def _print_facts(header: str, refs: 'list[IsabelleFact] | None', raw: 'Sequence[Fact]',
+                 indent: int, file: MyIO) -> None:
+    """The fact block of a node's full print: `header`, then the resolved facts
+    -- or the raw ones while unresolved; nothing when there is none."""
+    if refs is not None:
+        if refs:
+            print_indent(indent, file)
+            file.write(f"{header}\n")
+            for ref in refs:
+                ref.print(indent + 1, file)
+    elif raw:
+        print_indent(indent, file)
+        file.write(f"{header}\n")
+        for ref in raw:
+            _print_raw_fact(ref, indent + 1, file)
+
+def _unfound_failure(facts: 'Sequence[IsabelleFact]') -> 'FailureReason | None':
+    """The failure of an operation whose facts must all resolve: one line per
+    fact not found, or None when every fact resolved."""
+    unfound = [f for f in facts if isinstance(f, IsabelleFact_Unfound)]
+    if not unfound:
+        return None
+    return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+
 def _binds_no_theorem(facts: 'list[IsabelleFact]') -> bool:
     """True iff every fact here resolved but binds zero theorems.
 
@@ -8255,17 +8367,7 @@ class Obvious(Leaf):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
         file.write(f"operation: Obvious\n")
-        if self.fact_refs is not None:
-            if self.fact_refs:
-                print_indent(indent, file)
-                file.write(f"with facts:\n")
-                for ref in self.fact_refs:
-                    ref.print(indent+1, file)
-        elif self._raw_facts:
-            print_indent(indent, file)
-            file.write(f"with facts:\n")
-            for ref in self._raw_facts:
-                _print_raw_fact(ref, indent+1, file)
+        _print_facts("with facts:", self.fact_refs, self._raw_facts, indent, file)
         self._print_evaluation_status(indent, file)
         self._print_subagent_hint(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER, Warning.Position.FOOTER])
@@ -8410,17 +8512,7 @@ class Chaining(Leaf):
         indent = super().print(indent, file, update_line, show_warnings=show_warnings)
         print_indent(indent, file)
         file.write("operation: Chaining\n")
-        if self.fact_refs is not None:
-            if self.fact_refs:
-                print_indent(indent, file)
-                file.write("from:\n")
-                for ref in self.fact_refs:
-                    ref.print(indent + 1, file)
-        elif self._raw_facts:
-            print_indent(indent, file)
-            file.write("from:\n")
-            for ref in self._raw_facts:
-                _print_raw_fact(ref, indent + 1, file)
+        _print_facts("from:", self.fact_refs, self._raw_facts, indent, file)
         if self.result_facts is not None:
             print_indent(indent, file)
             file.write("resulting:\n")
@@ -8461,9 +8553,9 @@ class Chaining(Leaf):
         if not self._raw_facts:
             return FailureReason("Chaining requires at least one fact")
         facts = self.fact_refs if self.fact_refs is not None else []
-        unfound = [f for f in facts if isinstance(f, IsabelleFact_Unfound)]
-        if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        failure = _unfound_failure(facts)
+        if failure is not None:
+            return failure
         return Minilang_Operation.CHAINING(self.chain_name, facts)
 
     def _on_edit_failure(self, outcome: 'EditOutcome') -> 'tuple[EditFailureBehavior, EditOutcome]':
@@ -9086,9 +9178,9 @@ class Unfold(Leaf):
             return FailureReason("Unfold operation must specify at least one target.")
         if not self.fact_refs:
             return FailureReason(f"No definitions found for: {', '.join(self.targets)}")
-        unfound = [f for f in self.fact_refs if isinstance(f, IsabelleFact_Unfound)]
-        if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        failure = _unfound_failure(self.fact_refs)
+        if failure is not None:
+            return failure
         if _binds_no_theorem(self.fact_refs):
             # Names resolved, but every one binds zero theorems: UNFOLD would be
             # a silent no-op, so reuse the same message as having no refs at all.
@@ -9175,17 +9267,7 @@ class Derive(Leaf):
             for inst in self.instantiations:
                 print_indent(indent+1, file)
                 file.write(f"- {inst['name']} = {inst['value']}\n")
-        if self.discharge_refs is not None:
-            if self.discharge_refs:
-                print_indent(indent, file)
-                file.write("discharging facts:\n")
-                for ref in self.discharge_refs:
-                    ref.print(indent+1, file)
-        elif self.discharging_facts:
-            print_indent(indent, file)
-            file.write("discharging facts:\n")
-            for ref in self.discharging_facts:
-                _print_raw_fact(ref, indent+1, file)
+        _print_facts("discharging facts:", self.discharge_refs, self.discharging_facts, indent, file)
         if self.result_facts is not None:
             print_indent(indent, file)
             file.write("resulting facts:\n")
@@ -9232,9 +9314,9 @@ class Derive(Leaf):
         if _binds_no_theorem([self.rule_ref]):
             return FailureReason(
                 f"Rule \"{self.rule_ref.name().unicode}\" binds no theorem here. It's empty.")
-        unfound = [f for f in self.discharge_refs if isinstance(f, IsabelleFact_Unfound)]
-        if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        failure = _unfound_failure(self.discharge_refs)
+        if failure is not None:
+            return failure
         return Minilang_Operation.SPECIALIZE(
             self.result_name,
             self.rule_ref,
@@ -9538,9 +9620,9 @@ class Rewrite(Leaf):
                 "Rewrite operation must target at least one of: the goal or some premises. "
                 "Set 'rewrite goal' to true or provide at least one premise name in 'rewrite premises'.")
         using = self.using if self.using is not None else []
-        unfound = [f for f in using if isinstance(f, IsabelleFact_Unfound)]
-        if unfound:
-            return FailureReason("\n".join(f"Fact \"{f.name().unicode}\" not found" for f in unfound))
+        failure = _unfound_failure(using)
+        if failure is not None:
+            return failure
         bindings = None
         if self.bindings is not None:
             var_bindings = [(vb.internal_varname.ascii, vb.external_varname.ascii, vb.type.ascii) for vb in self.bindings[0]]
@@ -10648,34 +10730,55 @@ class InstVarsInGoal(Leaf):
 
 #### InferenceRule
 
-class InferenceRule_ToolArg(TypedDict):
-    thought: NotRequired[str]
-    rule: FactByName | FactByDescription | None
-    proofs: NotRequired[list[raw_proof] | None]
-    # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
+class Tactic_Like(SubgoalMaker):
+    """A subgoal maker whose derived subgoals all stay in the final state of the
+    current frame (the single-frame shape of `derived_subgoals_of`):
+    InferenceRule and Tactic.  Hence the post-instantiation probe may read the
+    prerun's final state and ask only for the variables shared by two or more
+    derived subgoals; the block-opening shape (CaseSplit_Like) cannot, its Goals
+    message being emitted before the instantiation rounds apply.  Takes the
+    ToolArg's positional `proofs`, one body per derived subgoal."""
+    _probes_post_insts: ClassVar[bool] = True
+    # The header of a failure the ML side did not head with its own
+    # "Fail to apply ..." line.
+    _fail_header: ClassVar[str]
 
-@proof_operation("InferenceRule", InferenceRule_ToolArg)
-class InferenceRule(SubgoalMaker):
+    def __init__(self, config: NodeConfig, thought: str,
+                 parsed_proofs: 'list[proof] | None' = None):
+        super().__init__(config, thought, [])
+        self._prev_quickview_derived_goal: term | None = None
+        if parsed_proofs is not None:
+            self._supplied_proofs = {
+                str(i + self._initial_goal_index): (None, p)
+                for i, p in enumerate(parsed_proofs)
+            }
+
     async def can_operate_on_schematic_goal(
             self, state: 'Minilang_State',
             opr: 'Minilang_Operation') -> str | None:
-        # Allowed (S3): InferenceRule owns an instantiation mechanism — the
-        # post-rule probe in SubgoalMaker._execute_opr interacts on any
-        # variable shared by ≥2 derived subgoals. Its violating variables may
-        # be introduced by the rule itself, so they cannot be computed before
-        # execution anyway — the check necessarily runs after.
+        # Allowed (S3): the post-rule probe in SubgoalMaker._execute_opr
+        # interacts on any variable shared by ≥2 derived subgoals. The
+        # violating variables may be introduced by the rule itself, so they
+        # cannot be computed before execution anyway — the check necessarily
+        # runs after.
         return None
 
     async def _probe_residual_schematics(
             self, from_state: 'Minilang_State', scratch: 'Minilang_State',
             scratch_op: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
-        # S4 relaxation (§5.4, InferenceRule ONLY): interact only on variables
-        # shared by ≥2 derived subgoals — one confined to a single subgoal is
-        # that subgoal's own business. Safe here because RULE is single-frame:
-        # the per-subgoal query reads the prerun's FINAL state, which is
-        # post-instantiation, so convergence observes the baked rounds. The
-        # query preruns the op again server-side; the double execution
-        # (scratch + prerun) is deliberate — see the batch-6 record.
+        # The read-only whole scan first: a final state with no schematic
+        # variable is converged, with no server-side prerun.
+        term_vars, type_vars = await super()._probe_residual_schematics(
+            from_state, scratch, scratch_op)
+        if not term_vars and not type_vars:
+            return term_vars, type_vars
+        # S4 relaxation (§5.4): interact only on variables shared by ≥2 derived
+        # subgoals — one confined to a single subgoal is that subgoal's own
+        # business. Safe here because the op is single-frame: the per-subgoal
+        # query reads the prerun's FINAL state, which is post-instantiation, so
+        # convergence observes the baked rounds. The query preruns the op again
+        # server-side; the double execution (scratch + prerun) is deliberate —
+        # see the batch-6 record.
         derived = await from_state.schematic_vars_of_derived_subgoals(scratch_op)
         def shared(idx: int) -> 'dict[IsaTerm, IsaTerm]':
             counts: dict[str, int] = {}
@@ -10687,21 +10790,71 @@ class InferenceRule(SubgoalMaker):
             return {rep[n][0]: rep[n][1] for n, c in counts.items() if c >= 2}
         return shared(0), shared(1)
 
+    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
+        # The ML side already heads a failed method with its own "Fail to apply
+        # the tactic" / "Fail to apply the rules." line; only prepend our
+        # node-level one when it didn't, to avoid a duplicated near-identical
+        # prefix line.
+        if any(e.startswith("Fail to apply") for e in err.errors):
+            parts = list(err.errors)
+        else:
+            parts = [self._fail_header, *err.errors]
+        goal = self.ml_state.leading_goal
+        if goal is not None and not any("current proof goal" in e for e in err.errors):
+            parts.append(f"The current proof goal is:\n  {goal.conclusion.unicode}")
+        return FailureReason("\n".join(parts))
+    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
+        return FailureReason(f"Subgoal {child.id} fails to be proven.")
+    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
+        if len(self.sub_nodes) <= 1:
+            return (None, indent-1)
+        else:
+            return ("derived subgoals", indent+1)
+    def _quickview_derived_goal(self, indent: int, file: MyIO) -> None:
+        """The quickview's `derived goal:` line when the op left one subgoal,
+        printed again only when that goal changed."""
+        if len(self.sub_nodes) <= 1:
+            s0 = self._state_after_beginning()
+            goal = s0.leading_goal
+            if goal is not None:
+                conclusion = goal.conclusion
+                if conclusion != self._prev_quickview_derived_goal:
+                    conclusion_str = conclusion.unicode
+                    if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
+                        conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
+                    print_indent(indent, file)
+                    file.write(f"derived goal: {conclusion_str}\n")
+                    self._prev_quickview_derived_goal = conclusion
+    def _print_derived_goal(self, indent: int, file: MyIO) -> None:
+        """The full print's `derived goal:` block when the op left one subgoal."""
+        if len(self.sub_nodes) <= 1:
+            s0 = self._state_after_beginning()
+            goal = s0.leading_goal
+            if goal is not None:
+                print_indent(indent, file)
+                file.write("derived goal:\n")
+                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+
+
+class InferenceRule_ToolArg(TypedDict):
+    thought: NotRequired[str]
+    rule: FactByName | FactByDescription | None
+    proofs: NotRequired[list[raw_proof] | None]
+    # TODO: write some skills telling the agent how to associate common operations (e.g., proof by contradiction, proof by cases, etc.) with the inference rules
+
+@proof_operation("InferenceRule", InferenceRule_ToolArg)
+class InferenceRule(Tactic_Like):
+    _fail_header: ClassVar[str] = "Fail to apply the inference rule."
+
     def __init__(self, config: NodeConfig, arg: InferenceRule_ToolArg,
                  parsed_proofs: 'list[proof] | None' = None):
-        super().__init__(config, arg.get("thought", ""), [])
+        super().__init__(config, arg.get("thought", ""), parsed_proofs)
         self.rule: FactByName | FactByDescription | None = arg["rule"]
         self.rule_ref: IsabelleFact | None = None
         self._opening = False
-        self._prev_quickview_derived_goal: term | None = None
         # Latches after one auto-convert probe so re-refreshes don't re-run it;
         # reset on upstream change (see _on_upstream_change).
         self._autoconvert_tried = False
-        if parsed_proofs is not None:
-            self._supplied_proofs = {
-                str(i + self._initial_goal_index): (None, p)
-                for i, p in enumerate(parsed_proofs)
-            }
 
     @classmethod
     def gen_single(cls, arg: InferenceRule_ToolArg,
@@ -10785,18 +10938,7 @@ class InferenceRule(SubgoalMaker):
     def quickview(self, indent: int, file: MyIO) -> int:
         indent = super().quickview(indent, file)
         self._print_induction_notice(indent, file)
-        if len(self.sub_nodes) <= 1:
-            s0 = self._state_after_beginning()
-            goal = s0.leading_goal
-            if goal is not None:
-                conclusion = goal.conclusion
-                if conclusion != self._prev_quickview_derived_goal:
-                    conclusion_str = conclusion.unicode
-                    if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
-                        conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
-                    print_indent(indent, file)
-                    file.write(f"derived goal: {conclusion_str}\n")
-                    self._prev_quickview_derived_goal = conclusion
+        self._quickview_derived_goal(indent, file)
         return indent
     def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
         self._print_thought(indent, file)
@@ -10814,13 +10956,7 @@ class InferenceRule(SubgoalMaker):
         self._print_induction_notice(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
-        if len(self.sub_nodes) <= 1:
-            s0 = self._state_after_beginning()
-            goal = s0.leading_goal
-            if goal is not None:
-                print_indent(indent, file)
-                file.write("derived goal:\n")
-                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+        self._print_derived_goal(indent, file)
     def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
@@ -10830,25 +10966,6 @@ class InferenceRule(SubgoalMaker):
             return FailureReason(
                 f"Inference rule \"{self.rule_ref.name().unicode}\" binds no theorem here. It's empty.")
         return Minilang_Operation.RULE(self.rule_ref, self._post_insts)
-    def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
-        # The ML RULE operator already emits its own "Fail to apply the rules."
-        # header; only prepend our node-level one when it didn't, to avoid a
-        # duplicated near-identical prefix line.
-        if any(e.startswith("Fail to apply") for e in err.errors):
-            parts = list(err.errors)
-        else:
-            parts = ["Fail to apply the inference rule.", *err.errors]
-        goal = self.ml_state.leading_goal
-        if goal is not None and not any("current proof goal" in e for e in err.errors):
-            parts.append(f"The current proof goal is:\n  {goal.conclusion.unicode}")
-        return FailureReason("\n".join(parts))
-    def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
-        return FailureReason(f"Subgoal {child.id} fails to be proven.")
-    def _title_of_children(self, indent: int) -> tuple[str | None, int]:
-        if len(self.sub_nodes) <= 1:
-            return (None, indent-1)
-        else:
-            return ("derived subgoals", indent+1)
     async def _rewrite_trial(self) -> bool:
         """Probe whether `self.rule_ref` works as a goal-only rewrite: run a
         throwaway SIMPLIFY on a fresh scratch state and accept if the goal is
@@ -10941,6 +11058,129 @@ class InferenceRule(SubgoalMaker):
             parent.sub_nodes[idx] = self
             return None
         return new
+
+### Tactic
+
+class Tactic_ToolArg(TypedDict):
+    thought: NotRequired[str]
+    tactic: str                       # the agent-visible name; an enum in the schema
+    arguments: NotRequired[str]
+    facts: NotRequired[list[FactByName | FactByProposition]]
+    proofs: NotRequired[list[raw_proof] | None]
+
+@proof_operation("Tactic", Tactic_ToolArg)
+class Tactic(Tactic_Like):
+    """Apply one proof method of the call's tactic whitelist to the goal, with
+    chained facts and the method's argument text (docs/TACTIC_DESIGN.md).  Not
+    in tools/cc_edit.jsonc: `Runtime.operations` lists it and `_edit_schema_for`
+    places its `schema_for_call` entry, the enum filled from the whitelist --
+    both iff the whitelist is non-empty."""
+    _fail_header: ClassVar[str] = "Fail to apply the tactic."
+    construct_schema: ClassVar[dict] = {
+        "additionalProperties": False,
+        "description": "apply an Isabelle proof tactic to the goal. Do not use this operation "
+                       "unless you are explicitly instructed or advised to.",
+        "properties": {
+            "operation": {"const": "Tactic", "type": "string"},
+            "thought": {"$ref": "#/$defs/Thought"},
+            "tactic": {"type": "string", "enum": []},
+            "arguments": {
+                "type": "string",
+                "description": "the tactic's arguments, written as they would follow its name in Isar; "
+                               "empty if none"},
+            "facts": {
+                "description": "facts chained into the tactic (as by `using` in Isar); "
+                               "instantiations and discharging premises can be helpful",
+                "items": {"anyOf": [{"$ref": "#/$defs/FactByName"},
+                                    {"$ref": "#/$defs/FactByProposition"}]},
+                "type": "array"},
+            "proofs": {"$ref": "#/$defs/GivenLater"},
+        },
+        "required": ["operation", "thought", "tactic"],
+        "type": "object",
+    }
+
+    @classmethod
+    def _check_registration(cls, operation: str) -> None:
+        _check_construct_schema(f'Built-in operation "{operation}"', operation, cls.construct_schema)
+
+    @classmethod
+    def schema_for_call(cls, runtime: 'Runtime') -> dict:
+        schema = super().schema_for_call(runtime)
+        schema["properties"]["tactic"]["enum"] = [entry.name.unicode for entry in runtime.tactics.values()]
+        return schema
+
+    @classmethod
+    def gen_single(cls, arg: Tactic_ToolArg, path: str = "<direct>") -> Parsed_Opr:
+        # THE whitelist check, on every driver and before any Isabelle call;
+        # the schema's enum is only an early rejection where a schema is
+        # enforced (Claude Code's MCP path).  The agent's spelling is read as
+        # every name is, in either notation; the rejection shows Unicode.
+        tactics = the_session().runtime.tactics
+        wanted = ascii_of_unicode(arg["tactic"])
+        validate(cast(Any, Literal[tuple(entry.name.unicode for entry in tactics.values())]),
+                 pretty_unicode(wanted), f"{path}.tactic")
+        entry = tactics[wanted]
+        parsed_proofs = _parse_positional_proofs(arg.get("proofs"), f"{path}.proofs")
+        return Parsed_Opr(
+            cls=cls, factory=lambda cfg: cls(cfg, arg, parsed_proofs, entry), raw=arg)
+
+    def __init__(self, config: NodeConfig, arg: Tactic_ToolArg,
+                 parsed_proofs: 'list[proof] | None', entry: 'TacticEntry'):
+        super().__init__(config, arg.get("thought", ""), parsed_proofs)
+        self.tactic: IsaTerm = entry.name            # the agent-visible name, shown
+        self.tactic_full: str = entry.full           # the full name, in the op
+        self.arguments: str = arg.get("arguments", "")
+        self._raw_facts: list[FactByName | FactByProposition] = list(arg.get("facts") or [])
+        self.fact_refs: list[IsabelleFact] | None = None
+
+    async def _refresh_me_alone(self, auto_intro: bool) -> None:
+        if self.fact_refs is None:
+            # every item an IsabelleFact: the ToolArg admits no described fact
+            self.fact_refs = (_fetched_to_facts(await self.ml_state.fetch_facts(self._raw_facts))
+                              if self._raw_facts else [])
+        elif self.ml_state.initialized():
+            self.fact_refs = await self.ml_state.refresh_facts(self.fact_refs)
+        await super()._refresh_me_alone(auto_intro)
+        # A prove-in-time fact's found proof is pasted back as InferenceRule
+        # does it: from the after-beginning state, which holds the op's messages.
+        if self.status.status == EvaluationStatus.Status.SUCCESS:
+            _backfill_recorded_fact_proofs(self.fact_refs, self._state_after_beginning())
+
+    def _tactic_opr(self, recorded_times: 'tuple[int, int] | None') -> 'Minilang_Operation | FailureReason':
+        facts = self.fact_refs if self.fact_refs is not None else []
+        failure = _unfound_failure(facts)     # a missing fact fails the step (Obvious drops it)
+        if failure is not None:
+            return failure
+        return Minilang_Operation.TACTIC(self.tactic_full, self.arguments, facts,
+                                         self._post_insts, recorded_times)
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        return self._tactic_opr(None)      # a live op never carries the record
+    def assembled_beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        # the live run's last TACTIC_TIMES, from the after-beginning state
+        times = next((m.times_ms for m in reversed(self._state_after_beginning().messages)
+                      if isinstance(m, Tactic_Times_Msg)), None)
+        return self._tactic_opr(times)
+
+    def quickview_title(self) -> str:
+        return f"Tactic ({self.tactic.unicode}{' ' + self.arguments if self.arguments else ''})"
+    def quickview(self, indent: int, file: MyIO) -> int:
+        indent = super().quickview(indent, file)
+        self._quickview_derived_goal(indent, file)
+        return indent
+    def _print_header(self, indent: int, file: MyIO, show_warnings: bool = False):
+        self._print_thought(indent, file)
+        print_indent(indent, file)
+        file.write("operation: Tactic\n")
+        print_indent(indent, file)
+        file.write(f"tactic: {self.tactic.unicode}\n")
+        if self.arguments:
+            print_indent(indent, file)
+            file.write(f"arguments: {self.arguments}\n")
+        _print_facts("with facts:", self.fact_refs, self._raw_facts, indent, file)
+        self._print_evaluation_status(indent, file)
+        if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
+        self._print_derived_goal(indent, file)
 
 ### Contradiction
 
@@ -11468,13 +11708,17 @@ def _check_builtins_advertised(builtins: 'Mapping[str, Any]', base_schema: dict)
             f"{sorted(advertised - set(builtins))}")
 
 
-### The built-in operations, frozen here: every @proof_operation above is one,
-### every one below (a plugin's) is a user operation (docs/USER_OPERATIONS.md,
-### section 5.2).  The snapshot keeps the order the classes were registered in,
-### which the agent is shown on an unknown operation; the check keeps it equal,
-### as a set, to the operations tools/cc_edit.jsonc advertises, so a built-in
-### decorated below this line or missing from the schema fails the import.
-BUILTIN_OPERATIONS: 'Mapping[str, OperationMeta]' = MappingProxyType(dict(OPERATION_REGISTRY))
+### The built-in operations, frozen here: every @proof_operation above but
+### Tactic, in the order the classes registered, which the agent is shown on an
+### unknown operation; every one below (a plugin's) is a user operation
+### (docs/USER_OPERATIONS.md, section 5.2).  Tactic is the one registered
+### operation outside the base schema: Runtime places it per call, iff the
+### call's whitelist is non-empty (docs/TACTIC_DESIGN.md).  The check keeps the
+### snapshot equal, as a set, to the operations tools/cc_edit.jsonc advertises,
+### so a built-in decorated below this line or missing from the schema fails
+### the import.
+BUILTIN_OPERATIONS: 'Mapping[str, OperationMeta]' = MappingProxyType(
+    {name: meta for name, meta in OPERATION_REGISTRY.items() if name != "Tactic"})
 _check_builtins_advertised(BUILTIN_OPERATIONS, BASE_EDIT_SCHEMA)
 
 ### Top Root
@@ -12007,14 +12251,28 @@ class Role_Interaction:
 Role = Role_Major | Role_Worker | Role_Interaction
 
 
+class TacticEntry(NamedTuple):
+    """One entry of a call's tactic whitelist (docs/TACTIC_DESIGN.md), held in
+    `Runtime.tactics` under `name.ascii`."""
+    name: IsaTerm             # the agent-visible name: `.unicode` is what the agent
+                              # sees, `.ascii` the key (an agent's spelling in either
+                              # notation is read by ascii_of_unicode, as every name)
+    full: str                 # the method's full name, which the op stream carries
+    interpretation: str       # normalized (normalize_interpretation)
+    in_prompt: bool           # shown in the prompt; else offered through `query`
+    key: bytes                # the method's universal key, the Semantic DB's
+
+
 class Runtime:
     """Global singleton shared across all Sessions operating on the same proof tree.
     Holds counters and limits that must be unique/shared."""
-    def __init__(self, user_operations: 'Iterable[str]' = ()):
+    def __init__(self, user_operations: 'Iterable[str]' = (),
+                 tactics: 'Iterable[tuple[str, str, str, bool, bytes]]' = ()):
         """`user_operations`: the names of the call's user operations, in the
         order ML sent them (name order); each must be held in
         OPERATION_REGISTRY by a UserNode class (docs/USER_OPERATIONS.md,
-        section 8)."""
+        section 8).  `tactics`: the call's tactic whitelist as ML sent it, see
+        `activate_tactics`."""
         # The RPC Connection this proof tree talks to Isabelle over. One per tree,
         # hence here rather than on Session: planner, workers and interaction forks
         # share this Runtime and must all report over the same connection. Set once
@@ -12070,14 +12328,10 @@ class Runtime:
         # forks inherit it through this shared runtime singleton. Drives the
         # system prompt and initial-message injection (see Session.task).
         self.task: Task = UsualTask("")
-        # The call's operation table (docs/USER_OPERATIONS.md, section 5.2): the
-        # built-in operations, then the call's user operations in the order
-        # given.  Parse_Nodes accepts exactly these, and _tool_schemas_for
-        # builds the call's `edit` schema from them.  One table per Runtime, so
-        # two calls in one host process with different selections do not see
-        # each other's.  OPERATION_REGISTRY itself is only what imports register
-        # into.
-        self.operations: dict[str, OperationMeta] = dict(BUILTIN_OPERATIONS)
+        # The call's user operations (docs/USER_OPERATIONS.md, section 5.2), in
+        # the order given; with the tactic whitelist below, one of the two
+        # inputs the operation table `operations` is derived from.
+        self._user_operations: dict[str, OperationMeta] = {}
         for name in user_operations:
             meta = OPERATION_REGISTRY.get(name)
             if meta is None:
@@ -12088,7 +12342,8 @@ class Runtime:
                 raise AoA_Error(
                     f'User operation "{name}": its node class {meta.cls.__qualname__} '
                     f'is not a UserNode.')
-            self.operations[name] = meta
+            self._user_operations[name] = meta
+        self.activate_tactics(tactics)
         # Whether the `write_memory` tool exists this run (from the Isabelle
         # `AoA_enable_write_memory` declaration, threaded via the RPC payload).
         # When False, write_memory is dropped from every advertised tool set (so it
@@ -12112,6 +12367,41 @@ class Runtime:
         # done-callback installed there (a finally in the fork body would leak
         # tasks cancelled before their first step).
         self._live_forks: 'set[asyncio.Task]' = set()
+
+    def activate_tactics(self, entries: 'Iterable[tuple[str, str, str, bool, bytes]]') -> None:
+        """Install the call's tactic whitelist, the one writer of `tactics`
+        (docs/TACTIC_DESIGN.md).  `entries` as ML sends them -- (agent-visible
+        name, full name, interpretation, in_prompt, universal key) in whitelist
+        order; the interpretation is normalized here, once."""
+        self._tactics: dict[str, TacticEntry] = {
+            name: TacticEntry(IsaTerm.from_isabelle(name), full, normalize_interpretation(text),
+                              in_prompt, bytes(key))
+            for name, full, text, in_prompt, key in entries}
+
+    @property
+    def tactics(self) -> 'Mapping[str, TacticEntry]':
+        """The call's tactic whitelist (docs/TACTIC_DESIGN.md), by the ASCII
+        agent-visible name in whitelist order; read-only, activate_tactics
+        writes it."""
+        return MappingProxyType(self._tactics)
+
+    @property
+    def operations(self) -> 'dict[str, OperationMeta]':
+        """The call's operation table (docs/USER_OPERATIONS.md, section 5.2):
+        the built-in operations, then Tactic iff the whitelist is non-empty
+        (docs/TACTIC_DESIGN.md), then the call's user operations in the order
+        given.  Parse_Nodes accepts exactly these, and _tool_schemas_for builds
+        the call's `edit` schema from them.  Derived from the two inputs, so
+        the order and Tactic's presence cannot be out of step with them."""
+        return {**BUILTIN_OPERATIONS,
+                **({"Tactic": OPERATION_REGISTRY["Tactic"]} if self.tactics else {}),
+                **self._user_operations}
+
+    @property
+    def tactics_by_full(self) -> 'dict[str, TacticEntry]':
+        """The whitelist's entries by full name -- the name a Semantic DB record
+        carries (docs/TACTIC_DESIGN.md, section 7.4)."""
+        return {entry.full: entry for entry in self._tactics.values()}
 
     async def cancel_live_forks(self) -> None:
         """Cancel and await every registered live interaction fork.
@@ -12789,11 +13079,27 @@ class Session:
         suffix = " under `global`" if under_global else ""
         return f"if a needed lemma truly does not exist, prove it as a `Have` node{suffix}.\n"
 
+    def _tactic_prompt_block(self) -> str:
+        """The tactic whitelist's prompt entries (docs/TACTIC_DESIGN.md), as the
+        block that ends the system prompt -- or the initial prompt, for a driver
+        with no system prompt.  Empty when there is no prompt entry, and for an
+        interaction fork (which gets no such guidance, as it gets no
+        experience_hint); otherwise with its leading newline."""
+        if self.is_interaction:
+            return ""
+        lines = [f"- {entry.name.unicode}: {entry.interpretation}"
+                 for entry in self.runtime.tactics.values() if entry.in_prompt]
+        if not lines:
+            return ""
+        return "\nYou may use the `Tactic` operation with these tactics:\n" + "\n".join(lines) + "\n"
+
     def system_prompt(self) -> str | None:
         """Return the system prompt, or None if the driver folds it into the initial
         message. Delegates to the session's Task (UsualTask by default reproduces the
-        legacy `_build_system_prompt("")` bytes); a driver may override this method."""
-        return self.task.system_prompt(self)
+        legacy `_build_system_prompt("")` bytes), then appends the tactic block; a
+        driver may override this method."""
+        sp = self.task.system_prompt(self)
+        return sp if sp is None else sp + self._tactic_prompt_block()
 
     def _build_system_prompt(self, reference_note: str = "") -> str | None:
         """Construct the system prompt body. `reference_note`, when non-empty, is
@@ -12962,9 +13268,11 @@ class Session:
     async def _compute_initial_prompt(self) -> str:
         """Build the initial user message (uncached — call `initial_prompt`), then
         append any Task-supplied extra (UsualTask adds nothing → legacy bytes;
-        LearningTask appends the original Isar proof block, major only)."""
+        LearningTask appends the original Isar proof block, major only), then --
+        only when the driver has no system prompt to carry it -- the tactic block."""
         base = await self._compute_initial_prompt_base()
-        return base + self.task.initial_prompt_extra(self)
+        extra = self.task.initial_prompt_extra(self)
+        return base + extra + (self._tactic_prompt_block() if self.system_prompt() is None else "")
 
     async def _compute_initial_prompt_base(self) -> str:
         """Build the initial user message body (uncached — call `initial_prompt`)."""

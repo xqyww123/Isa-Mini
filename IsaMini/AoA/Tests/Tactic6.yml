@@ -1,0 +1,32 @@
+--------------------------------------------------
+a missing fact
+--------------------------------------------------
+is_error: False
+Filled step 1.
+Outline:
+  step 1: Tactic (simp) (failed)
+    Error: Fact "nope" not found
+  Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+  goal: x + (0 :: nat) = x
+
+--------------------------------------------------
+an unprovable proposition
+--------------------------------------------------
+is_error: False
+Amended step 1.
+Outline:
+  step 1: Tactic (simp) (failed)
+    Error: |
+      Fail to apply the tactic.
+      The following indicated fact is non-trivial, you must prove it manually:
+      False
+      The current proof goal is:
+        x + (0 :: nat) = x
+  Unfinished Proof. Fill step `2`
+
+--------------------------------------------------
+a described fact
+--------------------------------------------------
+is_error: True
+Bad Argument
+`proof_operations[0] (Tactic).facts[0]` must be one of `FactByName` or `FactByProposition`

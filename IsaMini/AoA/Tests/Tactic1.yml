@@ -1,0 +1,55 @@
+--------------------------------------------------
+Initial
+--------------------------------------------------
+variables:
+  - xs: 'a list
+type variables:
+  - 'a: type
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: rev (rev xs) = xs
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+is_error: False
+--------------------------------------------------
+After the induction, each case closed by simp
+--------------------------------------------------
+variables:
+  - xs: 'a list
+type variables:
+  - 'a: type
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: rev (rev xs) = xs
+proof:
+  - step id: 1
+    thought: induction on the list
+    operation: Tactic
+    tactic: induction
+    arguments: xs
+    derived subgoals:
+      - goal id: 1.1
+        goal: rev (rev ([] :: 'a list)) = ([] :: 'a list)
+        proof:
+          - step id: 1.1.1
+            thought: the base case
+            operation: Tactic
+            tactic: simp
+            derived goal:
+              True
+      - goal id: 1.2
+        goal: ∀a (xs :: 'a list). rev (rev xs) = xs ⟶ rev (rev (a # xs)) = a # xs
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - a: 'a
+              - xs1: 'a list    (renamed from "xs")
+            assuming premises:
+              - premise0: rev (rev xs1) = xs1
+          - step id: 1.2.2
+            thought: the step
+            operation: Tactic
+            tactic: simp
+derived subgoals: 2
+live op: TACTIC 'HOL.induction', record: None
+assembled op: TACTIC 'HOL.induction', record: present
+Unfinished nodes: 0

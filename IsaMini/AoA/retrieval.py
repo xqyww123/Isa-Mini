@@ -96,6 +96,40 @@ def _without_enum_value(schema: Any, value: str) -> Any:
 _cc_query_schema_no_experience = _without_enum_value(_cc_query_schema, EntityKind.EXPERIENCE.label)
 
 
+def _with_enum_value(schema: Any, in_enum_with: str, value: str) -> Any:
+    """``schema`` with ``value`` appended to every ``enum`` that lists
+    ``in_enum_with`` (and not yet ``value``); the dual of
+    ``_without_enum_value``, rebuilt non-destructively like it."""
+    if isinstance(schema, dict):
+        out = {k: _with_enum_value(v, in_enum_with, value) for k, v in schema.items()}
+        enum = out.get("enum")
+        if isinstance(enum, list) and in_enum_with in enum and value not in enum:
+            out["enum"] = enum + [value]
+        return out
+    if isinstance(schema, list):
+        return [_with_enum_value(x, in_enum_with, value) for x in schema]
+    return schema
+
+
+# The agent-facing kind label of a proof method (docs/TACTIC_DESIGN.md): the
+# `query` schema offers it when the call's tactic whitelist has `query`
+# entries, and it is the one label that resolves to EntityKind.METHOD here.
+PROOF_TACTIC_LABEL = "proof tactic"
+
+
+def _kind_of_label(label: str) -> EntityKind:
+    """The kind a `kinds` label names, raising KeyError on a label that names
+    none -- as EntityKind.from_label does, so each query path keeps its own
+    handling of a bad label.  "proof tactic" is METHOD; the internal label of
+    METHOD ("proof method") is not accepted from the agent."""
+    if label == PROOF_TACTIC_LABEL:
+        return EntityKind.METHOD
+    kind = EntityKind.from_label(label)
+    if kind == EntityKind.METHOD:
+        raise KeyError(label)
+    return kind
+
+
 def _query_k(q: dict) -> int:
     k = q.get("number", DEFAULT_QUERY_K)
     if not isinstance(k, int) or k < 1:
@@ -572,7 +606,7 @@ async def _run_knn_for_query(
     # path in `_semantic_search_with_filtering`).
     default_kinds = ["constant", "theorem"] if exact_name else ["constant"]
     try:
-        kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or default_kinds)]
+        kinds = [_kind_of_label(label) for label in (q.get("kinds") or default_kinds)]
     except KeyError as e:
         return ([], [], f"Invalid entity kind: {e}", 0)
     kinds = _augment_kinds_with_theorem_collection(kinds, q)
@@ -794,7 +828,7 @@ async def _semantic_search_with_filtering(
     interactions: list[Interaction] = []
     for q in filter_queries:
         try:
-            kinds = [EntityKind.from_label(label) for label in (q.get("kinds") or ["constant"])]
+            kinds = [_kind_of_label(label) for label in (q.get("kinds") or ["constant"])]
         except KeyError:
             continue
         kinds = _augment_kinds_with_theorem_collection(kinds, q)

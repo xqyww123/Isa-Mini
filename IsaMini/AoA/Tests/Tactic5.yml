@@ -1,0 +1,90 @@
+--------------------------------------------------
+After rule exI
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(x :: nat). PP x ∧ QQ x
+proof:
+  - step id: 1
+    thought: a witness, picked later
+    operation: Tactic
+    tactic: rule
+    arguments: exI
+    derived goal:
+      PP ?x ∧ QQ ?x
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof for the following goal.
+pending proof goal:
+  PP ?x ∧ QQ ?x
+interactions: [], preruns: 1
+--------------------------------------------------
+Post-rule instantiation prompt (kind=term)
+--------------------------------------------------
+The proof goal contains schematic variables that must be instantiated before you can continue:
+  - ?x :: nat
+Call `answer_instantiate` with `instantiations`, a list of {variable, term} objects; each `term` must be a type-correct Isabelle expression.
+--------------------------------------------------
+After rule conjI
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(x :: nat). PP x ∧ QQ x
+proof:
+  - step id: 1
+    thought: a witness, picked later
+    operation: Tactic
+    tactic: rule
+    arguments: exI
+    derived goal:
+      PP ?x ∧ QQ ?x
+  - step id: 2
+    thought: split the conjunction
+    operation: Tactic
+    tactic: rule
+    arguments: conjI
+    derived subgoals:
+      - goal id: 2.1
+        goal: PP (0 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1` to provide the proof.
+      - goal id: 2.2
+        goal: QQ (0 :: nat)
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.2.1` to provide the proof.
+interactions: ['term'], preruns: 2
+schematic variables left: False
+--------------------------------------------------
+Closed
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∃(x :: nat). PP x ∧ QQ x
+proof:
+  - step id: 1
+    thought: a witness, picked later
+    operation: Tactic
+    tactic: rule
+    arguments: exI
+    derived goal:
+      PP ?x ∧ QQ ?x
+  - step id: 2
+    thought: split the conjunction
+    operation: Tactic
+    tactic: rule
+    arguments: conjI
+    derived subgoals:
+      - goal id: 2.1
+        goal: PP (0 :: nat)
+        proof:
+          - step id: 2.1.1
+            thought: p0
+            operation: Tactic
+            tactic: rule
+            arguments: p0
+            derived goal:
+              True
+      - goal id: 2.2
+        goal: QQ (0 :: nat)
+        proof:
+          - step id: 2.2.1
+            thought: q0
+            operation: Tactic
+            tactic: rule
+            arguments: q0
+Unfinished nodes: 0

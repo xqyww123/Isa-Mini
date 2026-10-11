@@ -1,0 +1,3 @@
+simp: record present
+kind: METHOD, name: HOL.simp, expr: None
+interpretation: 'rewrite the goal with the simplifier'

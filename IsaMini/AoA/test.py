@@ -31,11 +31,21 @@ class TestCase(ABC):
 type _TestOpr = Callable[[Root, MyIO], Union[None, Awaitable[None]]]
 
 class ModelTestCase(TestCase):
-    def __init__(self, name : str, file: str, line: int, opr: _TestOpr):
+    def __init__(self, name : str, file: str, line: int, opr: _TestOpr, isolated_db: bool = False):
         super().__init__(name, file, line)
         self.opr = opr
-    async def run(self, connection: Connection, log_dir: str, global_context: Context, 
+        self.isolated_db = isolated_db
+    async def run(self, connection: Connection, log_dir: str, global_context: Context,
                   ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
+        # A fixture that declares AoA_tactics must run on a throwaway semantic DB
+        # (docs/TACTIC_DESIGN.md): the call's start has already written the
+        # whitelist's interpretations into whatever DB is in force, so a
+        # forgotten flag is caught here, before any golden is written.
+        if runtime.tactics and not self.isolated_db:
+            raise TestFailed(
+                f"the fixture of '{self.name}' declares AoA_tactics, so the case must be "
+                "registered with isolated_db=True; this call's start has already written "
+                "into the real semantic DB")
         def save_diff(actual: str, expected_path: str, test_name: str):
             """Write actual output and unified diff next to the golden YAML."""
             tests_dir = os.path.dirname(expected_path)
@@ -78,11 +88,10 @@ class ModelTestCase(TestCase):
                     f"{type(interaction).__name__}")
             session.launch_interaction = _default_launch_interaction
             buffer = io.StringIO()
-            # A test that writes an experience memory runs against a THROWAWAY semantic DB:
-            # write_memory's dedup search is corpus-wide, so otherwise the test's outcome
-            # (and its golden) depends on whatever else is in this machine's DB. See
-            # _isolated_semantic_db.
-            async with (_isolated_semantic_db(session) if getattr(self, "isolated_db", False)
+            # A case on a THROWAWAY semantic DB (isolated_db): the connection's half
+            # here, the process's half around the whole call in run_all_tests; see
+            # _isolated_semantic_db_process for why.
+            async with (_isolated_semantic_db_connection(session) if self.isolated_db
                         else contextlib.nullcontext()):
                 result = self.opr(root, MyIO(buffer))
                 if inspect.iscoroutine(result):
@@ -138,14 +147,15 @@ def model_test(name: str, file: str, line: int, isolated_db: bool = False):
     """Register a model test.
 
     ``isolated_db``: run it against a throwaway, EMPTY semantic DB rather than the real
-    shared one.  Set it for any test that writes an experience memory: write_memory's
-    dedup search is corpus-wide, so such a test's outcome (and its golden) otherwise
-    depends on what else happens to be in the machine's DB.  See _isolated_semantic_db.
+    shared one (see _isolated_semantic_db_process).  Set it for any test that writes
+    an experience memory -- write_memory's dedup search is corpus-wide, so such a
+    test's outcome (and its golden) otherwise depends on what else happens to be in
+    the machine's DB -- and for any test whose fixture declares AoA_tactics: the
+    call's start writes the whitelist's interpretations into the DB in force
+    (ModelTestCase.run refuses such a case without the flag).
     """
     def decorator(func: _TestOpr):
-        case = ModelTestCase(name, file, line, func)
-        case.isolated_db = isolated_db
-        TESTS[name] = case
+        TESTS[name] = ModelTestCase(name, file, line, func, isolated_db)
         return func
     return decorator
 
@@ -234,56 +244,67 @@ async def _test_branch(root: Root, file: MyIO):
     file.write(f"Unfinished nodes: {len(unfinished)}\n")
 
 
-@contextlib.asynccontextmanager
-async def _isolated_semantic_db(session):
-    """Run the body against a THROWAWAY semantic DB (an empty SEMANTIC_DB_DIR).
+# The path of the throwaway semantic DB while an `isolated_db` case runs on one
+# (set by _isolated_semantic_db_process), for the guard in ModelTestCase.run.
+_ISOLATED_DB_DIR: 'str | None' = None
 
-    The memory tests write experiences and exercise write_memory's corpus-wide dedup
-    search, so their outcome depends on what ELSE is in the experience corpus -- i.e. on
-    whichever semantic DB happens to be on the machine. Against a realistic corpus that
-    breaks: `ExperienceMemory` writes a derivative strategy, a real derivative experience
-    in the corpus scores above the 0.7 dedup threshold, write_memory correctly REFUSES
-    the write, the test has no key, and it dies on `Semantic_DB[None]`. The goldens were
-    likewise pinning experiences that merely happened to be in one machine's DB.
 
-    So give these tests their own empty corpus: they then test the CODE, not the contents
-    of somebody's cache, and their goldens contain only what they themselves create.
-    They also stop polluting the real shared DB (a teardown that never runs -- because the
+@contextlib.contextmanager
+def _isolated_semantic_db_process():
+    """The process's half of running a case against a THROWAWAY semantic DB (an
+    empty SEMANTIC_DB_DIR): the env var re-pointed and the cached singletons
+    (Semantic_DB, Experience_Index) dropped, so that everything in this process
+    -- the RPC host thread serving the AoA call included -- reads and writes the
+    throwaway DB.  Entered by run_all_tests around the WHOLE call: a call's
+    start already writes to the DB (the tactic whitelist's interpretations,
+    docs/TACTIC_DESIGN.md), before any test body runs.  The connection's half
+    is _isolated_semantic_db_connection, in the body.
+
+    Why a throwaway DB at all: the memory tests write experiences and exercise
+    write_memory's corpus-wide dedup search, so their outcome depends on what
+    ELSE is in the experience corpus -- i.e. on whichever semantic DB happens
+    to be on the machine. Against a realistic corpus that breaks:
+    `ExperienceMemory` writes a derivative strategy, a real derivative
+    experience in the corpus scores above the 0.7 dedup threshold, write_memory
+    correctly REFUSES the write, the test has no key, and it dies on
+    `Semantic_DB[None]`. The goldens were likewise pinning experiences that
+    merely happened to be in one machine's DB.  An empty corpus of their own
+    makes these tests test the CODE, not the contents of somebody's cache, with
+    goldens containing only what they themselves create; and they stop
+    polluting the real shared DB (a teardown that never runs -- because the
     test raised first -- used to leave its experiences in it forever).
 
-    Mechanics: `semantic_DB_dir()` re-reads SEMANTIC_DB_DIR on every call, so swapping the
-    env var and dropping the cached singletons (Semantic_DB, Experience_Index) and the
-    connection's per-model vector stores is enough to re-point the whole database set.
+    Mechanics: `semantic_DB_dir()` re-reads SEMANTIC_DB_DIR on every call, so
+    swapping the env var and dropping the singletons re-points the database set.
+    The system-DB probe (`snapshot_sync.validated_system_db`, cached per
+    process and looking under `sys.prefix` whatever the env var says) is pinned
+    to "none" for the call, so the throwaway DB has no system layer by
+    construction and no probe result moves between isolated and other cases.
     """
+    global _ISOLATED_DB_DIR
     import shutil, tempfile
     from Isabelle_Semantic_Embedding.semantics import _Semantic_DB
     from Isabelle_Semantic_Embedding.experience_index import _Experience_Index
     from Isabelle_Semantic_Embedding.semantic_embedding import _lmdb_envs, _lmdb_lock
+    from Isabelle_Semantic_Embedding import snapshot_sync
 
-    conn = session.retrieval_state().connection
-    had_stores = hasattr(conn, "_semantic_vector_stores")
-    saved_stores = dict(conn._semantic_vector_stores) if had_stores else None
     saved_env = os.environ.get("SEMANTIC_DB_DIR")
+    saved_system_db = snapshot_sync._system_db_cache
     tmp = tempfile.mkdtemp(prefix="aoa_test_semdb_")
 
     def _reset() -> None:
-        # Re-fetch the live dict each call: the body may be what CREATES it (the
-        # first store construction attaches it to the connection), so a snapshot
-        # taken at entry -- possibly absent, hence None -- must not gate cleanup.
-        # Missing that was the leak: a throwaway tmp-path store built during the
-        # body survived teardown and a later non-isolated test reused it, opening
-        # an lmdb under the by-then-deleted tmp dir.
         _Semantic_DB._close()
         _Experience_Index._close()
-        live = getattr(conn, "_semantic_vector_stores", None)
-        if live is not None:
-            live.clear()            # each store's path is fixed at construction
 
     os.environ["SEMANTIC_DB_DIR"] = tmp
+    _ISOLATED_DB_DIR = tmp
+    snapshot_sync._system_db_cache = None
     _reset()
     try:
         yield tmp
     finally:
+        _ISOLATED_DB_DIR = None
+        snapshot_sync._system_db_cache = saved_system_db
         _reset()
         with _lmdb_lock:            # release the throwaway envs before the dir goes
             for path in [p for p in _lmdb_envs if p.startswith(tmp)]:
@@ -292,13 +313,47 @@ async def _isolated_semantic_db(session):
             os.environ.pop("SEMANTIC_DB_DIR", None)
         else:
             os.environ["SEMANTIC_DB_DIR"] = saved_env
-        # Restore the connection's store cache to its exact pre-fixture state:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@contextlib.asynccontextmanager
+async def _isolated_semantic_db_connection(session):
+    """The connection's half, around a case's body: the connection's per-model
+    vector stores (each store's path is fixed at construction) dropped for the
+    body and the cache restored to its exact pre-body state after.  Guarded: the
+    process's half must be in force in THIS process -- a REPL talking to another
+    RPC host would have the call's start write into that host's real DB."""
+    if _ISOLATED_DB_DIR is None or os.environ.get("SEMANTIC_DB_DIR") != _ISOLATED_DB_DIR:
+        raise TestFailed(
+            "the throwaway semantic DB is not in force in this process (SEMANTIC_DB_DIR is "
+            f"{os.environ.get('SEMANTIC_DB_DIR')!r}, the runner's throwaway is {_ISOLATED_DB_DIR!r}): "
+            "the REPL is served by another RPC host")
+    conn = session.retrieval_state().connection
+    had_stores = hasattr(conn, "_semantic_vector_stores")
+    saved_stores = dict(conn._semantic_vector_stores) if had_stores else None
+
+    def _clear() -> None:
+        # Re-fetch the live dict each call: the body may be what CREATES it (the
+        # first store construction attaches it to the connection), so a snapshot
+        # taken at entry -- possibly absent, hence None -- must not gate cleanup.
+        # Missing that was the leak: a throwaway tmp-path store built during the
+        # body survived teardown and a later non-isolated test reused it, opening
+        # an lmdb under the by-then-deleted tmp dir.
+        live = getattr(conn, "_semantic_vector_stores", None)
+        if live is not None:
+            live.clear()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
+        # Restore the connection's store cache to its exact pre-body state:
         # refill the original dict, or drop the one the body created.
         if had_stores:
             conn._semantic_vector_stores.update(saved_stores)
         elif hasattr(conn, "_semantic_vector_stores"):
             delattr(conn, "_semantic_vector_stores")
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @model_test("ExperienceMemory", "Test_ExperienceMemory.thy", 8, isolated_db=True)
@@ -3865,6 +3920,13 @@ theory_test("UserOperationCodec_Minilang", "User_Operation_Codec_Test.thy")
 theory_test("UserOperationReplay_Minilang", "User_Operation_Replay_Test.thy")
 # the start of a call and its refusals.
 theory_test("UserOperationCall_Minilang", "User_Operation_Call_Test.thy")
+
+# The AoA_tactics declaration (docs/TACTIC_DESIGN.md, section 5.1): theory data
+# below the agent, so a theory test.
+theory_test("TacticDeclaration_Minilang", "Tactic_Declaration_Test.thy")
+# interpret_i's TACTIC branch: the replay cap, the inner timeout, and that a
+# recorded TACTIC replays whatever the whitelist.
+theory_test("TacticReplay_Minilang", "Tactic_Replay_Test.thy")
 
 
 # --- the sample plugin (Tests/Sample_Plugin.thy, Tests/sample_plugin/): user-defined
@@ -18589,14 +18651,19 @@ async def run_all_tests(repl_addr: str, mode="test", logger: logging.Logger | No
                     await repl.config([f'auto_sledgehammer_params = "timeout = {sh_timeout}"'])
                 except REPLFail:
                     pass
-            await repl.run_app('Minilang.AoA')
-            invocation_id = f"{mode}.{test_case.name}"
-            await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None, None, None))
-            try:
-                (status, elapsed, cpu_time, detail, _cost) = Client._parse_control_(await repl._feed_and_unpack())
-            except REPLFail as e:
-                print(f"\033[91mTest {test_case.name} error: {e}\033[0m")
-                continue
+            # An `isolated_db` case runs its WHOLE call on a throwaway semantic DB:
+            # the RPC host thread serving the call shares this process, so the
+            # switch made here reaches it (see _isolated_semantic_db_process).
+            with (_isolated_semantic_db_process() if getattr(test_case, "isolated_db", False)
+                  else contextlib.nullcontext()):
+                await repl.run_app('Minilang.AoA')
+                invocation_id = f"{mode}.{test_case.name}"
+                await repl._write((invocation_id, f"{mode}.{test_case.name}", (_cfg, _budget), None, None, None))
+                try:
+                    (status, elapsed, cpu_time, detail, _cost) = Client._parse_control_(await repl._feed_and_unpack())
+                except REPLFail as e:
+                    print(f"\033[91mTest {test_case.name} error: {e}\033[0m")
+                    continue
             detail_suffix = f": {detail}" if detail else ""
             if status == "success":
                 passed += 1
@@ -18734,3 +18801,374 @@ async def _test_SymbolicFactName(root: Root, file: MyIO):
     print_header("The name as it reaches the operation", file)
     packed = Minilang_Operation.HAMMER(kept)
     file.write(f"{packed}\n")
+
+
+### Tactic (docs/TACTIC_DESIGN.md).  Every fixture declares the tactics its
+### case uses (the parse-time whitelist check refuses any other), and every
+### case runs on a throwaway semantic DB: the call's start writes the
+### whitelist's interpretations into the DB.
+
+def _count_derived_subgoal_preruns(calls: dict):
+    """Wrap Minilang_State.schematic_vars_of_derived_subgoals to count the
+    probe's server-side preruns; returns the restorer."""
+    original = Minilang_State.schematic_vars_of_derived_subgoals
+    async def counted(self, opr):
+        calls["n"] += 1
+        return await original(self, opr)
+    Minilang_State.schematic_vars_of_derived_subgoals = counted  # type: ignore[method-assign]
+    def restore():
+        Minilang_State.schematic_vars_of_derived_subgoals = original  # type: ignore[method-assign]
+    return restore
+
+
+def _count_unfinished(root: Root, file: MyIO) -> int:
+    unfinished: set[Node] = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"Unfinished nodes: {len(unfinished)}\n")
+    return len(unfinished)
+
+
+@model_test("Tactic1", "Test_Tactic1.thy", 10, isolated_db=True)
+async def _test_Tactic1(root: Root, file: MyIO):
+    """`induction xs` with inline per-subgoal proofs, each a `simp`, as the raw
+    JSON the agent sends: both subgoals get their bodies and the proof closes;
+    the op carries the full method name; the live op carries no record while
+    the assembled op carries the live run's times (TACTIC_TIMES reached Python)."""
+    from .mcp_http_server import _edit_tool_logic
+    print_header("Initial", file)
+    root.print(0, file)
+    root.session.age += 1
+    result, is_error = await _edit_tool_logic(root.session, {
+        "target_step": "1", "action": "fill", "proof_operations": [
+            {"operation": "Tactic", "thought": "induction on the list",
+             "tactic": "induction", "arguments": "xs",
+             "proofs": [
+                 [{"operation": "Tactic", "thought": "the base case", "tactic": "simp"}],
+                 [{"operation": "Tactic", "thought": "the step", "tactic": "simp"}],
+             ]}]})
+    file.write(f"is_error: {is_error}\n")
+    print_header("After the induction, each case closed by simp", file)
+    root.print(0, file)
+    node = cast(Tactic, root.locate_node("1"))
+    goal_kids = [c for c in node.sub_nodes if isinstance(c, GoalNode)]
+    file.write(f"derived subgoals: {len(goal_kids)}\n")
+    assert len(goal_kids) == 2, f"expected 2 subgoals from the induction, got {len(goal_kids)}"
+    for gn in goal_kids:
+        assert gn.sub_nodes, f"{gn.id} is empty: its positional proof did not apply"
+    live = node.beginning_opr()
+    assembled = node.assemble()[0]
+    assert isinstance(live, Minilang_Operation)
+    file.write(f"live op: {live.command} {live.arg[0]!r}, record: {live.arg[4]}\n")
+    file.write(f"assembled op: {assembled.command} {assembled.arg[0]!r}, record: "
+               f"{'present' if assembled.arg[4] is not None else None}\n")
+    assert live.arg[0] == "HOL.induction" and live.arg[4] is None
+    assert assembled.arg[4] is not None, "the assembled op carries no times: TACTIC_TIMES was lost"
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("Tactic2", "Test_Tactic2.thy", 9, isolated_db=True)
+async def _test_Tactic2(root: Root, file: MyIO):
+    """The probe's short-circuit: a Tactic leaving no schematic variable
+    converges on the read-only whole scan, with no server-side prerun."""
+    calls = {"n": 0}
+    restore = _count_derived_subgoal_preruns(calls)
+    try:
+        root.session.age += 1
+        await root.fill("1", [Tactic.gen_single({"thought": "simp closes it", "tactic": "simp"})])
+    finally:
+        restore()
+    print_header("After simp", file)
+    root.print(0, file)
+    file.write(f"derived-subgoal preruns: {calls['n']}\n")
+    assert calls["n"] == 0
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("Tactic3", "Test_Tactic3.thy", 9, isolated_db=True)
+async def _test_Tactic3(root: Root, file: MyIO):
+    """Chained facts: a named fact and a prove-in-time proposition; the found
+    proof of the latter is pasted back (FACT_PRF) and reaches the op."""
+    root.session.age += 1
+    [node] = (await root.fill("1", [Tactic.gen_single({
+        "thought": "simp with the assumption", "tactic": "simp",
+        "facts": [{"name": "h"}, {"proposition": "(1::nat) + 1 = 2"}]})])).committed
+    print_header("After simp using h and a fact proved on the spot", file)
+    root.print(0, file)
+    node = cast(Tactic, node)
+    pit = [f for f in (node.fact_refs or []) if isinstance(f, IsabelleFact_ProveInTime)]
+    file.write(f"prove-in-time facts: {len(pit)}, recorded: {[f.cached_proof is not None for f in pit]}\n")
+    assert len(pit) == 1 and pit[0].cached_proof is not None, "FACT_PRF was not pasted back"
+    opr = node.beginning_opr()
+    assert isinstance(opr, Minilang_Operation)
+    file.write(f"packed facts carry a record: {[f[2] is not None for f in opr.arg[2]]}\n")
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("Tactic4", "Test_Tactic4.thy", 10, isolated_db=True)
+async def _test_Tactic4(root: Root, file: MyIO):
+    """The errors of the arguments come verbatim from Isabelle: the method's
+    own parser, the lexer, and a method that does not apply."""
+    first = True
+    for thought, tactic, arguments in [
+            ("a bad argument", "simp", "foo"),
+            ("an unclosed cartouche", "simp", "‹junk"),
+            ("a rule that does not match", "rule", "conjI")]:
+        root.session.age += 1
+        gns = [Tactic.gen_single({"thought": thought, "tactic": tactic, "arguments": arguments})]
+        await (root.fill("1", gns) if first else root.amend("1", gns))
+        first = False
+        print_header(f"Tactic {tactic} {arguments}", file)
+        root.print(0, file)
+        node = root.locate_node("1")
+        file.write(f"status: {node.status.status.name}\n")
+        assert node.status.status == EvaluationStatus.Status.FAILURE
+
+
+@model_test("Tactic5", "Test_Tactic5.thy", 14, isolated_db=True)
+async def _test_Tactic5(root: Root, file: MyIO):
+    """The shared-variable criterion of Tactic_Like, with the prerun counter
+    cumulative: `rule exI` leaves ?x in its one subgoal -- no interaction, one
+    prerun; `rule conjI` on it shares ?x between two subgoals -- one term
+    interaction answered `?x := 0`, one more prerun, no schematic left; the two
+    cases close by the sorried facts."""
+    calls = {"n": 0}
+    kinds: list[str] = []
+    restore = _count_derived_subgoal_preruns(calls)
+    async def stub(interaction):
+        if isinstance(interaction, Interaction_InstantiatePostSchematics):
+            kinds.append(interaction.kind)
+            print_header(f"Post-rule instantiation prompt (kind={interaction.kind})", file)
+            await interaction.prompt(0, file)
+            insts = [(n, "0::nat") for n, _ in interaction.schematic_vars]
+            return await interaction.answer(AnswerInstantiate(instantiations=insts))
+        raise NotImplementedError(f"Unstubbed interaction in Tactic5: {type(interaction).__name__}")
+    root.session.launch_interaction = stub
+    try:
+        root.session.age += 1
+        await root.fill("1", [Tactic.gen_single({"thought": "a witness, picked later",
+                                                 "tactic": "rule", "arguments": "exI"})])
+        print_header("After rule exI", file)
+        root.print(0, file)
+        file.write(f"interactions: {kinds}, preruns: {calls['n']}\n")
+        assert kinds == [] and calls["n"] == 1
+        # one derived subgoal opens no GoalNode: the next step is the sibling step 2
+        root.session.age += 1
+        await root.fill("2", [Tactic.gen_single({"thought": "split the conjunction",
+                                                 "tactic": "rule", "arguments": "conjI"})])
+        print_header("After rule conjI", file)
+        root.print(0, file)
+        file.write(f"interactions: {kinds}, preruns: {calls['n']}\n")
+        assert kinds == ["term"] and calls["n"] == 2
+        conj = cast(Tactic, root.locate_node("2"))
+        tvs, tyvs = await conj._state_after_beginning().schematic_variables_of(whole=True)
+        file.write(f"schematic variables left: {bool(tvs or tyvs)}\n")
+        assert not (tvs or tyvs)
+        cases = [c for c in conj.sub_nodes if isinstance(c, GoalNode)]
+        assert len(cases) == 2
+        for case, fact in zip(cases, ["p0", "q0"]):
+            root.session.age += 1
+            await root.fill(f"{case.id}.1",           # the case's hole
+                            [Tactic.gen_single({"thought": fact, "tactic": "rule", "arguments": fact})])
+        print_header("Closed", file)
+        root.print(0, file)
+    finally:
+        restore()
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("Tactic6", "Test_Tactic6.thy", 9, isolated_db=True)
+async def _test_Tactic6(root: Root, file: MyIO):
+    """A chained fact that is missing fails the step (Obvious would drop it
+    with a warning); an unprovable proposition fails as FACT_IN_TIME_FAIL says;
+    a described fact is refused by the validator, before any Isabelle call."""
+    from .mcp_http_server import _edit_tool_logic
+    first = True
+    for label, facts, expected in [
+            ("a missing fact", [{"name": "nope"}], 'Fact "nope" not found'),
+            ("an unprovable proposition", [{"proposition": "False"}], "(failed)"),
+            ("a described fact", [{"english": "something about x"}], None)]:
+        root.session.age += 1
+        result, is_error = await _edit_tool_logic(root.session, {
+            "target_step": "1", "action": "fill" if first else "amend", "proof_operations": [
+                {"operation": "Tactic", "thought": label, "tactic": "simp", "facts": facts}]})
+        first = False
+        print_header(label, file)
+        file.write(f"is_error: {is_error}\n{result}\n")
+        if expected is None:
+            assert is_error, "the validator did not refuse the described fact"
+        else:
+            # the edit itself goes through; the node is the failure
+            assert expected in result, f"expected {expected!r} in the edit's result"
+
+
+@model_test("TacticPrompt", "Test_TacticPrompt.thy", 11, isolated_db=True)
+async def _test_TacticPrompt(root: Root, file: MyIO):
+    """The prompt block: absent without a prompt entry; at the end of the system
+    prompt otherwise, in whitelist order, the interpretation normalized (one
+    line, Unicode) and byte-identical to the DB record the call's start wrote;
+    after a task's own system prompt too; at the end of the initial prompt,
+    after the task's extra, when the task has no system prompt; for the major
+    and a worker, never for an interaction fork."""
+    from .task import UsualTask
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    session = root.session
+    runtime = session.runtime
+    [(name, declared)] = runtime.tactics.items()
+    file.write(f"declared entry: {name}: {declared.interpretation!r}\n")
+    assert "\n" not in declared.interpretation and "\\<" not in declared.interpretation
+    rec = Semantic_DB[declared.key]
+    file.write(f"DB record is byte-identical: {rec is not None and rec.interpretation == declared.interpretation}\n")
+    assert rec is not None and rec.interpretation == declared.interpretation
+    as_declared = (name, declared.full, declared.interpretation, True, declared.key)
+    as_query = (name, declared.full, declared.interpretation, False, declared.key)
+    # a second prompt entry; keys are immaterial to the prompt, so it borrows one
+    other = ("auto", "HOL.auto", "prove by classical reasoning and rewriting", True, declared.key)
+    head = "You may use the `Tactic` operation with these tactics:"
+
+    def tail(text: 'str | None') -> str:
+        if text is None:
+            return "None"
+        i = text.rfind(head)
+        return repr(text[i:]) if i >= 0 else "(no block)"
+
+    async def report(label: str) -> tuple[str | None, str]:
+        sp = session.system_prompt()
+        ip = await session._compute_initial_prompt()
+        file.write(f"--- {label} ---\nsystem prompt: {tail(sp)}\ninitial prompt: {tail(ip)}\n")
+        return sp, ip
+
+    class _OwnPrompt(UsualTask):
+        def system_prompt(self, session): return "MY OWN SYSTEM PROMPT\n"
+
+    class _NoSystemPrompt(UsualTask):
+        def system_prompt(self, session): return None
+        def initial_prompt_extra(self, session): return "THE TASK'S EXTRA\n"
+
+    runtime.activate_tactics([as_query])
+    sp, ip = await report("no prompt entry")
+    assert sp is not None and head not in sp and head not in ip
+    runtime.activate_tactics([as_declared])
+    sp, ip = await report("one entry, the declared multi-line one")
+    assert sp is not None and sp.endswith(f"\n{head}\n- {name}: {declared.interpretation}\n") and head not in ip
+    runtime.activate_tactics([other, as_declared])
+    sp, ip = await report("two entries, in whitelist order")
+    assert sp is not None and sp.endswith(f"\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n")
+    runtime.task = _OwnPrompt("")
+    sp, ip = await report("a task with its own system prompt")
+    assert sp == f"MY OWN SYSTEM PROMPT\n\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n"
+    runtime.task = _NoSystemPrompt("")
+    sp, ip = await report("a task with no system prompt and an extra")
+    assert sp is None and ip.endswith(f"THE TASK'S EXTRA\n\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n")
+    runtime.task = UsualTask("")
+    for label, role in [("worker", Role_Worker(target=cast(NonLeaf_Node, root.sub_nodes[1]))),
+                        ("interaction fork", Role_Interaction(pending=None, prompt="", resume_id=None,  # type: ignore[arg-type]
+                                                              mode=ForkingMode.FORKING_WITH_CTXT))]:
+        session.role = role
+        sp = session.system_prompt()
+        file.write(f"--- {label} ---\nsystem prompt: {tail(sp)}\n")
+        assert (sp is not None and head in sp) is (label == "worker")
+    session.role = Role_Major()
+    runtime.activate_tactics([as_declared])
+
+
+@model_test("TacticSync", "Test_TacticSync.thy", 9, isolated_db=True)
+async def _test_TacticSync(root: Root, file: MyIO):
+    """The call's start wrote the whitelist's interpretation into the fresh
+    throwaway DB: the record is there, of kind METHOD, under the full name,
+    with the normalized text (nothing else could have written it)."""
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    from Isabelle_RPC_Host.universal_key import EntityKind
+    [(name, entry)] = root.session.runtime.tactics.items()
+    rec = Semantic_DB[entry.key]
+    file.write(f"{name}: record {'present' if rec is not None else 'absent'}\n")
+    assert rec is not None, "the call's start did not write the interpretation"
+    file.write(f"kind: {rec.kind.name}, name: {rec.name}, expr: {rec.expr!r}\ninterpretation: {rec.interpretation!r}\n")
+    assert rec.kind == EntityKind.METHOD and rec.name == entry.full and rec.expr is None
+    assert rec.interpretation == entry.interpretation
+
+
+@model_test("TacticQuery", "Test_TacticQuery.thy", 10, isolated_db=True)
+async def _test_TacticQuery(root: Root, file: MyIO):
+    """`query` and the whitelist: the "proof tactic" kind's ranked candidates
+    are the `query` entries only; the pattern-only path lists them first, so
+    the k cap cannot drop them, and `name_contains` filters them as it filters
+    every other kind (term/type patterns and `theories_include` do not);
+    exact_name looks the whole whitelist up, by either name; what is shown is
+    always the declared interpretation, even once the DB record says
+    otherwise; the internal label "proof method" is invalid; and the same
+    under interactive retrieval (the fork path), where an invalid label is
+    silently dropped."""
+    from .retrieval import _query_tool_logic, Interaction_RetrieveForSearch
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+    session = root.session
+    simp = session.runtime.tactics["simp"]
+    session.interactive_retrieval = InteractiveRetrievalMode.NO
+
+    async def select_all(interaction):
+        if isinstance(interaction, Interaction_RetrieveForSearch):
+            return [f.entity for f in await interaction.candidate_facts()]
+        raise NotImplementedError(f"Unstubbed interaction in TacticQuery: {type(interaction).__name__}")
+
+    async def run(label: str, q: dict, show: bool = True) -> str:
+        session._reset_view_state()            # every result self-contained, nothing "shown earlier"
+        result, is_error = await _query_tool_logic(session, {"queries": [q]})
+        print_header(label, file)
+        file.write(f"is_error: {is_error}\n" + (f"{result}\n" if show else ""))
+        return result
+
+    async def suite(stage: str) -> None:
+        r = await run(f"{stage}: proof tactic, ranked", {
+            "kinds": ["proof tactic"], "description": "rewrite the goal with the simplifier"})
+        assert "simp" in r and simp.interpretation in r and "auto" not in r and "method_setup" not in r
+        # the lemma half of a mixed query comes in the heap's enumeration order
+        # (an empty DB ranks nothing), so only its shape goes into the golden
+        r = await run(f"{stage}: lemma and proof tactic, ranked", {
+            "kinds": ["lemma", "proof tactic"], "description": "x equals one, and simplification"},
+            show=False)
+        entities = [l for l in r.splitlines() if l.startswith("- ")]
+        file.write(f"simp shown: {'- simp' in entities}; lemmas shown: {len(entities) - ('- simp' in entities)}\n")
+        assert "- simp" in entities and len(entities) > 1, entities
+        # the query entry goes FIRST on the pattern-only path, so the k cap cannot
+        # drop it (the fork path fetches its own candidate count, so only the
+        # shape goes into the golden here too)
+        r = await run(f"{stage}: lemma and proof tactic, pattern-only, number 1", {
+            "kinds": ["lemma", "proof tactic"], "term_patterns": ["_ = _"], "number": 1},
+            show=False)
+        entities = [l for l in r.splitlines() if l.startswith("- ")]
+        file.write(f"first entity: {entities[0] if entities else None}; entities: {len(entities)}\n")
+        assert entities and entities[0] == "- simp", "the k cap removed the query entry"
+        # name_contains applies to the query entries as to every other kind
+        r = await run(f"{stage}: proof tactic, pattern-only, name_contains aoa", {
+            "kinds": ["proof tactic"], "name_contains": ["aoa"]})
+        assert all(s not in r for s in ("simp", "auto", "aoa_replay", "hammer_or_aoa", "- aoa"))
+        r = await run(f"{stage}: proof tactic, pattern-only, name_contains Simp", {
+            "kinds": ["proof tactic"], "name_contains": ["Simp"]})
+        assert "- simp" in r.splitlines() and simp.interpretation in r and "auto" not in r
+        r = await run(f"{stage}: exact_name of the prompt entry", {"kinds": ["proof tactic"], "exact_name": "auto"})
+        assert "auto" in r and session.runtime.tactics["auto"].interpretation in r
+        r = await run(f"{stage}: exact_name outside the whitelist", {"kinds": ["proof tactic"], "exact_name": "blast"})
+        assert "Undefined" in r
+        r = await run(f"{stage}: the internal label", {
+            "kinds": ["proof method"], "description": "rewrite the goal with the simplifier"})
+        # the direct path warns; the fork path drops the query silently
+        assert ("Invalid entity kind" in r) is (stage == "direct")
+        assert "No relevant entities found" in r
+        r = await run(f"{stage}: the internal label, exact_name", {"kinds": ["proof method"], "exact_name": "simp"})
+        assert "Invalid entity kind" in r
+
+    await suite("direct")
+    # the DB record rewritten by someone else: the shown text is still the declaration's
+    rec = Semantic_DB[simp.key]
+    assert rec is not None
+    Semantic_DB[simp.key] = rec._replace(interpretation="SOMEBODY ELSE'S TEXT")
+    r = await run("direct, the DB record rewritten: ranked", {
+        "kinds": ["proof tactic"], "description": "rewrite the goal with the simplifier"})
+    assert simp.interpretation in r and "SOMEBODY ELSE'S TEXT" not in r
+    r = await run("direct, the DB record rewritten: pattern-only", {"kinds": ["proof tactic"]})
+    assert simp.interpretation in r and "SOMEBODY ELSE'S TEXT" not in r
+    r = await run("direct, the DB record rewritten: exact_name", {"kinds": ["proof tactic"], "exact_name": "simp"})
+    assert simp.interpretation in r and "SOMEBODY ELSE'S TEXT" not in r
+    session.interactive_retrieval = InteractiveRetrievalMode.YES
+    session.launch_interaction = select_all
+    await suite("interactive")
+    session.interactive_retrieval = InteractiveRetrievalMode.NO

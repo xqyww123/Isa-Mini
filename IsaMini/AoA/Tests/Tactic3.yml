@@ -1,0 +1,20 @@
+--------------------------------------------------
+After simp using h and a fact proved on the spot
+--------------------------------------------------
+variables:
+  - x: nat
+premises:
+  - h: x = (1 :: nat)
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: x + (1 :: nat) = (2 :: nat)
+proof:
+  - step id: 1
+    thought: simp with the assumption
+    operation: Tactic
+    tactic: simp
+    with facts:
+      - h: x = (1 :: nat)
+      - (1::nat) + 1 = 2
+prove-in-time facts: 1, recorded: [True]
+packed facts carry a record: [False, True]
+Unfinished nodes: 0

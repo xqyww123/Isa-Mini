@@ -9,7 +9,7 @@ import asyncio
 import os
 import sys
 import types
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, cast
 
 import jsonschema
 import pytest
@@ -74,10 +74,11 @@ def sample_leaf(name: str = "SampleLeaf", **extra):
     return Sample
 
 
-def bare_session(*names: str) -> Session:
-    """A Session with only a Runtime over the given user operations, bound as the current one."""
+def bare_session(*names: str, tactics: 'tuple[tuple[str, str, str, bool, bytes], ...]' = ()) -> Session:
+    """A Session with only a Runtime over the given user operations and tactic
+    whitelist, bound as the current one."""
     s = object.__new__(Session)
-    s.runtime = Runtime(names)
+    s.runtime = Runtime(names, tactics)
     _session_var.set(s)
     return s
 
@@ -168,8 +169,9 @@ def test_the_table_starts_with_the_builtins_only(registries):
 
 
 def test_a_builtins_subclass_registered_later_is_not_a_builtin(registries):
-    # the built-ins were frozen when the last of them registered; a class that
-    # registers afterwards without being a UserNode is neither built-in nor usable
+    # the built-ins are the operations tools/cc_edit.jsonc has an entry for; a
+    # class that registers under another name without being a UserNode is
+    # neither built-in nor usable (the one exception is Tactic, below)
     Have = OPERATION_REGISTRY["Have"].cls
     @proof_operation("MyHave", Sample_ToolArg)
     class MyHave(Have):
@@ -305,8 +307,8 @@ def sample_block(name: str = "SampleBlock"):
     return Block
 
 
-def session_with(*names: str) -> Session:
-    s = bare_session(*names)
+def session_with(*names: str, tactics: 'tuple[tuple[str, str, str, bool, bytes], ...]' = ()) -> Session:
+    s = bare_session(*names, tactics=tactics)
     s._can_offer_dispatch_tools = lambda: True
     return s
 
@@ -480,3 +482,212 @@ def test_gemini_derives_its_form_from_the_calls_schema(registries):
     decl = tools[0].function_declarations[0]
     mcp._assert_no_refs(decl.parameters_json_schema)
     assert '"SampleLeaf"' in json.dumps(decl.parameters_json_schema)
+
+
+# --- the Tactic operation and its whitelist (docs/TACTIC_DESIGN.md) ------------------
+
+import logging  # noqa: E402
+from IsaMini.AoA.model import ArgumentError, TOOL_SEARCH                     # noqa: E402
+from Isabelle_RPC_Host.universal_key import EntityKind                       # noqa: E402
+
+
+def method_key(full: str) -> bytes:
+    """A METHOD universal key as ML builds one -- 16 bytes of theory hash, the
+    kind's tag, the full name in UTF-8; the hash is immaterial here."""
+    return b"\x00" * 16 + bytes([int(EntityKind.METHOD)]) + full.encode()
+
+
+SIMP = ("simp", "HOL.simp", "rewrite the goal with the simplifier", False, method_key("HOL.simp"))
+INDUCTION = ("induction", "HOL.induction", "prove by induction on a variable", True, method_key("HOL.induction"))
+
+
+def test_tactic_is_never_a_user_operation(registries):
+    with pytest.raises(AoA_Error, match='User operation "Tactic": its node class .*Tactic is not a UserNode'):
+        Runtime(["Tactic"])
+
+
+@pytest.mark.parametrize("name", ["tactic", "aoa", "auto"])
+def test_a_tactic_outside_the_whitelist_is_refused_at_parse_time(registries, name):
+    """On every driver, before any Isabelle call: the bare session has no connection."""
+    bare_session(tactics=(SIMP,))
+    op = {"operation": "Tactic", "thought": "t", "tactic": name}
+    with pytest.raises(ArgumentError, match=r"`proof_operations\[0\] \(Tactic\)\.tactic` must be one of `simp`"):
+        Parse_Op_List([op], "proof_operations")
+    have = {"operation": "Have", "thought": "t", "name": "h",
+            "statement": {"english": "trivial", "conclusion": "True"}, "proof": [dict(op)]}
+    with pytest.raises(ArgumentError, match=r"\(Have\)\.proof\[0\] \(Tactic\)\.tactic` must be one of `simp`"):
+        Parse_Op_List([have], "proof_operations")
+
+
+def test_an_empty_whitelist_has_no_tactic_operation(registries):
+    rt = Runtime([], [])
+    assert "Tactic" not in rt.operations and rt.tactics == {} and rt.tactics_by_full == {}
+    schema = mcp._edit_schema_for(rt)
+    assert "Tactic" not in schema["$defs"]
+    assert {"$ref": "#/$defs/Tactic"} not in schema["$defs"]["Operation"]["anyOf"]
+
+
+def test_the_whitelist_places_tactic_with_its_enum(registries):
+    sample_leaf()
+    rt = Runtime(["SampleLeaf"], [INDUCTION, SIMP])
+    assert list(rt.operations) == [*BUILTIN_OPERATIONS, "Tactic", "SampleLeaf"]
+    assert list(rt.tactics) == ["induction", "simp"]                 # whitelist order, agent-visible names
+    assert rt.tactics["simp"].full == "HOL.simp"
+    assert rt.tactics_by_full["HOL.simp"] is rt.tactics["simp"]
+    schema = mcp._edit_schema_for(rt)
+    assert schema["$defs"]["Tactic"]["properties"]["tactic"]["enum"] == ["induction", "simp"]
+    assert schema["$defs"]["Operation"]["anyOf"][-2:] == [{"$ref": "#/$defs/Tactic"}, {"$ref": "#/$defs/SampleLeaf"}]
+    assert model.Tactic.construct_schema["properties"]["tactic"]["enum"] == []   # the template is untouched
+    rt.activate_tactics([])                                           # a re-activation keeps the order
+    assert list(rt.operations) == [*BUILTIN_OPERATIONS, "SampleLeaf"]
+    assert "Tactic" not in mcp._edit_schema_for(rt)["$defs"]
+    rt.activate_tactics([SIMP])
+    assert list(rt.operations) == [*BUILTIN_OPERATIONS, "Tactic", "SampleLeaf"]
+
+
+PHI_REASON = ("\\<phi>reason", "PLPR.\\<phi>reason", "run the phi reasoner", True, method_key("PLPR.\\<phi>reason"))
+
+
+def test_a_symbol_name_is_shown_in_unicode_and_read_in_either_notation(registries):
+    """The agent-visible name is an IsaTerm: the agent sees `.unicode` (the
+    enum, the prompt block, the node, a rejection), the whitelist is keyed by
+    `.ascii`, and a spelling the agent supplies is read by ascii_of_unicode as
+    every name is -- in either notation."""
+    s = session_with(tactics=(PHI_REASON,))
+    s.role = model.Role_Major()
+    rt = s.runtime
+    assert list(rt.tactics) == ["\\<phi>reason"]
+    entry = rt.tactics["\\<phi>reason"]
+    assert (entry.name.unicode, entry.name.ascii) == ("φreason", "\\<phi>reason")
+    assert rt.tactics_by_full["PLPR.\\<phi>reason"] is entry
+    assert mcp._edit_schema_for(rt)["$defs"]["Tactic"]["properties"]["tactic"]["enum"] == ["φreason"]
+    assert "- φreason: run the phi reasoner" in s._tactic_prompt_block()
+    cfg = model.NodeConfig(local_step="1", ml_state=cast(Any, None), parent=None)
+    for spelling in ("φreason", "\\<phi>reason"):
+        [parsed] = Parse_Op_List([{"operation": "Tactic", "thought": "t", "tactic": spelling}], "proof_operations")
+        node = cast(model.Tactic, parsed.factory(cfg))
+        assert node.tactic is entry.name and node.tactic_full == "PLPR.\\<phi>reason"
+        assert node.quickview_title() == "Tactic (φreason)"
+    with pytest.raises(ArgumentError, match=r"`proof_operations\[0\] \(Tactic\)\.tactic` must be one of `φreason`"):
+        Parse_Op_List([{"operation": "Tactic", "thought": "t", "tactic": "\\<phi>reasoner"}], "proof_operations")
+    with pytest.raises(ArgumentError, match=r"`proof_operations\[0\] \(Tactic\)\.tactic` must be one of `φreason`"):
+        Parse_Op_List([{"operation": "Tactic", "thought": "t", "tactic": "PLPR.\\<phi>reason"}], "proof_operations")
+
+
+def test_the_builtins_are_the_operations_of_the_base_schema(registries):
+    assert "Tactic" in OPERATION_REGISTRY and "Tactic" not in BUILTIN_OPERATIONS
+    assert set(BUILTIN_OPERATIONS) == {n for n in OPERATION_REGISTRY if n in BASE_EDIT_SCHEMA["$defs"]}
+    model._check_construct_schema('Built-in operation "Tactic"', "Tactic", model.Tactic.construct_schema)
+
+
+def test_each_provider_form_carries_the_tactic_enum(registries):
+    from IsaMini.AoA import driver_openai_api as oa
+    schema = mcp._tool_schemas_for(session_with(tactics=(SIMP,)))["edit"]["schema"]
+    forms = {
+        "claude code": schema,
+        "gemini": mcp._flatten_edit_schema(schema),
+        "openai": oa.OpenAIBase._strict_schema(None, "edit", schema),
+        "deepseek": oa.DeepSeekProvider._strict_schema(None, "edit", schema),
+    }
+    for name, form in forms.items():
+        text = json.dumps(form)
+        assert '"Tactic"' in text and '"simp"' in text and "HOL.simp" not in text, name
+
+
+@pytest.mark.parametrize("read_memory", [True, False])
+def test_the_proof_tactic_kind_follows_the_query_entries(registries, read_memory):
+    def kinds_of(session):
+        return (mcp._tool_schemas_for(session)[TOOL_SEARCH]["schema"]
+                ["properties"]["queries"]["items"]["properties"]["kinds"]["items"]["enum"])
+    for tactics, offered in [((), False), ((INDUCTION,), False), ((SIMP,), True), ((INDUCTION, SIMP), True)]:
+        s = session_with(tactics=tactics)
+        s.enable_read_memory = read_memory
+        s.enable_write_memory = read_memory
+        kinds = kinds_of(s)
+        assert ("proof tactic" in kinds) is offered, tactics
+        assert ("experience" in kinds) is read_memory
+        assert "proof method" not in kinds
+
+
+def test_a_plugin_class_never_probes_post_instantiation(registries):
+    class PluginCases(UserNode, _Hooks, model.CaseSplit_Like):
+        construct_schema = schema_of("PluginCases")
+        def payload(self): return ""
+    assert PluginCases._probes_post_insts is False
+    assert model.Tactic_Like._probes_post_insts and model.CaseSplit_Like._probes_post_insts
+    assert model.SubgoalMaker._probes_post_insts is False
+
+
+@pytest.fixture
+def throwaway_db():
+    from IsaMini.AoA.test import _isolated_semantic_db_process
+    with _isolated_semantic_db_process() as path:
+        yield path
+
+
+def test_declare_interpretation(throwaway_db, monkeypatch):
+    from Isabelle_Semantic_Embedding import semantics
+    from Isabelle_Semantic_Embedding.semantics import Semantic_DB, SemanticRecord
+    invalidated: list[list[bytes]] = []
+    monkeypatch.setattr(semantics, "invalidate_vectors", lambda keys: invalidated.append(list(keys)))
+    key = method_key("HOL.simp")
+    # a fresh record, the text normalized
+    assert Semantic_DB.declare_interpretation(key, "rewrite the goal\n   with the\tsimplifier") is True
+    rec = Semantic_DB[key]
+    assert rec is not None and rec.kind == EntityKind.METHOD and rec.name == "HOL.simp" and rec.expr is None
+    assert rec.interpretation == "rewrite the goal with the simplifier"
+    assert invalidated == [[key]]
+    # the same text again: neither written nor invalidated
+    assert Semantic_DB.declare_interpretation(key, "rewrite the goal  with the simplifier") is False
+    assert invalidated == [[key]]
+    # a record as the pipeline writes one for a method (it carries `position`):
+    # expr cleared, every other field kept, invalidated once
+    seeded = SemanticRecord(EntityKind.METHOD, "HOL.simp", "simp", "the pipeline's text",
+                            position=("~~/src/HOL/HOL.thy", 10, 1))
+    Semantic_DB[key] = seeded
+    del invalidated[:]
+    assert Semantic_DB.declare_interpretation(key, "the declaration's text") is True
+    assert Semantic_DB[key] == seeded._replace(expr=None, interpretation="the declaration's text")
+    assert invalidated == [[key]]
+    # not a METHOD key
+    with pytest.raises(ValueError, match="not a proof-method key"):
+        Semantic_DB.declare_interpretation(b"\x00" * 16 + bytes([int(EntityKind.CONSTANT)]) + b"HOL.simp", "x")
+    # a deleted record reappears
+    Semantic_DB.delete(key)
+    assert Semantic_DB[key] is None
+    assert Semantic_DB.declare_interpretation(key, "the declaration's text") is True
+    rec = Semantic_DB[key]
+    assert rec is not None and rec.interpretation == "the declaration's text"
+
+
+@pytest.mark.parametrize("driver, expected", [
+    ("test.no_such_case", ["sync"]),           # the test driver skips the empty-DB hint
+    ("no_such_driver", ["hint", "sync"]),      # any other driver: the hint reads the DB first
+])
+def test_a_failing_sync_fails_the_call(monkeypatch, driver, expected):
+    """The sync is its own step, after the empty-DB hint and before the split
+    by driver: a failure is the call's failure, seen as the failure itself --
+    after the driver lookup, "Test Not Found" or an unknown driver would be
+    seen instead; before the hint, the hint would never see an empty DB."""
+    from IsaMini.AoA import toplevel
+    from Isabelle_Semantic_Embedding import semantics
+    seen: list[str] = []
+
+    class Boom(Exception):
+        pass
+
+    async def hint(connection):
+        seen.append("hint")
+
+    def boom(key, text):
+        seen.append("sync")
+        raise Boom("the DB is broken")
+    monkeypatch.setattr(toplevel, "_ensure_semantic_db", hint)
+    monkeypatch.setattr(semantics.Semantic_DB, "declare_interpretation", boom)
+    connection = types.SimpleNamespace(server=types.SimpleNamespace(logger=logging.getLogger("test")),
+                                       callback=None)
+    data = (({}, {}, {}), 0, driver, "", "invocation", "", "",
+            (1, 1, 1), ("usual", ""), (True, True), [], [SIMP])
+    with pytest.raises(Boom):
+        asyncio.run(toplevel.IsaMini_AoA(data, connection))
+    assert seen == expected

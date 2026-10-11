@@ -9,6 +9,8 @@ val xcmd_packer : theory -> xcmd MessagePackBinIO.Pack.packer
 val xcmd_unpacker : theory -> xcmd MessagePackBinIO.Unpack.unpacker
 
 val pack_bindings : bindings MessagePackBinIO.Pack.packer
+(*A Phi_Proof_Store.times on the wire: the (cpu_ms, wall_ms) pair in one slot.*)
+val pack_times : Phi_Proof_Store.times MessagePackBinIO.Pack.packer
 val pack_raw_term : term MessagePackBinIO.Pack.packer
 val unpack_raw_term : term MessagePackBinIO.Unpack.unpacker
 
@@ -61,19 +63,23 @@ val unpack_bindings =
 val pack_bindings =
   packPair (packList pack_var_name, packList pack_prem_name)
 
-(* A recorded proof on the wire: (method text, (cpu_ms, wall_ms)), the ms pair
-   nested in one slot as at every wire carrying a Phi_Proof_Store.times.  The
-   unpack side ALSO accepts the single-time (method, ms), lifting it to
-   cpu = wall = ms; mlmsgpack's `||` retries on the untouched instream, so the
-   fallback is safe.  Shared by FactInTime's recorded proof and HAMMER's
-   cached proof. *)
-fun pack_recorded_proof (prf, times) =
-  packPair (packString, packPair (packInt, packInt)) (prf, Phi_Proof_Store.ms_of_times times)
+(* A Phi_Proof_Store.times on the wire: the (cpu_ms, wall_ms) pair nested in
+   one slot, as at every wire carrying one.  The unpack side ALSO accepts a
+   single ms, lifting it to cpu = wall = ms; mlmsgpack's `||` retries on the
+   untouched instream, so the fallback is safe.  Shared by the recorded proofs
+   below, TACTIC's recorded times and the SH_PRF / FACT_PRF / TACTIC_TIMES
+   messages (agent_server.ML). *)
+val pack_times = packPair (packInt, packInt) o Phi_Proof_Store.ms_of_times
 
-val unpack_recorded_proof =
-  unpackPair (unpackString,
-              (unpackPair (unpackInt, unpackInt) || (unpackInt >> (fn ms => (ms, ms))))
-              >> Phi_Proof_Store.times_of_ms)
+val unpack_times =
+  (unpackPair (unpackInt, unpackInt) || (unpackInt >> (fn ms => (ms, ms))))
+  >> Phi_Proof_Store.times_of_ms
+
+(* A recorded proof on the wire: (method text, times).  Shared by FactInTime's
+   recorded proof and HAMMER's cached proof. *)
+fun pack_recorded_proof (prf, times) = packPair (packString, pack_times) (prf, times)
+
+val unpack_recorded_proof = unpackPair (unpackString, unpack_times)
 
 (* Wire triple (name, stmt option, recorded proof option) — stage 3a, D37.
    The pack side always writes the triple; the unpack side ALSO accepts the
@@ -191,6 +197,13 @@ fun xcmd_unpacker thy =
           in fn s => unpack_arg s
                handle Unpack => error ("User operation " ^ quote name ^ ": its argument does not decode")
          end)
+     | "TACTIC" => apfst TACTIC o unpackTuple5 (
+                        unpackString,                (* full method name *)
+                        unpackString,                (* arguments *)
+                        unpackList unpack_extended_fact,
+                        unpack_post_insts,           (* post-rule instantiation rounds *)
+                        unpackOption unpack_times    (* recorded times *)
+                     )
      | cmd => error("Unknown operation " ^ cmd)
   ) #> apfst snd
 
@@ -305,6 +318,10 @@ fun xcmd_packer _ (SIMPLIFY data) =
       packPair (packString,
                 packPair (packString, #pack_arg (#operation (MiniLang_Agent_Plugin.the_operation thy name))))
         ("USER", (name, arg))
+  | xcmd_packer _ (TACTIC data) =
+      packPair (packString, packTuple5 (packString, packString, packList pack_extended_fact,
+                                         pack_post_insts, packOption pack_times))
+        ("TACTIC", data)
 
 end
 

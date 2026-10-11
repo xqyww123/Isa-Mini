@@ -1,0 +1,126 @@
+--------------------------------------------------
+direct: proof tactic, ranked
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+direct: lemma and proof tactic, ranked
+--------------------------------------------------
+is_error: False
+simp shown: True; lemmas shown: 14
+--------------------------------------------------
+direct: lemma and proof tactic, pattern-only, number 1
+--------------------------------------------------
+is_error: False
+first entity: - simp; entities: 1
+--------------------------------------------------
+direct: proof tactic, pattern-only, name_contains aoa
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+--------------------------------------------------
+direct: proof tactic, pattern-only, name_contains Simp
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+1 entities match the filters — 1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+direct: exact_name of the prompt entry
+--------------------------------------------------
+is_error: False
+- auto
+  prove by classical reasoning and rewriting
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+direct: exact_name outside the whitelist
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+Warning: Undefined: "blast"
+--------------------------------------------------
+direct: the internal label
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+Warning: Invalid entity kind: 'proof method'
+--------------------------------------------------
+direct: the internal label, exact_name
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+Warning: Invalid entity kind: 'proof method'
+--------------------------------------------------
+direct, the DB record rewritten: ranked
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+direct, the DB record rewritten: pattern-only
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+direct, the DB record rewritten: exact_name
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+interactive: proof tactic, ranked
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+--------------------------------------------------
+interactive: lemma and proof tactic, ranked
+--------------------------------------------------
+is_error: False
+simp shown: True; lemmas shown: 49
+--------------------------------------------------
+interactive: lemma and proof tactic, pattern-only, number 1
+--------------------------------------------------
+is_error: False
+first entity: - simp; entities: 50
+--------------------------------------------------
+interactive: proof tactic, pattern-only, name_contains aoa
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+--------------------------------------------------
+interactive: proof tactic, pattern-only, name_contains Simp
+--------------------------------------------------
+is_error: False
+- simp
+  rewrite the goal with the simplifier
+--------------------------------------------------
+interactive: exact_name of the prompt entry
+--------------------------------------------------
+is_error: False
+- auto
+  prove by classical reasoning and rewriting
+1 new, 0 shown earlier are not shown again.
+--------------------------------------------------
+interactive: exact_name outside the whitelist
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+Warning: Undefined: "blast"
+--------------------------------------------------
+interactive: the internal label
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+--------------------------------------------------
+interactive: the internal label, exact_name
+--------------------------------------------------
+is_error: False
+No relevant entities found.
+Warning: Invalid entity kind: 'proof method'

@@ -17,6 +17,15 @@ val AoA_write_proof_store: bool Config.T
 val AoA_enable_write_memory: bool Config.T
 val AoA_enable_read_memory: bool Config.T
 
+(* The tactic whitelist of a context (docs/TACTIC_DESIGN.md): the entries the
+   `AoA_tactics` declaration holds, in whitelist order (by agent-visible name).
+   `name` is what the agent sees and writes (agent_method_name: the shortest
+   name that resolves back to `full`), `full` the method name space's
+   internal name, which the op stream carries. *)
+type tactic_entry = {name: string, full: string, interpretation: string, in_prompt: bool,
+                     key: Universal_Key.universal_key}
+val tactics_of : Proof.context -> tactic_entry list
+
 type state_id = string
 type states = Minilang.state Symtab.table
 
@@ -435,15 +444,21 @@ fun minilang_message_packer ctxt (running_op : MiniLang_Agent_Plugin.registratio
              (* (rendered proof text, (cpu_ms, wall_ms)): the ms pair nested in
                 one slot, as at every wire carrying a Phi_Proof_Store.times. *)
              | Minilang.SH_PRF (prf, times) =>
-                 SOME (packPair (packInt, packPair (packString, packPair (packInt, packInt)))
-                          (15, (prf, Phi_Proof_Store.ms_of_times times)))
+                 SOME (packPair (packInt, packPair (packString, MiniLang_Agent.pack_times))
+                          (15, (prf, times)))
              (* (assigned fact name, rendered proof text, (cpu_ms, wall_ms)) of a
                 FactInTime just proven live — Python pastes it back into the
                 op's fact field (stage 3a, D37; tag 20 author-approved
                 2026-08-10). *)
              | MiniLang_Agent.FACT_PRF (name, prf, times) =>
-                 SOME (packPair (packInt, packTuple3 (packString, packString, packPair (packInt, packInt)))
-                          (20, (name, prf, Phi_Proof_Store.ms_of_times times)))
+                 SOME (packPair (packInt, packTuple3 (packString, packString, MiniLang_Agent.pack_times))
+                          (20, (name, prf, times)))
+             (* (cpu_ms, wall_ms) of a LIVE TACTIC's run — Python records it
+                into the op at assembly (docs/TACTIC_DESIGN.md).  Without this
+                branch the message would fall through to the user operation's
+                claim below and be dropped silently. *)
+             | MiniLang_Agent.TACTIC_TIMES times =>
+                 SOME (packPair (packInt, MiniLang_Agent.pack_times) (22, times))
              | Agent_Hint.HINT_NOTICE {name, text} =>
                  SOME (packPair (packInt, packPair (packString, packString))
                           (17, (name, text)))
@@ -537,6 +552,64 @@ fun make_invocation_id () =
    in String.concat [hex_ms_last9, "_", hex_ser]
   end
 
+end
+
+(* The tactic whitelist (docs/TACTIC_DESIGN.md):
+     declare [[AoA_tactics add: simp ‹rewrite the goal with the simplifier›
+                                induction ‹prove by induction on a variable› shown_in: prompt]]
+   From the full method name to the interpretation the agent sees and whether
+   the entry is shown in the prompt (else offered through `query`).  The mode
+   defaults to `add:`; `del:` removes names; the last declaration of a name
+   wins.  Theory data only: nothing reaches Python at declare time; the
+   whitelist travels with each AoA call (raw_AoA), and the Tactic operation
+   exists in a call iff the whitelist is non-empty. *)
+structure AoA_Tactics = Generic_Data(
+  type T = {interpretation: string, in_prompt: bool} Symtab.table
+  val empty = Symtab.empty
+  val merge = Symtab.join (K snd)
+)
+
+type tactic_entry = {name: string, full: string, interpretation: string, in_prompt: bool,
+                     key: Universal_Key.universal_key}
+
+(* The agent-visible name of a method: the shortest name that resolves back to
+   the full name.  Plain extern would give `HOL.simp`, Pure declaring a `simp`
+   too. *)
+fun agent_method_name ctxt = Name_Space.extern_shortest ctxt (Method.method_space (Context.Proof ctxt))
+
+fun tactics_of ctxt : tactic_entry list =
+  let val context = Context.Proof ctxt
+   in Symtab.fold (fn (full, {interpretation, in_prompt}) =>
+        cons {name = agent_method_name ctxt full, full = full,
+              interpretation = interpretation, in_prompt = in_prompt,
+              key = #1 (Universal_Key.key_of_method context full)})
+        (AoA_Tactics.get context) []
+      |> sort_by #name
+  end
+
+local
+  val mode =
+    Args.del -- Args.colon >> K false || Scan.optional (Args.add -- Args.colon >> K true) true
+  val shown_in =
+    Scan.optional
+      (Args.$$$ "shown_in" -- Args.colon |-- (Args.$$$ "prompt" >> K true || Args.$$$ "query" >> K false))
+      false
+  (*the interpretation must be a cartouche: Parse.embedded would take the next name for it*)
+  fun add_entry ctxt =
+    Parse.name_position -- Parse.cartouche -- shown_in
+    >> (fn ((name, interpretation), in_prompt) =>
+          AoA_Tactics.map (Symtab.update
+            (Method.check_name ctxt name, {interpretation = interpretation, in_prompt = in_prompt})))
+  fun del_entry ctxt =
+    Parse.name_position >> (fn name => AoA_Tactics.map (Symtab.delete_safe (Method.check_name ctxt name)))
+in
+val _ =
+  Theory.setup
+   (Attrib.setup \<^binding>\<open>AoA_tactics\<close>
+      ((Args.context -- Scan.lift mode) :|-- (fn (ctxt, is_add) =>
+          Scan.repeat1 (Scan.lift (if is_add then add_entry ctxt else del_entry ctxt)))
+       >> (fn decls => Thm.declaration_attribute (fn _ => fold I decls)))
+      "the tactics AoA's Tactic operation may apply, each with its interpretation")
 end
 
 (* The Minilang configuration shared by live agent runs and replay (D35):
@@ -891,6 +964,8 @@ fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> strin
               (SOME (Name_Space.extern ctxt class_space name, [], [], [], false), NONE)
           | retrieve (Universal_Key.LocaleK, name) =
               (SOME (Name_Space.extern ctxt locale_space name, [], [], [], false), NONE)
+          | retrieve (Universal_Key.MethodK, name) =
+              (SOME (agent_method_name ctxt name, [], [], [], false), NONE)
           | retrieve (Universal_Key.Theorem_CollectionK, name) =
               (* Collection entity: render name + up to 3 member props, with a
                  "... (N more)" sentinel when there are more.  dynamic_fact_members
@@ -1832,10 +1907,15 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
          hammer_or_AoA), computed on the goal BEFORE preprocessing. *)
       val s0_flat_goal = Minilang.leading_goal_data s0
       val au = agent_context_unpacker
-      val {constants, theorems, types, classes, locales, named_theorems, methods,
+      val {constants, theorems, types, classes, locales, named_theorems, methods = _,
            introduction_rules, elimination_rules,
            induction_rules, case_split_rules} =
         Semantic_Store.make_entity_callbacks (Context.Proof ctxt) au
+      (* The method name space contributes no retrieval candidate in an AoA
+         call: the candidates are the tactic whitelist's entries (Python,
+         docs/TACTIC_DESIGN.md), never the store's enumeration (which keeps
+         every method outside Main). *)
+      val methods = Context_Callbacks.make_methods_callback (SOME (K false)) au
       val framework_callbacks = [
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
@@ -1897,17 +1977,26 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
                 val (_, budget) = cfg
                 val enable_write_memory = Config.get ctxt AoA_enable_write_memory
                 val enable_read_memory = Config.get ctxt AoA_enable_read_memory
+                (* the whitelist, in whitelist order: (agent-visible name, full
+                   name, interpretation, in_prompt, universal key); the two
+                   memory flags share a slot, packTuple12 being mlmsgpack's widest *)
+                fun pack_tactic {name, full, interpretation, in_prompt, key} =
+                  packTuple5 (packString, packString, packString, packBool,
+                              Universal_Key.pack_universal_key)
+                             (name, full, interpretation, in_prompt, key)
             in packTuple12 (context_packer ctxt, minilang_flat_goal_packer ctxt,
                            packString, packString, packString, packString, packString,
                            packTuple3 (packInt, packInt, packInt),
                            packPair (packString, I),
-                           packBool, packBool,
-                           packList packString)
+                           packPair (packBool, packBool),
+                           packList packString,
+                           packList pack_tactic)
                           (global_context, s0_flat_goal, driver, log_dir, invocation_id,
                            retrieval_forking, interactive_retrieval,
                            (#timeout_seconds budget, #max_tool_calls budget, #max_retries budget),
-                           (#name task, #payload task), enable_write_memory, enable_read_memory,
-                           map (#name o #operation) active_operations)
+                           (#name task, #payload task), (enable_write_memory, enable_read_memory),
+                           map (#name o #operation) active_operations,
+                           tactics_of ctxt)
             end),
         (* Stats tuple: the 10th element is assembled_isabelle_time as
            (cpu_ms, wall_ms) (D61) — the per-op ML execution times summed over
