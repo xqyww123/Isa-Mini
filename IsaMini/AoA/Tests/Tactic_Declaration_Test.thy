@@ -23,12 +23,7 @@ fun the_entry ctxt name =
   (case find_first (fn e => #name e = name) (MiniLang_Agent_AoA.tactics_of ctxt) of
      SOME e => e
    | NONE => error (name ^ " is not in the whitelist"))
-(*the attribute applied from its source text, as `declare [[AoA_tactics text]]`
-  applies it: the parse errors of the negatives are caught here*)
-fun declared ctxt text =
-  let val toks = filter Token.is_proper (Token.explode (Thy_Header.get_keywords' ctxt) Position.none text)
-      val att = Attrib.attribute_cmd ctxt (Token.make_src ("AoA_tactics", Position.none) toks)
-   in Context.the_proof (snd (Thm.apply_attribute att Drule.dummy_thm (Context.Proof ctxt))) end
+val declared = declared "AoA_tactics"
 in
 
 (*1: the design's example, declared above: two entries in whitelist order*)

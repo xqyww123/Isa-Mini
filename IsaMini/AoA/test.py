@@ -25,7 +25,7 @@ class TestCase(ABC):
         self.line = line
     @abstractmethod
     async def run(self, connection: Connection, log_dir: str, global_context: Context,
-                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
+                  ptree: Flat_Goal, runtime: Runtime) -> Root:
         raise NotImplementedError("Subclass must implement run method")
 
 type _TestOpr = Callable[[Root, MyIO], Union[None, Awaitable[None]]]
@@ -36,7 +36,7 @@ class ModelTestCase(TestCase):
         self.opr = opr
         self.isolated_db = isolated_db
     async def run(self, connection: Connection, log_dir: str, global_context: Context,
-                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
+                  ptree: Flat_Goal, runtime: Runtime) -> Root:
         # A fixture that declares AoA_tactics must run on a throwaway semantic DB
         # (docs/TACTIC_DESIGN.md): the call's start has already written the
         # whitelist's interpretations into whatever DB is in force, so a
@@ -134,7 +134,7 @@ class TheoryTestCase(TestCase):
     def __init__(self, name: str, file: str):
         super().__init__(name, file, -1)
     async def run(self, connection: Connection, log_dir: str, global_context: Context,
-                  ptree: tuple['Goal | None', int], runtime: Runtime) -> Root:
+                  ptree: Flat_Goal, runtime: Runtime) -> Root:
         raise AssertionError(
             "TheoryTestCase.run must never be called: run_all_tests evaluates the "
             "theory directly and does not dispatch through the AoA driver.")
@@ -168,6 +168,15 @@ def print_header(msg: str, file: MyIO):
     print("-"*50, file=file)
     print(msg, file=file)
     print("-"*50, file=file)
+
+def render(file: MyIO, header: str, surface: Callable[[MyIO], None]) -> None:
+    """One render under a header, written into its own fresh MyIO and then
+    copied into `file` -- the shape of every production render (docs/GOAL_HINTS.md,
+    section 5), which ModelTestCase's single MyIO would otherwise blur."""
+    print_header(header, file)
+    buf = MyIO(io.StringIO())
+    surface(buf)
+    file.write(buf.getvalue())
 
 #@test("sqrt2", "Test_sqrt2.thy", 6)
 async def _test_sqrt2(root: Root, file: MyIO):
@@ -3927,6 +3936,10 @@ theory_test("TacticDeclaration_Minilang", "Tactic_Declaration_Test.thy")
 # interpret_i's TACTIC branch: the replay cap, the inner timeout, and that a
 # recorded TACTIC replays whatever the whitelist.
 theory_test("TacticReplay_Minilang", "Tactic_Replay_Test.thy")
+
+# Goal hints (docs/GOAL_HINTS.md, section 7): the matching walk and the
+# declaration checks, below the agent.
+theory_test("GoalHints_Minilang", "Goal_Hints_Test.thy")
 
 
 # --- the sample plugin (Tests/Sample_Plugin.thy, Tests/sample_plugin/): user-defined
@@ -17741,6 +17754,88 @@ async def _test_hint_reject_setup_rewriting(root: Root, file: MyIO):
     file.write(f"committed: {len(outcome.committed)}, failure: {outcome.failure is not None}\n")
     file.write(f"failure: {outcome.failure}\n")
     session.print_proof_scope(0, file, show_warnings=True)
+
+
+@model_test("GoalHintsDelivery", "Test_GoalHintsDelivery.thy", 23)
+async def _test_goal_hints_delivery(root: Root, file: MyIO):
+    """docs/GOAL_HINTS.md section 7: a goal hint prints at the end of the footer
+    that asks for its goal's proof, once per render, under the first footer in
+    render order whose goal matches; the inline quickview and subagent_overall
+    consume it, proof.yaml does not; _reset_view_state shows it again; a proved
+    goal has no footer and no hint."""
+    session = root.session
+    def print_scope(buf: MyIO) -> None:
+        session.print_proof_scope(0, buf)
+    def quickview_scope(buf: MyIO) -> None:
+        session.quickview_proof_scope(0, buf)
+    async def overall(header: str) -> None:
+        text, _ = await _P.subagent_overall(root, session)
+        print_header(header, file)
+        file.write(text)
+
+    render(file, "0. proof.yaml: dvd and gcd under the main goal's footer, not consumed", print_scope)
+    render(file, "1. quickview: dvd and gcd, consumed", quickview_scope)
+
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "a divisibility",
+        "statement": {"english": "a divides a * b", "conclusion": "a dvd a * b"},
+        "name": "h_dvd"})])
+    render(file, "2. proof.yaml after Have a dvd a * b: nothing under its footer", print_scope)
+
+    session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "a cardinality",
+        "statement": {"english": "the singleton has one element", "conclusion": "card {a} = 1"},
+        "name": "h_card"})])
+    render(file, "3. proof.yaml: the card text under the footer of Have h_card", print_scope)
+
+    session.age += 1
+    await root.fill("2.1", [Branch.gen_single({
+        "thought": "trichotomy",
+        "cases": [
+            {"statement": {"english": "a is below 1", "isabelle": "a < 1", "name": "lt"}},
+            {"statement": {"english": "a is 1", "isabelle": "a = 1", "name": "eq"}},
+            {"statement": {"english": "a is above 1", "isabelle": "1 < a", "name": "gt"}},
+        ]})])
+    render(file, "4. proof.yaml: the card text once, under case 2.1.1", print_scope)
+
+    await overall("5.1 subagent_overall: the card text, consumed")
+    await overall("5.2 subagent_overall: nothing")
+
+    session._reset_view_state()
+    render(file, "6.1 proof.yaml after _reset_view_state: every text again", print_scope)
+    render(file, "6.2 quickview: the texts under the fill lines, consumed", quickview_scope)
+    render(file, "6.3 proof.yaml: nothing", print_scope)
+
+    session.age += 1
+    for target in ("1.1", "2.1.0.1", "2.1.1.1", "2.1.2.1", "2.1.3.1"):
+        outcome = await root.fill(target, [Obvious.gen_single({"facts": []})])
+        file.write(f"fill {target}: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
+    outcome = await root.fill("3", [Obvious.gen_single({"facts": [{"name": "gcd_dvd1"}]})])
+    file.write(f"fill 3: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
+    session._reset_view_state()
+    render(file, "7. proof.yaml after every goal is closed: nothing", print_scope)
+    unfinished: set = set()
+    root.unfinished_nodes(unfinished)
+    file.write(f"unfinished: {len(unfinished)}\n")
+
+
+@model_test("GoalHintsSuppliedProof", "Test_GoalHintsSuppliedProof.thy", 16)
+async def _test_goal_hints_supplied_proof(root: Root, file: MyIO):
+    """docs/GOAL_HINTS.md section 7: a Have whose matching statement is
+    submitted together with its proof never had the footer that prints a hint,
+    so nothing is shown on either surface."""
+    session = root.session
+    session.age += 1
+    outcome = await root.fill("1", [Have.gen_single({
+        "thought": "a divisibility, proved on the spot",
+        "statement": {"english": "a divides a * b", "conclusion": "a dvd a * b"},
+        "name": "h_dvd",
+        "proof": [{"operation": "Obvious", "facts": []}]})])
+    file.write(f"fill 1: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
+    render(file, "proof.yaml: no notice", lambda buf: session.print_proof_scope(0, buf))
+    render(file, "quickview: no notice", lambda buf: session.quickview_proof_scope(0, buf))
 
 
 @model_test("Define_WorkerScope_Deferred", "Test_Define_WorkerScope_Deferred.thy", 10)

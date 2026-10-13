@@ -368,16 +368,27 @@ fun minilang_items_packer ctxt =
             (* local_facts is already flattened as (string * term) list *)
          in {vars = vars, hyps = local_facts}
         end)
-(* Flat goal packer — replaces the recursive `minilang_tree_packer`.
-   Sends just (option(items, leading_goal_term), goals_count) instead
-   of the full PROP/BUNDL/BLOCK tree.  Python only needs the leading
-   goal (for display) and the count (for display + Root init). *)
+(* The flat goal of a state: its leading goal with the goal's items and goal
+   hints (docs/GOAL_HINTS.md, section 4), and the goals count. The hints are
+   computed here, with the state's own context, so every state Python holds
+   carries the hints of its own leading goal. *)
+type flat_goal = (Minilang.items * term * Agent_Hint.goal_hint list) option * int
+
+fun flat_goal_of s : flat_goal =
+  (case Minilang.leading_goal_data s of
+     (SOME (items, goal), count) =>
+       (SOME (items, goal, Agent_Hint.goal_hints (Minilang.context_of s) goal), count)
+   | (NONE, count) => (NONE, count))
+
+(* The wire: 0 when solved, else (1, (items, goal_text, [(serial, text)]), count). *)
 fun minilang_flat_goal_packer ctxt =
   let val item_packer = minilang_items_packer ctxt
       val term_packer = packString o MiniLang_Agent.string_of_term ctxt
-   in fn (SOME (items, leading_goal), count) =>
-        packTuple3 (packInt, packPair (item_packer, term_packer), packInt)
-                    (1, (items, leading_goal), count)
+      val hint_packer =
+        packList (packPair (packInt, packString)) o map (fn {serial, text} => (serial, text))
+   in fn (SOME (items, leading_goal, hints), count) =>
+        packTuple3 (packInt, packTuple3 (item_packer, term_packer, hint_packer), packInt)
+                    (1, (items, leading_goal, hints), count)
        | (NONE, _) =>
         packInt 0
   end
@@ -1112,7 +1123,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
                            SOME (MiniLang_Agent_Plugin.the_operation
                                    (Proof_Context.theory_of (Minilang.context_of s0)) name)
                        | _ => NONE)
-                 in (ctxt', running_op, msgs, Minilang.leading_goal_data s1,
+                 in (ctxt', running_op, msgs, flat_goal_of s1,
                      Phi_Proof_Store.ms_of_times time) end) ()
               (* Drain reporter messages on EVERY path: the success branch already
                  drained via clean_report, but a NOTICE pushed before a failure
@@ -1905,7 +1916,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       (* Build AoA command with local callbacks.  No hashing and no store access
          in here (D59): the key lives in the caching layer (run_AoA /
          hammer_or_AoA), computed on the goal BEFORE preprocessing. *)
-      val s0_flat_goal = Minilang.leading_goal_data s0
+      val s0_flat_goal = flat_goal_of s0
       val au = agent_context_unpacker
       val {constants, theorems, types, classes, locales, named_theorems, methods = _,
            introduction_rules, elimination_rules,

@@ -413,6 +413,16 @@ class Context(NamedTuple):
         hs = ", ".join(f"{k.unicode}: {v.unicode}" for k, v in self.hyps.items())
         return f"{{{vs}}}, tvars={{{ts}}}, {{{hs}}}"
 
+class Goal_Hint(NamedTuple):
+    """A goal hint (docs/GOAL_HINTS.md) of a state's leading goal: `name` is the
+    session-wide dedup key `goal:<serial>`, `text` the authored notice."""
+    name: str
+    text: str
+
+# The flat goal of a state (`flat_goal` in agent_server.ML) as `_unpack_flat_goal`
+# returns it: the leading goal or None, the goals count, the goal hints.
+type Flat_Goal = tuple['Goal | None', int, list[Goal_Hint]]
+
 class Goal(NamedTuple):
     context: Context
     conclusion: term
@@ -1956,6 +1966,9 @@ class Minilang_State:
         # The leading (first) proof goal with its context (vars/hyps
         # from the top HHF's items), or None if the proof is solved.
         self.leading_goal: Goal | None = None
+        # The goal hints of the leading goal (docs/GOAL_HINTS.md), assigned with
+        # it: [] when there is no goal or no goal hint is registered.
+        self.goal_hints: list[Goal_Hint] = []
         # Total number of goals in the current state's top HHF.
         # Used for display paths (has_pending_goal, should_I_show_pending_goal,
         # Root init).  This is the "display count" — may include siblings
@@ -1986,15 +1999,17 @@ class Minilang_State:
             connection = connection.connection
         return Minilang_State(connection, cls.assign_name())
     @staticmethod
-    def _unpack_flat_goal(data) -> tuple['Goal | None', int]:
+    def _unpack_flat_goal(data) -> Flat_Goal:
         """Unpack the flat goal representation from the ML RPC.
-        Wire format: tag 0 = solved (no goal); tag 1 = (items, term, count)."""
+        Wire format: 0 = solved (no goal); else (1, (items, term, hints), count),
+        the hints as (serial, text) pairs (docs/GOAL_HINTS.md, section 4)."""
         match data:
             case 0:
-                return (None, 0)
-            case (1, (items_data, conclusion_str), count):
+                return (None, 0, [])
+            case (1, (items_data, conclusion_str, hints), count):
                 context = Context.unpack(items_data)
-                return (Goal(context, IsaTerm.from_isabelle(conclusion_str)), count)
+                return (Goal(context, IsaTerm.from_isabelle(conclusion_str)), count,
+                        [Goal_Hint(f"goal:{serial}", text) for (serial, text) in hints])
             case _:
                 raise InternalError(f"Bad flat goal data: {data!r}")
 
@@ -2044,7 +2059,7 @@ class Minilang_State:
             user_cls = (session.operations[opr.arg[0]].cls
                         if opr.command == "USER" else None)
             msgs = [unpack_message(msg, user_cls) for msg in msgs]
-            (assign_to.leading_goal, assign_to.display_goals_count) = \
+            (assign_to.leading_goal, assign_to.display_goals_count, assign_to.goal_hints) = \
                 Minilang_State._unpack_flat_goal(flat_goal)
             assign_to._initialized = True
             assign_to.messages = msgs
@@ -2091,6 +2106,7 @@ class Minilang_State:
         """Remove this state from the Isabelle state table and mark as uninitialized."""
         await self.connection.callback("IsaMini.reset_state", self.name)
         self.leading_goal = None
+        self.goal_hints = []
         self.display_goals_count = 0
         self._initialized = False
         self.new_subgoals_count = None
@@ -6200,6 +6216,8 @@ class StdBlock(NonLeaf_Node):
                         print_pending_goal(goal, to_fill, indent, file, self._ctxt_of_filling(),
                                            show_goal=self._should_print_footer_pending_goal(),
                                            replace_existing=replace_existing)
+                    the_session()._print_goal_hints(self._state_before_ending_, indent, file,
+                                                    consume=False)
                 else:
                     self.open_pending_proof_line = None
     def is_proof_finished(self) -> bool:
@@ -6317,6 +6335,8 @@ class StdBlock(NonLeaf_Node):
                 elif visible != self._prev_pending_goal:
                     print_goal(goal, indent, True, file, suppressed)
                     self._prev_pending_goal = visible
+                the_session()._print_goal_hints(self._state_before_ending_, indent, file,
+                                                consume=True)
             else:
                 self._prev_pending_goal = None
         else:
@@ -11810,12 +11830,11 @@ class GlobalEnv(StdBlock):
             child.unfinished_nodes(ret)
 
 class Root(GoalContainer, StdBlock):
-    def __init__(self, context_and_flat_goal: tuple[Context, tuple['Goal | None', int]],
+    def __init__(self, context_and_flat_goal: tuple[Context, Flat_Goal],
                  connection: Connection):
-        (context, (leading_goal, goals_count)) = context_and_flat_goal
+        (context, flat_goal) = context_and_flat_goal
         ml_state0 = Minilang_State(connection, '$init')
-        ml_state0.leading_goal = leading_goal
-        ml_state0.display_goals_count = goals_count
+        (ml_state0.leading_goal, ml_state0.display_goals_count, ml_state0.goal_hints) = flat_goal
         ml_state0._initialized = True
         super().__init__(NodeConfig("$root", ml_state0, None), "", [])
         self.context = context
@@ -14538,9 +14557,28 @@ class Session:
             return
         if consume:
             self.shown_hints.update(seen_here)
+        self._print_notice_block(indent, file, emitted)
+
+    def _print_goal_hints(self, state: 'Minilang_State', indent: int, file: MyIO, *, consume: bool) -> None:
+        """Goal hints (docs/GOAL_HINTS.md, section 5): the hints of `state`'s
+        leading goal not yet shown this session nor earlier in this render,
+        as a `notice:` block at the end of the footer that asks for the goal's
+        proof. `consume` marks them shown, as in `_emit_pending_hint_notices`."""
+        pending = [h for h in state.goal_hints
+                   if h.name not in self.shown_hints and h.name not in file.printed_goal_hints]
+        if not pending:
+            return
+        file.printed_goal_hints.update(h.name for h in pending)
+        if consume:
+            self.shown_hints.update(h.name for h in pending)
+        self._print_notice_block(indent, file, [h.text for h in pending])
+
+    def _print_notice_block(self, indent: int, file: MyIO, texts: list[str]) -> None:
+        """One `notice:` block: each text a `- ` item at indent+1, its further
+        lines at indent+2, through `_postprocess_outbound_text`."""
         print_indent(indent, file)
         file.write("notice:\n")
-        for text in emitted:
+        for text in texts:
             t = self._postprocess_outbound_text(text)
             for i, line in enumerate(t.splitlines() or [""]):
                 if i == 0:

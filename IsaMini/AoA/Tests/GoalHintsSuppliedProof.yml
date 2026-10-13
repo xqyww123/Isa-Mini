@@ -1,0 +1,27 @@
+fill 1: committed 1, failure False
+--------------------------------------------------
+proof.yaml: no notice
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: (0 :: nat) < a + b + (1 :: nat)
+proof:
+  - step id: 1
+    thought: a divisibility, proved on the spot
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof:
+      - step id: 1.1
+        operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+quickview: no notice
+--------------------------------------------------
+step 1: Have h_dvd (proven)
+Unfinished Proof. Call command `edit` with action `fill` and target step `2`
+goal: (0 :: nat) < a + b + (1 :: nat)

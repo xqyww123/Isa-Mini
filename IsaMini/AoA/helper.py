@@ -209,6 +209,10 @@ class MyIO:
         """
         self._wrapped = wrapped
         self._line_number = initial_line
+        # The goal hints this render has printed (docs/GOAL_HINTS.md, section 5):
+        # a hint prints once per render, under the first footer whose goal
+        # matches. Lives as long as the sink, like the line counter.
+        self.printed_goal_hints: set[str] = set()
 
     def write(self, s: str) -> int:
         """

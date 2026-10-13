@@ -1,0 +1,406 @@
+--------------------------------------------------
+0. proof.yaml: dvd and gcd under the main goal's footer, not consumed
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+notice:
+  - To prove a divisibility `a dvd b`, look for a witness `b = a * k` (`dvd_def`), or chain through `dvd_trans`.
+  - `gcd` goals usually go through `gcd_unique_nat` / `gcd_dvd1` / `gcd_dvd2`.
+--------------------------------------------------
+1. quickview: dvd and gcd, consumed
+--------------------------------------------------
+Unfinished Proof. Call command `edit` with action `fill` and target step `1`
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+notice:
+  - To prove a divisibility `a dvd b`, look for a witness `b = a * k` (`dvd_def`), or chain through `dvd_trans`.
+  - `gcd` goals usually go through `gcd_unique_nat` / `gcd_dvd1` / `gcd_dvd2`.
+--------------------------------------------------
+2. proof.yaml after Have a dvd a * b: nothing under its footer
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      a dvd a * b
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+3. proof.yaml: the card text under the footer of Have h_card
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      a dvd a * b
+  - step id: 2
+    thought: a cardinality
+    operation: Have
+    statement:
+      english: the singleton has one element
+      conclusion: card {a} = 1
+    name: h_card
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      card {a} = (1 :: nat)
+    notice:
+      - `card` goals: rewrite the set to a literal form first, then count.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+--------------------------------------------------
+4. proof.yaml: the card text once, under case 2.1.1
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      a dvd a * b
+  - step id: 2
+    thought: a cardinality
+    operation: Have
+    statement:
+      english: the singleton has one element
+      conclusion: card {a} = 1
+    name: h_card
+    proof:
+      - step id: 2.1
+        thought: trichotomy
+        operation: Branch
+        cases:
+          - goal id: 2.1.0
+            thought: We first show exhaustiveness of the case split
+            goal: a < (1 :: nat) ∨ a = (1 :: nat) ∨ (1 :: nat) < a
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.0.1` to provide the proof.
+          - goal id: 2.1.1
+            premises:
+              - lt: a < (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1.1` to provide the proof.
+            notice:
+              - `card` goals: rewrite the set to a literal form first, then count.
+          - goal id: 2.1.2
+            premises:
+              - eq: a = (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.2.1` to provide the proof.
+          - goal id: 2.1.3
+            premises:
+              - gt: (1 :: nat) < a
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.3.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+--------------------------------------------------
+5.1 subagent_overall: the card text, consumed
+--------------------------------------------------
+Overall:
+  step 1: Have h_dvd
+    Unfinished Proof. Fill step `1.1`
+    goal: a dvd a * b
+  step 2: Have h_card
+    step 2.1: Branch
+      - 2.1.0
+        Unfinished Proof. Fill step `2.1.0.1`
+        goal: a < (1 :: nat) ∨ a = (1 :: nat) ∨ (1 :: nat) < a
+      - 2.1.1
+        premises:
+          - lt: a < (1 :: nat)
+        Unfinished Proof. Fill step `2.1.1.1`
+        goal: card {a} = (1 :: nat)
+        notice:
+          - `card` goals: rewrite the set to a literal form first, then count.
+      - 2.1.2
+        premises:
+          - eq: a = (1 :: nat)
+        Unfinished Proof. Fill step `2.1.2.1`
+        goal: card {a} = (1 :: nat)
+      - 2.1.3
+        premises:
+          - gt: (1 :: nat) < a
+        Unfinished Proof. Fill step `2.1.3.1`
+        goal: card {a} = (1 :: nat)
+  Unfinished Proof. Fill step `3`
+--------------------------------------------------
+5.2 subagent_overall: nothing
+--------------------------------------------------
+Overall:
+  step 1: Have h_dvd
+    Unfinished Proof. Fill step `1.1`
+  step 2: Have h_card
+    step 2.1: Branch
+      - 2.1.0
+        Unfinished Proof. Fill step `2.1.0.1`
+      - 2.1.1
+        Unfinished Proof. Fill step `2.1.1.1`
+      - 2.1.2
+        Unfinished Proof. Fill step `2.1.2.1`
+      - 2.1.3
+        Unfinished Proof. Fill step `2.1.3.1`
+  Unfinished Proof. Fill step `3`
+--------------------------------------------------
+6.1 proof.yaml after _reset_view_state: every text again
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      a dvd a * b
+    notice:
+      - To prove a divisibility `a dvd b`, look for a witness `b = a * k` (`dvd_def`), or chain through `dvd_trans`.
+  - step id: 2
+    thought: a cardinality
+    operation: Have
+    statement:
+      english: the singleton has one element
+      conclusion: card {a} = 1
+    name: h_card
+    proof:
+      - step id: 2.1
+        thought: trichotomy
+        operation: Branch
+        cases:
+          - goal id: 2.1.0
+            thought: We first show exhaustiveness of the case split
+            goal: a < (1 :: nat) ∨ a = (1 :: nat) ∨ (1 :: nat) < a
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.0.1` to provide the proof.
+          - goal id: 2.1.1
+            premises:
+              - lt: a < (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1.1` to provide the proof.
+            notice:
+              - `card` goals: rewrite the set to a literal form first, then count.
+          - goal id: 2.1.2
+            premises:
+              - eq: a = (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.2.1` to provide the proof.
+          - goal id: 2.1.3
+            premises:
+              - gt: (1 :: nat) < a
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.3.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+notice:
+  - `gcd` goals usually go through `gcd_unique_nat` / `gcd_dvd1` / `gcd_dvd2`.
+--------------------------------------------------
+6.2 quickview: the texts under the fill lines, consumed
+--------------------------------------------------
+step 1: Have h_dvd
+  Unfinished Proof. Call command `edit` with action `fill` and target step `1.1`
+  notice:
+    - To prove a divisibility `a dvd b`, look for a witness `b = a * k` (`dvd_def`), or chain through `dvd_trans`.
+  proposition: a dvd a * b
+step 2: Have h_card
+  step 2.1: Branch
+    - 2.1.0
+      Unfinished Proof. Fill step `2.1.0.1`
+    - 2.1.1
+      Unfinished Proof. Fill step `2.1.1.1`
+      notice:
+        - `card` goals: rewrite the set to a literal form first, then count.
+    - 2.1.2
+      Unfinished Proof. Fill step `2.1.2.1`
+    - 2.1.3
+      Unfinished Proof. Fill step `2.1.3.1`
+  proposition: card {a} = 1
+Unfinished Proof. Fill step `3`
+notice:
+  - `gcd` goals usually go through `gcd_unique_nat` / `gcd_dvd1` / `gcd_dvd2`.
+--------------------------------------------------
+6.3 proof.yaml: nothing
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.1` to provide the proof for the following goal.
+    pending proof goal:
+      a dvd a * b
+  - step id: 2
+    thought: a cardinality
+    operation: Have
+    statement:
+      english: the singleton has one element
+      conclusion: card {a} = 1
+    name: h_card
+    proof:
+      - step id: 2.1
+        thought: trichotomy
+        operation: Branch
+        cases:
+          - goal id: 2.1.0
+            thought: We first show exhaustiveness of the case split
+            goal: a < (1 :: nat) ∨ a = (1 :: nat) ∨ (1 :: nat) < a
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.0.1` to provide the proof.
+          - goal id: 2.1.1
+            premises:
+              - lt: a < (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.1.1` to provide the proof.
+          - goal id: 2.1.2
+            premises:
+              - eq: a = (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.2.1` to provide the proof.
+          - goal id: 2.1.3
+            premises:
+              - gt: (1 :: nat) < a
+            goal: card {a} = (1 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `2.1.3.1` to provide the proof.
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+fill 1.1: committed 1, failure False
+fill 2.1.0.1: committed 1, failure False
+fill 2.1.1.1: committed 1, failure False
+fill 2.1.2.1: committed 1, failure False
+fill 2.1.3.1: committed 1, failure False
+fill 3: committed 1, failure False
+--------------------------------------------------
+7. proof.yaml after every goal is closed: nothing
+--------------------------------------------------
+variables:
+  - b: nat
+  - a: nat
+premises:
+  - assms: (0 :: nat) < a
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: gcd a b dvd a ∧ (0 :: nat) < a
+proof:
+  - step id: 1
+    thought: a divisibility
+    operation: Have
+    statement:
+      english: a divides a * b
+      conclusion: a dvd a * b
+    name: h_dvd
+    proof:
+      - step id: 1.1
+        operation: Obvious
+  - step id: 2
+    thought: a cardinality
+    operation: Have
+    statement:
+      english: the singleton has one element
+      conclusion: card {a} = 1
+    name: h_card
+    proof:
+      - step id: 2.1
+        thought: trichotomy
+        operation: Branch
+        cases:
+          - goal id: 2.1.0
+            thought: We first show exhaustiveness of the case split
+            goal: a < (1 :: nat) ∨ a = (1 :: nat) ∨ (1 :: nat) < a
+            proof:
+              - step id: 2.1.0.1
+                operation: Obvious
+          - goal id: 2.1.1
+            premises:
+              - lt: a < (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof:
+              - step id: 2.1.1.1
+                operation: Obvious
+          - goal id: 2.1.2
+            premises:
+              - eq: a = (1 :: nat)
+            goal: card {a} = (1 :: nat)
+            proof:
+              - step id: 2.1.2.1
+                operation: Obvious
+          - goal id: 2.1.3
+            premises:
+              - gt: (1 :: nat) < a
+            goal: card {a} = (1 :: nat)
+            proof:
+              - step id: 2.1.3.1
+                operation: Obvious
+  - step id: 3
+    operation: Obvious
+    with facts:
+      - gcd_dvd1: gcd ?a ?b dvd ?a
+unfinished: 0

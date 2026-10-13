@@ -153,4 +153,5 @@ async def _test_Have1(root: Root, file: MyIO):
 - `Tests/Sample_Plugin.thy` + `Tests/sample_plugin/` — the sample plugin: user-defined proof operations end to end (design: `docs/USER_OPERATIONS.md`).
 - `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` — ML side.
 - `../../Agent/agent_config.ML`, `../../Agent/agent_plugin.ML` — ML side: the agent's `config` type; the registries of user operations and tasks.
+- `../../Agent/agent_hint.ML` — ML side: the Agent Hint Registry — constant/fact hints (`aoa_notice_constant`, `aoa_reject_constant`, `aoa_notice`, `aoa_reject`; fixtures `Tests/Test_Hint*.thy`) and goal hints (`aoa_notice_goal`; design `docs/GOAL_HINTS.md`; `Tests/Goal_Hints_Test.thy`, `Tests/Test_GoalHints*.thy`).
 - `docs/DEVELOP.md` — the longer-form design document (same material, with rationale).

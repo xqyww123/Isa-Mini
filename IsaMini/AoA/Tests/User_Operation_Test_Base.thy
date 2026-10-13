@@ -4,8 +4,9 @@ begin
 
 text \<open>
   What the user-operation test theories share: the assertion helpers, the
-  argument helper, and an opaque goal with the fact that closes it, which the
-  preprocessing segments cannot close on their own (the replay tests).
+  declaration helper, the argument helper, and an opaque goal with the fact
+  that closes it, which the preprocessing segments cannot close on their own
+  (the replay tests).
 \<close>
 
 consts Opaque :: bool
@@ -39,6 +40,13 @@ fun fails_with text f =
 fun fails_exactly text f =
   let val msg = failure_of f
    in assert ("expected exactly the error " ^ quote text ^ ", got " ^ quote msg) (msg = text) end
+
+(*the attribute `name` applied from its source text, as `declare [[name text]]`
+  applies it: the parse errors of the negatives are caught by fails_with*)
+fun declared name ctxt text =
+  let val toks = filter Token.is_proper (Token.explode (Thy_Header.get_keywords' ctxt) Position.none text)
+      val att = Attrib.attribute_cmd ctxt (Token.make_src (name, Position.none) toks)
+   in Context.the_proof (snd (Thm.apply_attribute att Drule.dummy_thm (Context.Proof ctxt))) end
 
 (*the argument as the codec hands it over: read by the registration's own
   unpack_arg into the type that registration hides, and shown inverse: packed

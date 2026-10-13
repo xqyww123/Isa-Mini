@@ -516,6 +516,7 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
 | `Tests/Sample_Plugin.thy`, `Tests/sample_plugin/` | The sample plugin of the test suite: the two halves of four user operations. |
 | `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` | ML side. |
 | `../../Agent/agent_config.ML`, `../../Agent/agent_plugin.ML` | ML side: the agent's `config` type, and the registries of user operations and tasks. |
+| `../../Agent/agent_hint.ML` | ML side: the Agent Hint Registry — the constant and fact hints (`aoa_notice_constant`, `aoa_reject_constant`, `aoa_notice`, `aoa_reject`; fixtures `Tests/Test_Hint*.thy`) and the goal hints (`aoa_notice_goal`; design `docs/GOAL_HINTS.md`; `Tests/Goal_Hints_Test.thy`, `Tests/Test_GoalHints*.thy`). |
 
 **User-defined proof operations.** A plugin adds proof operations or tasks to
 AoA without editing it: an Isabelle theory registers them through
