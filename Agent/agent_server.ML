@@ -1107,6 +1107,10 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
                      (msgs, flat_goal, times_ms)),
         function = (fn (from, to, opr) =>
           let val _ = Minilang.set_reporter listen_report
+              (* this op's report starts empty: a message another callback left
+                 since the last drain (e.g. a hint notice fired while validating
+                 an instantiation answer) is not this op's (A3) *)
+              val _ = messages := []
               val s0 = get_state from
               val result = Exn.capture (fn () =>
                 let val (time, s1) =
