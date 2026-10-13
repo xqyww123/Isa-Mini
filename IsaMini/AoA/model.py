@@ -10830,30 +10830,32 @@ class Tactic_Like(SubgoalMaker):
             return (None, indent-1)
         else:
             return ("derived subgoals", indent+1)
+    def _derived_goal(self) -> 'Goal | None':
+        """The goal the op left when it left one subgoal; None unless the node
+        succeeded — a failed node's after-beginning state is not its result."""
+        if len(self.sub_nodes) > 1 or not _status_can_continue(self.status.status):
+            return None
+        return self.goal()
     def _quickview_derived_goal(self, indent: int, file: MyIO) -> None:
         """The quickview's `derived goal:` line when the op left one subgoal,
         printed again only when that goal changed."""
-        if len(self.sub_nodes) <= 1:
-            s0 = self._state_after_beginning()
-            goal = s0.leading_goal
-            if goal is not None:
-                conclusion = goal.conclusion
-                if conclusion != self._prev_quickview_derived_goal:
-                    conclusion_str = conclusion.unicode
-                    if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
-                        conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
-                    print_indent(indent, file)
-                    file.write(f"derived goal: {conclusion_str}\n")
-                    self._prev_quickview_derived_goal = conclusion
+        goal = self._derived_goal()
+        if goal is not None:
+            conclusion = goal.conclusion
+            if conclusion != self._prev_quickview_derived_goal:
+                conclusion_str = conclusion.unicode
+                if len(conclusion_str) > AGENT_GOAL_CHAR_LIMIT:
+                    conclusion_str = _trunc_expr_base(conclusion_str, AGENT_GOAL_CHAR_LIMIT)
+                print_indent(indent, file)
+                file.write(f"derived goal: {conclusion_str}\n")
+                self._prev_quickview_derived_goal = conclusion
     def _print_derived_goal(self, indent: int, file: MyIO) -> None:
         """The full print's `derived goal:` block when the op left one subgoal."""
-        if len(self.sub_nodes) <= 1:
-            s0 = self._state_after_beginning()
-            goal = s0.leading_goal
-            if goal is not None:
-                print_indent(indent, file)
-                file.write("derived goal:\n")
-                print_goal(goal, indent+1, False, file, self._ctxt_before_me())
+        goal = self._derived_goal()
+        if goal is not None:
+            print_indent(indent, file)
+            file.write("derived goal:\n")
+            print_goal(goal, indent+1, False, file, self._ctxt_before_me())
 
 
 class InferenceRule_ToolArg(TypedDict):
