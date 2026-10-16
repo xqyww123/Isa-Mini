@@ -760,6 +760,7 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
             if exp.new_interaction is None:                       # re-prompt the SAME interaction
                 assert exp.new_prompt is not None, \
                     "ContinuingInteraction needs new_prompt or new_interaction"
+                session.reprompt_pending_interaction(exp.new_prompt)
                 session.log_tool_response(
                     _tn, f"[INTERACTION PROMPT]\n{exp.new_prompt}")
                 return (exp.new_prompt, False)
@@ -779,9 +780,9 @@ async def _answer_tool_dispatch(session: Session, tool_name: str, args: dict) ->
                 if not session.is_major:
                     await session.interrupt()
                 return (resolved, False)
-            session.replace_pending_interaction(new_it)           # mode-check (InternalError) + swap
             answer_tn = session.tool_name(new_it.answer_tool_name)
             text += f"\nAnswer the question above by calling the `{answer_tn}` tool."
+            session.replace_pending_interaction(new_it, text)     # mode-check (InternalError) + swap
             session.log_interaction(_tn, f"interaction replaced: {type(new_it).__name__}")
             session.log_tool_response(_tn, f"[INTERACTION REPLACED]\n{text}")
             return (text, False)
@@ -2115,10 +2116,9 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
-# Dispatch tools (subagent/cancel_subagent): available to dispatchers — the main
-# agent AND workers — but hidden from interaction forks. Precompute the non-dispatcher
-# (interaction-fork) view once at import time. The name `_PLANNER_ONLY_TOOLS` is kept
-# for stability but now means "tools an interaction fork does not get".
+# Dispatch tools (subagent/cancel_subagent). `_TOOL_SCHEMAS_WORKER` is the full set
+# without them, precomputed once at import time; `_tool_schemas_for` decides which
+# set a session is advertised. The name `_PLANNER_ONLY_TOOLS` is kept for stability.
 _PLANNER_ONLY_TOOLS: frozenset[str] = frozenset({TOOL_SUBAGENT, TOOL_CLOSE_SUBAGENT})
 _TOOL_SCHEMAS_WORKER: dict[str, dict[str, Any]] = {
     k: v for k, v in _TOOL_SCHEMAS.items() if k not in _PLANNER_ONLY_TOOLS}
@@ -2144,14 +2144,23 @@ def _edit_schema_for(runtime: Runtime) -> dict:
 def _tool_schemas_for(session: Session) -> dict[str, dict[str, Any]]:
     """Tool schemas advertised to ``session``. ``subagent`` / ``cancel_subagent`` are
     DISPATCH tools, shown to any agent that can delegate — the main agent AND workers
-    (nested delegation) — but hidden from interaction forks (which never delegate) AND
-    from a session already at the maximum nesting depth (a sub-sub-agent cannot
-    delegate further). The gate is ``Session._can_offer_dispatch_tools``; ``_TOOL_SCHEMAS_WORKER``
-    keeps its name but is simply the full set minus the dispatch tools."""
+    (nested delegation) — but hidden from a session already at the maximum nesting
+    depth. The gate is
+    ``Session._can_offer_dispatch_tools``; ``_TOOL_SCHEMAS_WORKER`` keeps its name but
+    is simply the full set minus the dispatch tools. An interaction fork is advertised
+    the tools of the session that launched it (up the ``parent`` chain, those of the
+    first non-interaction session), as ``Session.system_prompt`` does for the system
+    prompt, so a fork with context sends the tool list of the conversation it
+    continues. It never delegates: ``_check_tool_permission`` refuses a dispatch call
+    from it."""
+    if session.is_interaction:
+        assert session.parent is not None
+        return _tool_schemas_for(session.parent)
     base = _TOOL_SCHEMAS if session._can_offer_dispatch_tools() else _TOOL_SCHEMAS_WORKER
     # Memory feature gates (AoA_enable_write_memory / AoA_enable_read_memory, tree-wide
-    # via Runtime), applied here so they hold for BOTH drivers (CC builds its Tool
-    # list from here; APIDriver reads it via ToolExecutor.tool_schemas). Write off:
+    # via Runtime), applied here so they hold for every driver (ClaudeCode and Codex
+    # build their MCP tool list from here; APIDriver reads it via
+    # ToolExecutor.tool_schemas). Write off:
     # write_memory leaves the advertised set entirely. Read off: the "experience"
     # kind leaves `query`'s schema (the retrieval itself is stripped in
     # Minilang_State.semantic_knn_counted).
@@ -2869,8 +2878,9 @@ class ToolExecutor:
 
     def tool_schemas(self) -> dict[str, dict[str, Any]]:
         """Return {name: {"description": ..., "schema": ...}} for the tools
-        advertised to this session's role (``subagent``/``cancel_subagent`` are
-        dispatch tools — for the main agent and workers, not interaction forks)."""
+        advertised to this session (``subagent``/``cancel_subagent`` are dispatch
+        tools — for the main agent and workers; an interaction fork is advertised
+        the tools of the session that launched it)."""
         return _tool_schemas_for(self._session)
 
 
@@ -2889,7 +2899,8 @@ def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) ->
     executor = ToolExecutor(session)
 
     # Build tool list: built-in (role-scoped — `subagent`/`cancel_subagent` go to
-    # dispatchers: the main agent and workers, not interaction forks) + extras
+    # dispatchers, the main agent and workers; an interaction fork gets the tools
+    # of the session that launched it) + extras
     tools: list[Tool] = [
         Tool(name=name, description=t["description"],
              inputSchema=t["schema"], annotations=t["annotations"])

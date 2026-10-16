@@ -321,7 +321,7 @@ class LMDriver(Session):
 
     # --- Worker spawning ---
 
-    def _accumulate_subagent_costs(self, sub: 'LMDriver'):
+    def _accumulate_sub_session_costs(self, sub: 'LMDriver'):
         self.total_input_tokens += sub.total_input_tokens
         self.total_output_tokens += sub.total_output_tokens
         self.total_cache_creation_input_tokens += sub.total_cache_creation_input_tokens

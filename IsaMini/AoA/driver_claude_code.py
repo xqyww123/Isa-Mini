@@ -117,9 +117,11 @@ class ClaudeCode(LMDriver):
     def _role_allowed_tools(self) -> list[str]:
         """SDK tool allow-list for this session's role. `subagent`/`cancel_subagent`
         are dispatch tools, allowed for the main agent AND workers (nested
-        delegation) but hidden from interaction forks and from a session already at
-        the maximum nesting depth (a sub-sub-agent cannot delegate further). Gated by
-        `_can_offer_dispatch_tools`, mirroring the MCP tool list (`_tool_schemas_for`)."""
+        delegation) but not for interaction forks or for a session already at the
+        maximum nesting depth. Gated by
+        `_can_offer_dispatch_tools` on this session itself, so an interaction fork may
+        not call the dispatch tools even when its MCP tool list (`_tool_schemas_for`)
+        advertises them as the tools of the session that launched it."""
         return (self.TOOL_WHITELIST if self._can_offer_dispatch_tools()
                 else self._WORKER_TOOL_WHITELIST)
 
@@ -232,7 +234,7 @@ class ClaudeCode(LMDriver):
             # defaults to "omitted", which returns signature-only blocks whose
             # `.thinking` is empty — so `log_model_thinking` never fired.
             thinking={"type": "adaptive", "display": "summarized"},
-            system_prompt=self.system_prompt(),
+            system_prompt=await self.system_prompt(),
             cwd=self.working_dir,
             permission_mode="default",
             allowed_tools=self._role_allowed_tools(),
@@ -870,7 +872,7 @@ class ClaudeCode(LMDriver):
             # See the main-options note: without `display` the thinking text is
             # omitted on Opus 4.7+ and only a signature comes back.
             thinking={"type": "adaptive", "display": "summarized"},
-            system_prompt=self.system_prompt(),
+            system_prompt=await self.system_prompt(),
             resume=resume,
             fork_session=fork_session,
             cwd=self.working_dir,

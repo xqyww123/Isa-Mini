@@ -9,7 +9,6 @@ from pathlib import Path
 from .helper import split_id_into_segs, cat_segs_into_id, incr_id_major, incr_id_minor, local_step_between, MyIO, check_name_and_abstractness
 from .linked_list import Cons, LinkedList, from_iterable, iterate, concat
 from . import config
-from .task import Task, UsualTask
 from .edit_schema import BASE_EDIT_SCHEMA
 import types as _types
 from typing import Any, Awaitable, ClassVar, Iterable, Mapping, NamedTuple, Protocol, Sequence, TypedDict, Callable, cast, Type, Literal, NotRequired, TypeAliasType, Union, get_type_hints, get_origin, get_args, is_typeddict, TYPE_CHECKING
@@ -29,13 +28,14 @@ from Isabelle_Semantic_Embedding.semantics import (
 EXACT_NAME_BUNDLE_LIMIT = 20
 
 if TYPE_CHECKING:
-    # `LMDriver` (the session/driver base) lives in `language_model_driver`, and
-    # `ToolExecutor` in `mcp_http_server` — both of which import `Session` from
-    # this module, so a runtime import would be circular. The annotations that
-    # reference them are string forward-refs; this guarded import only feeds
-    # the type checker and runs no code at import time.
+    # `LMDriver` (the session/driver base) lives in `language_model_driver`,
+    # `ToolExecutor` in `mcp_http_server` and `Task` in `task` — each of which
+    # imports `Session` from this module, so a runtime import would be circular.
+    # The annotations that reference them are string forward-refs; this guarded
+    # import only feeds the type checker and runs no code at import time.
     from .language_model_driver import LMDriver
     from .mcp_http_server import ToolExecutor
+    from .task import Task
 
 AGENT_EXPR_LIMIT = 200
 AGENT_GOAL_CHAR_LIMIT = 400
@@ -12265,6 +12265,9 @@ class Role_Worker:
 @dataclass
 class Role_Interaction:
     pending: Fork_Pending
+    # The question the fork was last shown: the text it was launched with, then
+    # whatever the answer tool returned as a new question (a re-prompt or a
+    # replacement). A Codex fork resends it on a later attempt.
     prompt: str
     resume_id: str | None
     mode: ForkingMode
@@ -12346,9 +12349,12 @@ class Runtime:
         # The Task this proof tree is executing (UsualTask by default). One per
         # tree — shared by planner + workers + interaction forks. Set by the
         # top-level session at construction from the ML-supplied task payload;
-        # forks inherit it through this shared runtime singleton. Drives the
-        # system prompt and initial-message injection (see Session.task).
-        self.task: Task = UsualTask("")
+        # forks inherit it through this shared runtime singleton. Builds the two
+        # whole prompts, the system prompt and the initial message (see
+        # Session.system_prompt and Session._compute_initial_prompt). Imported
+        # here: task.py imports this module.
+        from .task import UsualTask
+        self.task: 'Task' = UsualTask("")
         # The call's user operations (docs/USER_OPERATIONS.md, section 5.2), in
         # the order given; with the tactic whitelist below, one of the two
         # inputs the operation table `operations` is derived from.
@@ -12664,9 +12670,9 @@ class Session:
         # `_worker_premise_cache` freshness. Seeded/re-seeded from `_ctxt_before_me().hyps`
         # (see _seed_reported_scope_facts / consume_new_scope_facts_notice).
         self.reported_scope_facts: 'dict[str, str]' = {}
-        # Memoized `initial_prompt()`: its content is fixed for the session's
-        # lifetime, but computing it resolves worker-suggested lemmas via RPC, so
-        # repeat callers (compaction / restart / `_find_recent_start`) reuse it.
+        # Memoized `initial_prompt()`: computing it resolves worker-suggested lemmas
+        # via RPC, so repeat callers (compaction / restart) reuse it; cleared when a
+        # worker is retargeted (`WorkerHandle.retarget`).
         self._initial_prompt_cache: 'str | None' = None
         # --- write_memory corpus-dedup handshake (adjacency mechanism) ---
         # Generic per-session tool-call log: abstract tool ids appended at the
@@ -12722,10 +12728,10 @@ class Session:
 
     # --- Forwarding properties to Runtime ---
     @property
-    def task(self) -> Task:
+    def task(self) -> 'Task':
         return self.runtime.task
     @task.setter
-    def task(self, v: Task):
+    def task(self, v: 'Task'):
         self.runtime.task = v
     @property
     def operations(self) -> 'dict[str, OperationMeta]':
@@ -12908,12 +12914,13 @@ class Session:
             return self.role.pending.interaction
         return self._nf_pending_interaction
 
-    def replace_pending_interaction(self, new_interaction: 'Interaction') -> None:
+    def replace_pending_interaction(self, new_interaction: 'Interaction', prompt: str) -> None:
         """Swap the pending interaction of this fork for a different one, reusing
         the existing answer future (only one final answer is ever returned to the
-        operation that called launch_interaction). The replacement must match this
-        fork's forking mode (fixed at fork creation); a mismatch is a programming
-        bug and raises InternalError."""
+        operation that called launch_interaction), and record ``prompt``, the
+        question the fork is shown for it. The replacement must match this fork's
+        forking mode (fixed at fork creation); a mismatch is a programming bug and
+        raises InternalError."""
         role = self.role
         if not isinstance(role, Role_Interaction):
             raise InternalError("replace_pending_interaction on non-interaction session")
@@ -12922,6 +12929,15 @@ class Session:
                 f"Cannot replace interaction: new forking mode {new_interaction.forking} "
                 f"is incompatible with this fork's mode {role.mode}")
         role.pending = Fork_Pending(new_interaction, role.pending.answer)
+        role.prompt = prompt
+
+    def reprompt_pending_interaction(self, prompt: str) -> None:
+        """Record ``prompt``, the question this fork is shown again for its pending
+        interaction (a re-prompt of the SAME interaction)."""
+        role = self.role
+        if not isinstance(role, Role_Interaction):
+            raise InternalError("reprompt_pending_interaction on non-interaction session")
+        role.prompt = prompt
 
     @property
     def lemma_anchor(self) -> 'Have | None':  # type: ignore  — `Have`'s class identity is erased to type[Any] by @proof_operation, so it can't form a union annotation
@@ -13074,229 +13090,47 @@ class Session:
         await self.close()
         return False
 
-    def _lemma_guidance(self, under_global: bool) -> str:
-        """The "if a needed lemma doesn't exist, ..." guidance clause, shared by
-        ``system_prompt`` and ``_compute_initial_prompt`` so the two cannot drift.
-        When the global-lemma gate is active for this non-worker major, steer to
-        declare-then-delegate; a worker is steered to prove inline or `request`;
-        otherwise keep the legacy "prove it" wording so flag-off planner output is
-        byte-identical."""
-        if self.is_major and not self.is_worker and self.gate_global_lemma_proofs:
-            return ("if a needed lemma truly does not exist, declare it as a `Have` node "
-                    "under `global`, then dispatch a sub-agent to prove it.\n")
-        if self.is_worker:
-            # A worker can prove a needed fact inline as a LOCAL `Have` (cheap), or
-            # — for a general lemma it cannot prove inline — raise a `request` (the
-            # worker→planner channel, which dispatches a prover sub-agent; the cost
-            # caution lives on the `request` tool itself). The planner branch above
-            # deliberately does NOT mention `request`: the planner is the RECIPIENT
-            # of requests, not a caller. When general-lemma requests are disabled,
-            # drop the `request` option and steer to proving the special case inline.
-            if config.DISABLE_REQUEST_GENERAL_LEMMAS:
-                return ("if a needed lemma truly does not exist, prove the specific "
-                        "instance you need inline as a `Have`.\n")
-            return ("if a needed lemma truly does not exist, prove it inline as a "
-                    "`Have`, or raise a `request`.\n")
-        suffix = " under `global`" if under_global else ""
-        return f"if a needed lemma truly does not exist, prove it as a `Have` node{suffix}.\n"
-
     def _tactic_prompt_block(self) -> str:
         """The tactic whitelist's prompt entries (docs/TACTIC_DESIGN.md), as the
-        block that ends the system prompt -- or the initial prompt, for a driver
-        with no system prompt.  Empty when there is no prompt entry, and for an
-        interaction fork (which gets no such guidance, as it gets no
-        experience_hint); otherwise with its leading newline."""
-        if self.is_interaction:
-            return ""
+        block that ends the system prompt -- or the initial message, for a task
+        with no system prompt.  Empty when there is no prompt entry; otherwise with
+        its leading newline."""
         lines = [f"- {entry.name.unicode}: {entry.interpretation}"
                  for entry in self.runtime.tactics.values() if entry.in_prompt]
         if not lines:
             return ""
         return "\nYou may use the `Tactic` operation with these tactics:\n" + "\n".join(lines) + "\n"
 
-    def system_prompt(self) -> str | None:
-        """Return the system prompt, or None if the driver folds it into the initial
-        message. Delegates to the session's Task (UsualTask by default reproduces the
-        legacy `_build_system_prompt("")` bytes), then appends the tactic block; a
-        driver may override this method."""
-        sp = self.task.system_prompt(self)
+    async def system_prompt(self) -> str | None:
+        """The system prompt: the task's, with the tactic block appended; None when the
+        task sends none (the tactic block then ends the initial message).  An
+        interaction fork is sent the system prompt of the session that launched it."""
+        role = self.role
+        if isinstance(role, Role_Interaction):
+            assert self.parent is not None
+            return await self.parent.system_prompt()
+        sp = await self.task.system_prompt(role, self)
         return sp if sp is None else sp + self._tactic_prompt_block()
-
-    def _build_system_prompt(self, reference_note: str = "") -> str | None:
-        """Construct the system prompt body. `reference_note`, when non-empty, is
-        injected into the **major** branch only (workers / interaction forks never
-        see it) — used by LearningTask to note that the original Isar proof is
-        provided for reference (see task.py). `""` yields the legacy bytes."""
-        report_line = (
-            "If the goal itself looks flawed or unprovable, or you have exhausted "
-            f"your strategies — report it with `{self.tool_name(TOOL_REPORT)}`.\n"
-            if self.is_worker else
-            "A proof goal can be buggy and thus unprovable — "
-            f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so.\n"
-        )
-        report_line += (
-            "Many Isabelle functions are partially specified (example: `x / 0`, "
-            "`hd []`, `inverse 0`). If contextual premises cannot constrain operands "
-            "into the domain, the goal is unprovable — refute it.\n"
-        )
-        # Declarative-style guidance, shared verbatim by the major (planner) and the
-        # worker (prover) so the two cannot drift. Interaction forks (focused Q&A /
-        # adjudication, not proof construction) do NOT receive it.
-        declarative_style = (
-            "Prove like a mathematician, not a machine:\n"
-            "- Write the proof as you would on paper: use `Have` to state intermediate "
-            "results, `Obtain` to introduce the objects you need, and `Suffices` or case "
-            "splits to break the goal down.\n"
-            "- Typically, decompose until each subgoal is simple enough for `Obvious` to close.\n"
-            "- Some trivial facts (e.g. `prime 7`) may not be found by `query` — declare them "
-            "with `Have` and prove them with `Obvious`.\n"
-            "- Treat the low-level single-step ops (`Rewrite`, `Derive`) as an escape hatch, "
-            "not the default — reach for them only on rare occasions when you genuinely need "
-            "to spell out a fine-grained inference step.\n"
-        )
-        # Experience retrieval is gated by AoA_enable_read_memory (see Runtime); when
-        # off, the "experience" kind is absent from the `query` schema, so the prompt
-        # must not point at it either.
-        experience_hint = (
-            f'You can also `{self.tool_name(TOOL_SEARCH)}` with `kinds: ["experience"]` to '
-            "retrieve saved proof experiences (strategies) relevant to your goal.\n"
-            if self.enable_read_memory else "")
-        if self.is_major:
-            # The main agent's job is to formalize a PLAN (BFS skeleton + delegate),
-            # not to prove stepwise. The worker gets its own structured body (intro +
-            # shared declarative-style guidance + points); interaction forks keep the
-            # legacy body in the final `else`. Gate-aware lemma step: when
-            # the global-lemma gate is on, steer to declare-then-delegate; otherwise
-            # keep the legacy prove-under-global.
-            lemma_step = ("declare it as a `Have` under `global`, then dispatch a "
-                          "sub-agent to prove it"
-                          if self.gate_global_lemma_proofs
-                          else "prove it as a `Have` under `global`")
-            body = (
-                "You are a formal theorem-proving agent. Your first job is not to prove the "
-                "goal step by step — it is to formalize a *plan* for the proof. The MCP tools "
-                "below are the medium in which you write that plan; the goal and the current "
-                "(incomplete) plan are in `./proof.yaml`.\n"
-                + reference_note +
-                "\n"
-                "Work breadth-first:\n"
-                "1. Formalize the top-level structure first — decompose the goal into a few "
-                "subgoals / intermediate lemmas (`Have`, `Suffices`, case splits), leaving each "
-                "proof as a hole. Don't dive into any single branch.\n"
-                "2. Refine one layer at a time, leaving deeper holes as you go.\n"
-                f"3. Delegate — call `{self.tool_name(TOOL_SUBAGENT)}` on each non-trivial "
-                "subgoal or lemma instead of working it out yourself.\n"
-                f"4. If you need a background lemma, `{self.tool_name(TOOL_SEARCH)}` for it "
-                f"first; if it truly doesn't exist, {lemma_step}.\n"
-                "\n"
-                + (experience_hint + "\n" if experience_hint else "")
-                + declarative_style +
-                "\n"
-                "Holes are expected:\n"
-                "- Declaring structure and leaving holes is good — move on, don't grind.\n"
-                "- An unproved goal shows as `Unfinished Proof`, not an error — that's expected; "
-                "don't rush to close holes depth-first.\n"
-                "\n"
-                "Also:\n"
-                "- " + report_line +
-                "- Be concise in text output.\n"
-                "- Done when every hole is discharged (by you or your sub-agents) and no errors remain.\n"
-            )
-        elif self.is_worker:
-            # The worker is handed one specific goal to prove (the planner already laid
-            # out the surrounding skeleton). Structured as intro + the shared
-            # declarative-style guidance + the remaining points concatenated directly.
-            body = (
-                "You are a formal theorem-proving agent. You have been handed a specific "
-                "goal to prove; it and the current (incomplete) proof are in `./proof.yaml`.\n"
-                "\n"
-                + declarative_style +
-                "\n"
-                "If a sub-part would derail your main line of reasoning, hand it to a "
-                f"sub-agent with `{self.tool_name(TOOL_SUBAGENT)}` rather than proving it inline.\n"
-                "The goal may rely on background lemmas that are not yet available. "
-                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                + self._lemma_guidance(self.is_major)
-                + experience_hint
-                + report_line +
-                "Be concise in text output.\n"
-                "Continue until the goal is fully proved and no errors remain.\n"
-            )
-        else:
-            # Interaction forks (focused Q&A / adjudication, not proof construction)
-            # keep the legacy body unchanged.
-            body = (
-                "You are a formal theorem proving agent.\n"
-                "A proof goal and an incomplete proof are provided in `./proof.yaml` under the current directory.\n"
-                "Analyze the proof goal, plan a proof, and complete it using the MCP proof tools.\n"
-                "Continue until no errors remain.\n"
-                + report_line +
-                "The goal may rely on background lemmas that are not yet available. "
-                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                + self._lemma_guidance(self.is_major) +
-                "Be concise in text output.\n"
-            )
-        PROMPT = (
-                body +
-                "\n"
-                "## Tools\n"
-                f"- {self.tool_name(TOOL_EDIT)}: Fill, insert, or amend proof steps (your primary tool)\n"
-                f"- {self.tool_name(TOOL_DELETE)}: Delete proof steps\n"
-                f"- {self.tool_name(TOOL_SEARCH)}: Search for theorems, constants, types, rules"
-                + (", and saved experiences (proof strategies)" if self.enable_read_memory else "")
-                + "; also help you understand unfamiliar terms\n"
-                f"- {self.tool_name(TOOL_READ)}: Recall proof state from `proof.yaml`. Use only when you have lost track.\n"
-                f"- {self.tool_name(TOOL_RECALL_REMOVED)}: Browse deleted proof steps that were archived before removal.\n"
-                f"- {self.tool_name(TOOL_REQUEST_LEMMAS)}: {config.request_tool_description()}\n"
-                f"- {self.tool_name(TOOL_REFRESH)}: Reset the conversation and start over (the proof tree is kept). "
-                "Write a briefing for your future self in `briefing` — it becomes your only memory. "
-                "Use when your edits keep failing.\n"
-            )
-        parts = [PROMPT]
-        # report is shown to workers only.
-        if self.is_worker:
-            parts.append(
-                f"- {self.tool_name(TOOL_REPORT)}: Report that the goal is unprovable (refute) or that you give up (surrender)\n"
-            )
-        # subagent/cancel_subagent are dispatch tools — shown to dispatchers (the main
-        # agent AND workers, which may delegate nested sub-goals), not interaction forks.
-        if self.is_major or self.is_worker:
-            parts.append(
-                f"- {self.tool_name(TOOL_SUBAGENT)}: Launch a sub-agent to prove a subgoal whose proof would derail your main line of reasoning.{config.subagent_cost_caution()}\n"
-                f"- {self.tool_name(TOOL_CLOSE_SUBAGENT)}: Cancel and remove a sub-agent you dispatched (the sub-agent is terminated; to resume it instead, call `subagent` again).\n"
-            )
-            # write_memory is gated by AoA_enable_write_memory (see Runtime); when
-            # off it is absent from the advertised tools, so it must not be listed
-            # here either.
-            if self.enable_write_memory:
-                parts.append(
-                    f"- {self.tool_name(TOOL_WRITE_MEMORY)}: Save a reusable proof experience or a strategy for a general class of goals, so future proofs can retrieve it using the `{self.tool_name(TOOL_SEARCH)}` tool.\n"
-                )
-        return "".join(parts)
 
     async def initial_prompt(self) -> str:
         """The initial user message to start the proof session, memoized.
 
         Cached because resolving worker-suggested lemma statements costs an RPC,
-        and the content is fixed for the session's lifetime (header / suggestions
-        / lemmas / boilerplate don't change — proof state is delivered via
-        proof.yaml, not here). The cache lets repeat callers (context compaction,
-        restart, `_find_recent_start`'s message count) reuse it for free."""
+        and the content does not change while the session keeps its target (header
+        / suggestions / lemmas / boilerplate; proof state is delivered via
+        proof.yaml, not here). Repeat callers (context compaction, restart) reuse
+        it; retargeting a worker clears it (``WorkerHandle.retarget``)."""
         if self._initial_prompt_cache is None:
             self._initial_prompt_cache = await self._compute_initial_prompt()
         return self._initial_prompt_cache
 
     async def _compute_initial_prompt(self) -> str:
-        """Build the initial user message (uncached — call `initial_prompt`), then
-        append any Task-supplied extra (UsualTask adds nothing → legacy bytes;
-        LearningTask appends the original Isar proof block, major only), then --
-        only when the driver has no system prompt to carry it -- the tactic block."""
-        base = await self._compute_initial_prompt_base()
-        extra = self.task.initial_prompt_extra(self)
-        return base + extra + (self._tactic_prompt_block() if self.system_prompt() is None else "")
-
-    async def _compute_initial_prompt_base(self) -> str:
-        """Build the initial user message body (uncached — call `initial_prompt`)."""
+        """The initial message (uncached -- call `initial_prompt`): the task's, with the
+        tactic block appended when there is no system prompt to carry it.  An
+        interaction fork has no initial message: its first message is its
+        interaction's prompt."""
+        role = self.role
+        assert not isinstance(role, Role_Interaction)
         # Render the proof scope for its side effect: ``update_line=True``
         # populates each node's ``.line`` (shown by drivers that enable
         # ``quickview_line_numbers``). The rendered text itself is unused — the
@@ -13305,62 +13139,9 @@ class Session:
         # compaction/restart paths the drivers' ``refresh_YAML(update_line=True)``
         # keeps ``.line`` current before the cached prompt is reused.
         self.print_proof_scope(0, MyIO(StringIO()), update_line=True, show_warnings=True)
-
-        if self.is_worker:
-            target = self.role.target  # type: ignore[attr-defined]  — is_worker ⟹ role is Role_Worker
-            if isinstance(target, Have):
-                header = f"Prove the lemma `{target.name}`: {target.statement['english']}\n"  # type: ignore[attr-defined]  — isinstance(target, Have) narrowing is erased by @proof_operation's type[Any] return
-            else:
-                # The worker's whole target IS its scope, so it has no short id
-                # to name (relativizing to itself is empty) — name it in prose.
-                header = "Prove the following goal.\n"
-            guidance = ""
-            if isinstance(self.role, Role_Worker):
-                g = []
-                sugg = self.role.suggestions.strip()
-                if sugg:
-                    g.append(sugg)
-                block = await self._render_useful_lemmas()
-                if block:
-                    g.append(block)
-                if g:
-                    guidance = "\n" + "\n\n".join(g) + "\n\n"
-            if self.system_prompt() is not None:
-                return (
-                    header + guidance
-                    + "Complete the proof using the MCP proof tools.\n"
-                    "The proof state is in `proof.yaml` — read it to see the goal and current proof."
-                )
-            else:
-                return (
-                    header + guidance
-                    + "The proof state is in `proof.yaml` — read it to see the goal and current proof.\n"
-                    f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                    "Continue building the proof until no error remains.\n"
-                    "If the goal itself looks flawed or unprovable, or you want to "
-                    f"give up — report it with `{self.tool_name(TOOL_REPORT)}`."
-                )
-        elif self.system_prompt() is not None:
-            return (
-                "Complete the proof using the MCP proof tools.\n"
-                "The proof state is in `proof.yaml` — read it to see the goal and current proof."
-            )
-        else:
-            # No system prompt (e.g. Codex driver): fold the planner-only hint
-            # into the initial message, mirroring system_prompt()'s planner_hint.
-            planner_hint = (
-                "The goal may rely on background lemmas that are not yet available. "
-                f"Search for them with `{self.tool_name(TOOL_SEARCH)}` first; "
-                + self._lemma_guidance(True)
-            ) if self.is_major else ""
-            return (
-                "An incomplete proof is provided in `proof.yaml` — read it to see the goal and current proof.\n"
-                f"Analyze the proof goal, plan a proof, and complete it using tools `{self.tool_name(TOOL_EDIT)}` and `{self.tool_name(TOOL_DELETE)}`.\n"
-                "Continue building the proof until no error remains.\n"
-                f"{planner_hint}"
-                "A proof goal can be buggy and thus unprovable — "
-                f"call `{self.tool_name(TOOL_REPORT)}` with your analysis if you believe so."
-            )
+        sp = await self.system_prompt()
+        text = await self.task.initial_prompt(role, self, sp is not None)
+        return text if sp is not None else text + self._tactic_prompt_block()
 
     def retry_prompt(self, unfinished_nodes: set['Node']) -> str:
         """Return the retry message when proof steps remain incomplete."""
@@ -13523,7 +13304,7 @@ class Session:
                 self.root = root
                 self.working_block = root
                 await root._refresh_me_alone(auto_intro=True)
-                sp = self.system_prompt()
+                sp = await self.system_prompt()
                 if sp is not None:
                     self._log_meta("SYS_PROMPT", text=sp)
                 self.log_initial_prompt(await self.initial_prompt())
@@ -13536,9 +13317,9 @@ class Session:
                 # Baseline the resume-notice diff: everything in scope now counts as
                 # already-shown (it is in the opening proof.yaml). No-op for non-workers.
                 self._seed_reported_scope_facts()
-                # A worker's opening message is `initial_prompt()` (sent by the
-                # driver loop); interaction forks use their own prompts instead,
-                # so only log here for genuine workers.
+                # A worker's initial message is `initial_prompt()` (sent by the
+                # driver loop); an interaction fork has none: its first message
+                # is its interaction's prompt.
                 if self.is_worker:
                     self.log_initial_prompt(await self.initial_prompt())
 
@@ -14296,10 +14077,11 @@ class Session:
     def _can_offer_dispatch_tools(self) -> bool:
         """Whether the dispatch tools (`subagent` / `cancel_subagent`) should be
         advertised to this session. True for a dispatcher — the main agent or a
-        worker — that is NOT already at the maximum nesting depth; a sub-sub-agent
-        (depth == SUBAGENT_NESTING_DEPTH) cannot delegate further, so the tools are
-        hidden from it entirely. Interaction forks never dispatch and so never get
-        them. Shared by _tool_schemas_for (MCP registration / APIDriver schemas) and
+        worker — that is NOT already at the maximum nesting depth; a session at depth
+        SUBAGENT_NESTING_DEPTH cannot delegate further, so the tools are
+        hidden from it entirely. Interaction forks never dispatch; _tool_schemas_for
+        gives an interaction fork the tools of the session that launched it.
+        Shared by _tool_schemas_for (MCP registration / APIDriver schemas) and
         the Claude SDK allow-list (_role_allowed_tools); the runtime guard in
         _subagent_tool_logic remains as a backstop."""
         return ((self.is_major or self.is_worker)
@@ -15142,7 +14924,7 @@ class WorkerHandle:
         if self._costs_accumulated or self._sub is None:
             return
         try:
-            self.session._accumulate_subagent_costs(self._sub)
+            self.session._accumulate_sub_session_costs(self._sub)
         finally:
             # Mark settled even if accumulation raised midway: a retry would
             # re-apply the already-added fields and double-count.

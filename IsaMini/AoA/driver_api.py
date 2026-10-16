@@ -222,9 +222,14 @@ class APIDriver(LMDriver):
         super().__init__(*args, parent=parent, **kwargs)
         self._provider = provider
         # Route the provider's internal-retry logging (Layer 2) to this
-        # driver's warning log so transient errors are recorded.
-        self._provider._log = self.warn_AoA_opr
+        # driver's warning log so transient errors are recorded; a sub-session
+        # sharing its parent's provider leaves the parent's routing in place.
+        if parent is None or provider is not parent._provider:
+            self._provider._log = self.warn_AoA_opr
         self._messages: list[Msg] = []
+        # the formatted tools every model turn of this session carries (the
+        # compaction summary request carries none)
+        self._tools: list[dict] = []
         self._interrupted = False
         # _executor is declared by Session.__init__ (shared field, see there);
         # `initialize` builds it.
@@ -291,7 +296,7 @@ class APIDriver(LMDriver):
 
     async def _initial_messages(self) -> list[Msg]:
         msgs: list[Msg] = []
-        sp = self.system_prompt()
+        sp = await self.system_prompt()
         if sp is not None:
             msgs.append(SystemMsg(sp))
         msgs.append(UserMsg(await self.initial_prompt()))
@@ -423,6 +428,34 @@ class APIDriver(LMDriver):
         self._prev_prompt_total = 0
         self._prev_output_tokens = 0
 
+    def _unsent_messages(self) -> list[Msg]:
+        """The messages the next request carries: all of them, or, after a stored
+        response, only those not yet sent."""
+        if self._last_response_id is None:
+            return self._messages
+        return self._messages[self._msgs_sent_through:]
+
+    def _append_response(self, provider: Provider, response: ProviderResponse) -> None:
+        """Append the response's assistant message; when the provider stored the
+        conversation, the next request continues from this response, with every
+        message so far sent."""
+        self._messages.append(provider.format_assistant_msg(response))
+        if response.response_id is not None:
+            self._last_response_id = response.response_id
+            self._msgs_sent_through = len(self._messages)
+
+    def _turn_usage(self, usage: Usage) -> Usage:
+        """Close this session's model-time clock for the turn and return the turn's
+        usage as it is charged (under the perfect-cache assumption, against the
+        previous turn's totals, which this updates)."""
+        if self._model_time_start is not None:
+            self.total_model_time += time() - self._model_time_start
+            self._model_time_start = None
+        adj_usage, self._prev_prompt_total = self._cache_assumed_usage(
+            usage, self._prev_prompt_total, self._prev_output_tokens)
+        self._prev_output_tokens = usage.output_tokens
+        return adj_usage
+
     def _budget_left(self) -> float | None:
         """Seconds left on the wall-clock budget, for ``asyncio.timeout``.
         None while the budget clock has not started (no cap); negative once
@@ -450,16 +483,13 @@ class APIDriver(LMDriver):
         assert self._executor is not None
         if self._budget_start_time is None:
             self._budget_start_time = time()
+        self._tools = self._provider.format_tools(self._executor.tool_schemas())
         self._messages = await self._initial_messages()
         self._reset_prompt_cache()
-        tools = self._provider.format_tools(self._executor.tool_schemas())
 
         while True:
             while not self._interrupted:
-                if self._last_response_id is not None:
-                    msgs_to_send = self._messages[self._msgs_sent_through:]
-                else:
-                    msgs_to_send = self._messages
+                msgs_to_send = self._unsent_messages()
 
                 self._model_time_start = time()
                 # Cap this model turn (INCLUDING transient retries) at the
@@ -473,7 +503,7 @@ class APIDriver(LMDriver):
                     async with asyncio.timeout(self._budget_left()):
                         response = await self._retry_transient(
                             lambda: self._checked_chat(
-                                self._provider, msgs_to_send, tools,
+                                self._provider, msgs_to_send, self._tools,
                                 previous_response_id=self._last_response_id))
                 except LMUnreachable as e:
                     # Proxy down / creds expired (subscription mode): give up
@@ -505,24 +535,14 @@ class APIDriver(LMDriver):
                     await self._restart_after(e)
                     break
 
-                if response.response_id is not None:
-                    self._last_response_id = response.response_id
-                    self._msgs_sent_through = len(self._messages) + 1
-
-                if self._model_time_start is not None:
-                    self.total_model_time += time() - self._model_time_start
-                    self._model_time_start = None
-                adj_usage, self._prev_prompt_total = self._cache_assumed_usage(
-                    response.usage, self._prev_prompt_total, self._prev_output_tokens)
-                self._prev_output_tokens = response.usage.output_tokens
-                self._accumulate_usage(adj_usage)
+                self._accumulate_usage(self._turn_usage(response.usage))
 
                 if response.thinking:
                     self.log_model_thinking(response.thinking)
                 if response.content:
                     self.log_model_output(response.content)
 
-                self._messages.append(self._provider.format_assistant_msg(response))
+                self._append_response(self._provider, response)
 
                 if response.tool_calls:
                     results = await self._execute_tool_calls(response.tool_calls)
@@ -694,7 +714,7 @@ class APIDriver(LMDriver):
 
         self.refresh_YAML()
         new_messages: list[Msg] = []
-        sp = self.system_prompt()
+        sp = await self.system_prompt()
         if sp is not None:
             new_messages.append(SystemMsg(sp))
         suffix = f"\n\n{summary_label}:\n" + summary
@@ -736,67 +756,43 @@ class APIDriver(LMDriver):
         ))
         await fork.initialize(self.root)
 
-        fork_response_id: str | None = None
-
         answer_tool = self.tool_name(interaction.answer_tool_name)
         if answer_tool not in prompt_text:
             prompt_text += (
                 f"\nAnswer the question above by calling "
                 f"the `{answer_tool}` tool.")
 
-        fork_messages: list[Msg]
+        # The fork's conversation lives on the fork, as every session's does, so a
+        # fork launched from this fork copies or continues it as this one does its parent's.
         if mode == ForkingMode.FORKING_WITH_CTXT:
-            if self._last_response_id is not None:
-                fork_response_id = self._last_response_id
-                if (self._messages
-                        and isinstance(self._messages[-1], AssistantMsg)
-                        and self._messages[-1].response.tool_calls):
-                    # Pending function_calls: the API requires a
-                    # function_call_output (fco) before
-                    # new input.  Embed prompt directly in fco content.
-                    pending = self._messages[-1].response.tool_calls
-                    fork_messages = [
-                        ToolResultMsg(
-                            call_id=tc.id, name=tc.name,
-                            content=(prompt_text if i == 0
-                                     else "Tool execution in progress. "
-                                          "Please address the question above."))
-                        for i, tc in enumerate(pending)]
-                else:
-                    # No pending function_calls: send unsent messages
-                    # plus prompt as a normal user message.
-                    fork_messages = list(
-                        self._messages[self._msgs_sent_through:])
-                    fork_messages.append(UserMsg(prompt_text))
+            # The fork continues this session's conversation: from its stored
+            # response with the unsent messages, or as a copy of them all.
+            fork._last_response_id = self._last_response_id
+            fork._messages = list(self._unsent_messages())
+            last = self._messages[-1] if self._messages else None
+            if isinstance(last, AssistantMsg) and last.response.tool_calls:
+                # Pending function_calls: the API requires a function_call_output
+                # (fco) before new input.  Embed prompt directly in fco content.
+                fork._messages.extend(
+                    ToolResultMsg(call_id=tc.id, name=tc.name,
+                                  content=(prompt_text if i == 0
+                                           else "Tool execution in progress. "
+                                                "Please address the question above."))
+                    for i, tc in enumerate(last.response.tool_calls))
             else:
-                # No stored response — fall back to message copy.
-                fork_messages = list(self._messages)
-                if (fork_messages
-                        and isinstance(fork_messages[-1], AssistantMsg)
-                        and fork_messages[-1].response.tool_calls):
-                    pending = fork_messages[-1].response.tool_calls
-                    for i, tc in enumerate(pending):
-                        fork_messages.append(ToolResultMsg(
-                            call_id=tc.id, name=tc.name,
-                            content=(prompt_text if i == 0
-                                     else "Tool execution in progress. "
-                                          "Please address the question above.")))
-                else:
-                    fork_messages.append(UserMsg(prompt_text))
+                fork._messages.append(UserMsg(prompt_text))
         else:
-            fork_messages = []
-            sp = self.system_prompt()
+            fork._messages = []
+            sp = await self.system_prompt()
             if sp is not None:
-                fork_messages.append(SystemMsg(sp))
-            fork_messages.append(UserMsg(prompt_text))
+                fork._messages.append(SystemMsg(sp))
+            fork._messages.append(UserMsg(prompt_text))
 
-        # Use the PARENT's tool schemas so the API request shares the same
-        # tools-prefix as the main loop.  This preserves DeepSeek-style automatic
-        # prefix caching (tools are serialised before messages in the prompt).
-        # The fork's _check_tool_permission already blocks disallowed tools at
-        # execution time, so advertising extra tools is safe.
-        all_schemas = self._executor.tool_schemas()
-        fork_tools = self._provider.format_tools(all_schemas)
+        # A fork's requests carry the tools of the session that launched it (tools
+        # are serialised before messages), so a fork with context continues that
+        # session's cached prefix; _check_tool_permission blocks disallowed tools at
+        # execution time.
+        fork._tools = self._tools
 
         fork_provider = self._fork_provider(mode)
         tag = f"[{fork._fork_name}]"
@@ -805,10 +801,6 @@ class APIDriver(LMDriver):
         _pre_cached = self.total_cache_read_input_tokens
         _pre_creation = self.total_cache_creation_input_tokens
         _pre_output = self.total_output_tokens
-
-        fork_msgs_sent_through: int = 0
-        fork_prev_prompt_total: int = 0  # per-fork prev for _cache_assumed_usage
-        fork_prev_output: int = 0
 
         try:
           while True:
@@ -822,10 +814,7 @@ class APIDriver(LMDriver):
                 if fork._interrupted:
                     break
 
-                if fork_response_id is not None:
-                    fork_msgs_to_send = fork_messages[fork_msgs_sent_through:]
-                else:
-                    fork_msgs_to_send = fork_messages
+                fork_msgs_to_send = fork._unsent_messages()
 
                 assert fork.fork_pending is not None
                 _fork_allowed = list(fork.fork_pending.interaction.fork_allowed_tools)
@@ -833,36 +822,31 @@ class APIDriver(LMDriver):
                 fork._model_time_start = time()
                 resp = await self._retry_transient(
                     lambda: fork._checked_chat(
-                        fork_provider, fork_msgs_to_send, fork_tools,
-                        previous_response_id=fork_response_id,
+                        fork_provider, fork_msgs_to_send, fork._tools,
+                        previous_response_id=fork._last_response_id,
                         allowed_tools=_fork_allowed))
 
-                if resp.response_id is not None:
-                    fork_response_id = resp.response_id
-                    fork_msgs_sent_through = len(fork_messages) + 1
-
-                if fork._model_time_start is not None:
-                    fork.total_model_time += time() - fork._model_time_start
-                    fork._model_time_start = None
-                adj_usage, fork_prev_prompt_total = self._cache_assumed_usage(
-                    resp.usage, fork_prev_prompt_total, fork_prev_output)
-                fork_prev_output = resp.usage.output_tokens
-                self._accumulate_usage(adj_usage)
+                self._accumulate_usage(fork._turn_usage(resp.usage))
 
                 if resp.thinking:
                     fork.log_model_thinking(f"{tag} {resp.thinking}")
                 if resp.content:
                     fork.log_model_output(f"{tag} {resp.content}")
 
-                fork_messages.append(fork_provider.format_assistant_msg(resp))
+                fork._append_response(fork_provider, resp)
 
                 if resp.tool_calls:
+                    # Appended after the whole turn, as the main loop does: while a
+                    # call runs, _messages[-1] is the AssistantMsg that issued it, so a
+                    # fork launched from that call answers every pending call.
+                    results: list[Msg] = []
                     for tc in resp.tool_calls:
                         args = json.loads(tc.arguments)
                         result, _is_error = await fork._executor.execute(tc.name, args)
-                        fork_messages.append(
+                        results.append(
                             ToolResultMsg(call_id=tc.id, name=tc.name, content=result))
                         fork.total_tool_calls += 1
+                    fork._messages.extend(results)
 
                 assert fork.fork_pending is not None
                 if fork.fork_pending.answer.done():
@@ -875,7 +859,7 @@ class APIDriver(LMDriver):
                     break
 
                 if not resp.tool_calls:
-                    fork_messages.append(UserMsg(
+                    fork._messages.append(UserMsg(
                         f"Call the `{self.tool_name(fork.fork_pending.interaction.answer_tool_name)}` tool to submit your answer."))
                     fork.log_interaction("fork", f"{tag} retrying: no tool calls")
               break
@@ -896,9 +880,9 @@ class APIDriver(LMDriver):
                 self.warn_AoA_opr(f"{tag} Transient API error, retrying in 2s: {e}")
                 await asyncio.sleep(2)
         finally:
-            self.total_isabelle_time += fork.total_isabelle_time
-            self.total_model_time += fork.total_model_time
-            self.total_quota_wait_time += fork.total_quota_wait_time
+            # The fork's own tokens were charged to this session as they ran; its
+            # counters hold its own times and what the forks it launched used.
+            self._accumulate_sub_session_costs(fork)
             await fork.close()
 
         # Guaranteed by construction: a fork leaves this loop either having

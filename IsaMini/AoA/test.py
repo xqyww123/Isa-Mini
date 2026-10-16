@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import os
 import time
@@ -554,7 +555,7 @@ async def _test_write_memory_gate(root: Root, file: MyIO):
     for enabled in (True, False):
         session.enable_write_memory = enabled
         schemas = _tool_schemas_for(session)
-        sysprompt = session.system_prompt() or ""
+        sysprompt = await session.system_prompt() or ""
         file.write(f"--- enable_write_memory={enabled} ---\n")
         file.write(f"write_memory advertised: {TOOL_WRITE_MEMORY in schemas}\n")
         file.write(f"write_memory in system prompt: {TOOL_WRITE_MEMORY in sysprompt}\n")
@@ -585,7 +586,7 @@ async def _test_read_memory_gate(root: Root, file: MyIO):
         session.enable_write_memory = enabled
         kinds_enum = (_tool_schemas_for(session)[TOOL_SEARCH]["schema"]
                       ["properties"]["queries"]["items"]["properties"]["kinds"]["items"]["enum"])
-        sysprompt = session.system_prompt() or ""
+        sysprompt = await session.system_prompt() or ""
         file.write(f"--- enable_read_memory={enabled} ---\n")
         file.write(f"experience kind in query schema: {EntityKind.EXPERIENCE.label in kinds_enum}\n")
         file.write(f"retrieval hint in system prompt: {'kinds: [\"experience\"]' in sysprompt}\n")
@@ -10357,7 +10358,7 @@ async def _test_AmendKeepsWorker(root: Root, file: MyIO):
     fake_sub._initial_prompt_cache = "STALE-HEADER"
     handle._sub = cast(Any, fake_sub)
     # The kept handle is swept by the session-close `aclose_all_subagents`; its
-    # `_settle_costs` would call `session._accumulate_subagent_costs` (an LMDriver
+    # `_settle_costs` would call `session._accumulate_sub_session_costs` (an LMDriver
     # method absent on the bare test Session). Mark costs settled so the sweep
     # skips cost-accounting on our fake sub-session.
     handle._costs_accumulated = True
@@ -15870,7 +15871,7 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
     # --- 1. _settle_costs rolls the sub-session cost up EXACTLY ONCE ----------
     print_header("1. _settle_costs exactly-once", file)
     calls = []
-    session._accumulate_subagent_costs = lambda sub: calls.append(sub)   # monkeypatch
+    session._accumulate_sub_session_costs = lambda sub: calls.append(sub)   # monkeypatch
     try:
         h = WorkerHandle(H, session)
         h._sub = object()                  # pretend a forked sub-session exists
@@ -15882,7 +15883,7 @@ async def _test_worker_handle_lifecycle(root: Root, file: MyIO):
         before = len(calls); h2._settle_costs()
         file.write(f"no-_sub settle is a no-op: {len(calls) == before}\n")
     finally:
-        del session._accumulate_subagent_costs
+        del session._accumulate_sub_session_costs
 
     # --- 2. cancel() unblocks pending reviews and cancels the task -----------
     print_header("2. cancel() tears down futures + task", file)
@@ -19096,15 +19097,31 @@ async def _test_Tactic6(root: Root, file: MyIO):
             assert expected in result, f"expected {expected!r} in the edit's result"
 
 
+def _subsession(parent: Session, role: Role) -> Session:
+    """A sub-session of `parent` with `role`, for tests of what a session is sent.
+    Built with the constructor (the base Session has no _make_fork) in a copy of
+    the current context, as a driver builds one, so the context's session is
+    unchanged."""
+    return contextvars.copy_context().run(Session, parent=parent, role=role)
+
+
+def _interaction_fork(parent: Session) -> Session:
+    """A sub-session of `parent` with an interaction fork's role and no pending
+    interaction."""
+    return _subsession(parent, Role_Interaction(pending=None, prompt="", resume_id=None,  # type: ignore[arg-type]
+                                                mode=ForkingMode.FORKING_WITH_CTXT))
+
+
 @model_test("TacticPrompt", "Test_TacticPrompt.thy", 11, isolated_db=True)
 async def _test_TacticPrompt(root: Root, file: MyIO):
     """The prompt block: absent without a prompt entry; at the end of the system
     prompt otherwise, in whitelist order, the interpretation normalized (one
     line, Unicode) and byte-identical to the DB record the call's start wrote;
     after a task's own system prompt too; at the end of the initial prompt,
-    after the task's extra, when the task has no system prompt; for the major
-    and a worker, never for an interaction fork."""
-    from .task import UsualTask
+    after the task's whole message, when the task has no system prompt; for the
+    major and a worker; an interaction fork is sent the system prompt of the
+    session that launched it."""
+    from .task import Task, StdTask, UsualTask
     from Isabelle_Semantic_Embedding.semantics import Semantic_DB
     session = root.session
     runtime = session.runtime
@@ -19127,17 +19144,18 @@ async def _test_TacticPrompt(root: Root, file: MyIO):
         return repr(text[i:]) if i >= 0 else "(no block)"
 
     async def report(label: str) -> tuple[str | None, str]:
-        sp = session.system_prompt()
+        sp = await session.system_prompt()
         ip = await session._compute_initial_prompt()
         file.write(f"--- {label} ---\nsystem prompt: {tail(sp)}\ninitial prompt: {tail(ip)}\n")
         return sp, ip
 
-    class _OwnPrompt(UsualTask):
-        def system_prompt(self, session): return "MY OWN SYSTEM PROMPT\n"
+    class _OwnPrompt(Task):
+        async def system_prompt(self, role, session): return "MY OWN SYSTEM PROMPT\n"
+        async def initial_prompt(self, role, session, has_system): return ""
 
-    class _NoSystemPrompt(UsualTask):
-        def system_prompt(self, session): return None
-        def initial_prompt_extra(self, session): return "THE TASK'S EXTRA\n"
+    class _NoSystemPrompt(StdTask):
+        async def system_prompt(self, role, session): return None
+        def task_initial(self, role, has_system): return "THE TASK'S INITIAL\n"
 
     runtime.activate_tactics([as_query])
     sp, ip = await report("no prompt entry")
@@ -19152,18 +19170,94 @@ async def _test_TacticPrompt(root: Root, file: MyIO):
     sp, ip = await report("a task with its own system prompt")
     assert sp == f"MY OWN SYSTEM PROMPT\n\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n"
     runtime.task = _NoSystemPrompt("")
-    sp, ip = await report("a task with no system prompt and an extra")
-    assert sp is None and ip.endswith(f"THE TASK'S EXTRA\n\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n")
+    sp, ip = await report("a task with no system prompt")
+    assert sp is None
+    # the task's words open the message, the long variant (has_system False)
+    # follows, and the block ends it
+    assert ip.startswith("THE TASK'S INITIAL\nAn incomplete proof is provided in `proof.yaml`")
+    assert ip.endswith(f"if you believe so.\n{head}\n- auto: {other[2]}\n- {name}: {declared.interpretation}\n")
     runtime.task = UsualTask("")
-    for label, role in [("worker", Role_Worker(target=cast(NonLeaf_Node, root.sub_nodes[1]))),
-                        ("interaction fork", Role_Interaction(pending=None, prompt="", resume_id=None,  # type: ignore[arg-type]
-                                                              mode=ForkingMode.FORKING_WITH_CTXT))]:
-        session.role = role
-        sp = session.system_prompt()
-        file.write(f"--- {label} ---\nsystem prompt: {tail(sp)}\n")
-        assert (sp is not None and head in sp) is (label == "worker")
+    session.role = Role_Worker(target=cast(NonLeaf_Node, root.sub_nodes[1]))
+    sp = await session.system_prompt()
+    file.write(f"--- worker ---\nsystem prompt: {tail(sp)}\n")
+    assert sp is not None and head in sp
     session.role = Role_Major()
+    sp = await _interaction_fork(session).system_prompt()
+    file.write(f"--- interaction fork ---\nsystem prompt: {tail(sp)}\n")
+    assert sp == await session.system_prompt()
     runtime.activate_tactics([as_declared])
+
+
+@model_test("TaskPlacement", "Test_TaskPlacement.thy", 8)
+async def _test_TaskPlacement(root: Root, file: MyIO):
+    """StdTask's two text hooks (docs/USER_OPERATIONS.md, section 4.2): task_system's
+    text is inserted after the first paragraph of the role's system prompt body and
+    nothing else changes, and an interaction fork is sent the system prompt of the
+    session that launched it, that text included, whether that session is the major,
+    a worker or an interaction fork; task_initial's text opens the initial message;
+    both are given the session's role, task_initial also whether a system prompt is
+    sent -- False, with the long variants of the message, for a StdTask whose
+    system_prompt returns None."""
+    from .task import StdTask, UsualTask
+    session = root.session
+    runtime = session.runtime
+
+    class _Marked(StdTask):
+        def task_system(self, role): return f"[S {type(role).__name__}]\n"
+        def task_initial(self, role, has_system): return f"[I {type(role).__name__} {has_system}]\n"
+
+    class _NoSystem(StdTask):
+        async def system_prompt(self, role, session): return None
+
+    class _MarkedNoSystem(_Marked, _NoSystem):
+        pass
+
+    def check(label: str, ok: bool) -> None:
+        file.write(f"{label}: {ok}\n")
+        assert ok, label
+
+    roles = [("major", Role_Major()),
+             ("worker", Role_Worker(target=cast(NonLeaf_Node, root.sub_nodes[1])))]
+    for label, role in roles:
+        session.role = role
+        marker = f"[S {type(role).__name__}]\n"
+        runtime.task = UsualTask("")
+        usual = await session.system_prompt()
+        runtime.task = _Marked("")
+        marked = await session.system_prompt()
+        assert usual is not None and marked is not None
+        check(f"{label}: system prompt is the usual one with the marker line inserted",
+              marked.count(marker) == 1 and marked.replace(marker, "", 1) == usual)
+        check(f"{label}: the marker line ends the first paragraph",
+              marked[:marked.index("\n\n")].endswith("\n" + marker.rstrip("\n")))
+    session.role = Role_Major()
+    runtime.task = _Marked("")
+    check("interaction fork: system prompt is that of the session that launched it, task text included",
+          await _interaction_fork(session).system_prompt() == await session.system_prompt())
+    # launched by a worker, and by an interaction fork of that worker: still the worker's
+    worker = _subsession(session, Role_Worker(target=cast(NonLeaf_Node, root.sub_nodes[1])))
+    for parent in (worker, _interaction_fork(worker)):
+        assert await _interaction_fork(parent).system_prompt() == await worker.system_prompt()
+    for label, role in roles:
+        session.role = role
+        runtime.task = UsualTask("")
+        usual = await session._compute_initial_prompt()
+        runtime.task = _Marked("")
+        marked = await session._compute_initial_prompt()
+        check(f"{label}: initial message is the marker line, then the usual one",
+              marked == f"[I {type(role).__name__} True]\n" + usual)
+    for (label, role), opening in zip(roles, ("An incomplete proof is provided in `proof.yaml`",
+                                              "Prove the following goal.\nThe proof state is in `proof.yaml`")):
+        session.role = role
+        runtime.task = _NoSystem("")
+        plain = await session._compute_initial_prompt()
+        runtime.task = _MarkedNoSystem("")
+        check(f"{label}, no system prompt: system prompt is None", await session.system_prompt() is None)
+        ip = await session._compute_initial_prompt()
+        check(f"{label}, no system prompt: initial message is the marker line, then the long variant",
+              plain.startswith(opening) and ip == f"[I {type(role).__name__} False]\n" + plain)
+    session.role = Role_Major()
+    runtime.task = UsualTask("")
 
 
 @model_test("TacticSync", "Test_TacticSync.thy", 9, isolated_db=True)

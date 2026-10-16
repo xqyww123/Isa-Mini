@@ -151,8 +151,9 @@ def test_tasks_register_and_refuse_duplicates(registries):
     with pytest.raises(ValueError, match='Task "usual" is already registered by'):
         @aoa_task("usual")
         class Another(Task):
-            def system_prompt(self, session): return None
-    with pytest.raises(TypeError, match='Task "abstract": .* is abstract'):
+            async def system_prompt(self, role, session): return None
+            async def initial_prompt(self, role, session, has_system): return ""
+    with pytest.raises(TypeError, match='Task "abstract": .* is abstract; missing: initial_prompt, system_prompt$'):
         @aoa_task("abstract")
         class Abstract(Task):
             pass
@@ -309,6 +310,7 @@ def sample_block(name: str = "SampleBlock"):
 
 def session_with(*names: str, tactics: 'tuple[tuple[str, str, str, bool, bytes], ...]' = ()) -> Session:
     s = bare_session(*names, tactics=tactics)
+    s.role = model.Role_Major()        # not an interaction fork: its own tools are advertised
     s._can_offer_dispatch_tools = lambda: True
     return s
 

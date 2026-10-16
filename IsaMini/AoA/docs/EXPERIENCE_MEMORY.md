@@ -335,15 +335,15 @@ memories from other runs are immutable to this run.
 ### 9.4 Access (Q3)
 Planner + workers (like other mutation tools); not interaction forks.
 
-### 9.5 Agent introduction (LOCKED, implemented in `model.py` `system_prompt`)
-Three additions to the system prompt (planner + worker; interaction forks get only
-the `query` rewrite):
+### 9.5 Agent introduction (LOCKED, implemented in `task.py` `StdTask._build_system_prompt`)
+Three additions to the system prompt (planner + worker; an interaction fork is sent
+the system prompt of the session that launched it):
 - **`## Tools` — rewritten `query` line** (all roles):
   "Search for theorems, constants, types, rules, and saved experiences (proof
   strategies); also help you understand unfamiliar terms".
-- **`## Tools` — new `write_memory` line** (in the `is_major or is_worker` block,
-  beside subagent): "Save a reusable proof experience or a strategy for a general
-  class of goals, so future proofs can retrieve it using the `query` tool."
+- **`## Tools` — new `write_memory` line** (after the subagent lines): "Save a
+  reusable proof experience or a strategy for a general class of goals, so future
+  proofs can retrieve it using the `query` tool."
 - **body prose reminder** (planner: after the breadth-first list; worker: after the
   lemma guidance): "You can also `query` with `kinds: [\"experience\"]` to retrieve
   saved proof experiences (strategies) relevant to your goal."
@@ -407,8 +407,8 @@ Safe: experience records always carry `theory_constituents` (no false
     resolution loop + `_format_fetched_entity` render (§7.4); pattern-only branch
     hit_rate merge.
 11. `semantics_manage.py` — `is_xor_prefixed_key` re-points (§10).
-12. System prompt (`model.py`) — `write_memory` tool line, `query` line rewrite,
-    body reminder (§9.5).
+12. System prompt (`task.py`, `StdTask._build_system_prompt`) — `write_memory`
+    tool line, `query` line rewrite, body reminder (§9.5).
 
 `semantics_manage.py` / `migrate_xor_thm_keys.py` are in
 `Semantic_Embedding/`; the ML files in `Isa-Mini/Agent/` and

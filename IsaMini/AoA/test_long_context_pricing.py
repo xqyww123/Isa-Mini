@@ -15,9 +15,7 @@ No Isabelle / no REPL / no LLM / no network. Run directly:
 ``python test_long_context_pricing.py``. Exits non-zero on any failure.
 """
 import os
-import shutil
 import sys
-import tempfile
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
@@ -150,7 +148,7 @@ def main():
     worker._compute_cost()
     parent._accumulate_usage(Usage(1_000, 100, 0))
     parent._compute_cost()
-    parent._accumulate_subagent_costs(worker)
+    parent._accumulate_sub_session_costs(worker)
     merged_cost = parent.total_cost_usd
     parent._compute_cost()
     check(approx(parent.total_cost_usd, merged_cost), "after merging a worker, recomputing the parent reproduces the merged cost")
@@ -159,26 +157,13 @@ def main():
     # --- a per-turn driver (Codex CLI, default model gpt-5.5-high): a turn whose
     #     summed prompt is 300K is billed at the flat short rates ($1.50), not
     #     at the long rates ($2.955) -- its Usage is a sum over many requests
-    from IsaMini.AoA.driver_codex import Codex_Driver
-    old_home = os.environ.get("CODEX_HOME")
-    with tempfile.TemporaryDirectory() as home:
-        open(os.path.join(home, "auth.json"), "w").close()
-        os.environ["CODEX_HOME"] = home
-        try:
-            c = capture(Codex_Driver(None, ""))
-        finally:
-            if old_home is None:
-                os.environ.pop("CODEX_HOME", None)
-            else:
-                os.environ["CODEX_HOME"] = old_home
-    try:
+    from IsaMini.AoA.test_codex_fork import codex_root
+    with codex_root() as c:
+        capture(c)
         c._record_codex_usage({"input_tokens": 300_000, "cached_input_tokens": 20_000, "output_tokens": 3_000})
         c._compute_cost()
         check(approx(c.total_cost_usd, Usage(280_000, 3_000, 20_000).cost(PRICING["gpt-5.5"])),
               "Codex CLI: a 300K-prompt turn on gpt-5.5 is billed at the flat short rates")
-    finally:
-        shutil.rmtree(c.working_dir, ignore_errors=True)
-        shutil.rmtree(c._codex_home_dir, ignore_errors=True)
 
     # --- the AOA_ASSUME_PERFECT_CACHE rewrite never changes a call's prompt size,
     #     now that reported cache writes can be non-zero (a full-rewrite miss)

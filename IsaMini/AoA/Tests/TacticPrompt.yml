@@ -12,10 +12,10 @@ initial prompt: (no block)
 --- a task with its own system prompt ---
 system prompt: 'You may use the `Tactic` operation with these tactics:\n- auto: prove by classical reasoning and rewriting\n- simp: rewrite the goal with the simplifier, e.g. ‹a ⟹ b› becomes what the rules give\n'
 initial prompt: (no block)
---- a task with no system prompt and an extra ---
+--- a task with no system prompt ---
 system prompt: None
 initial prompt: 'You may use the `Tactic` operation with these tactics:\n- auto: prove by classical reasoning and rewriting\n- simp: rewrite the goal with the simplifier, e.g. ‹a ⟹ b› becomes what the rules give\n'
 --- worker ---
 system prompt: 'You may use the `Tactic` operation with these tactics:\n- auto: prove by classical reasoning and rewriting\n- simp: rewrite the goal with the simplifier, e.g. ‹a ⟹ b› becomes what the rules give\n'
 --- interaction fork ---
-system prompt: (no block)
+system prompt: 'You may use the `Tactic` operation with these tactics:\n- auto: prove by classical reasoning and rewriting\n- simp: rewrite the goal with the simplifier, e.g. ‹a ⟹ b› becomes what the rules give\n'

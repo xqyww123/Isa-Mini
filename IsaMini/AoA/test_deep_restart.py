@@ -471,7 +471,8 @@ async def test_run_fork_abandon_arm():
         d._client = None
         d.total_isabelle_time = 0.0
         d.total_quota_wait_time = 0.0
-        d.system_prompt = lambda: None
+        async def _system_prompt(): return None
+        d.system_prompt = _system_prompt
         d._role_allowed_tools = lambda: []
         FakeSDKClient.script = [_corrupt_turn()]
 

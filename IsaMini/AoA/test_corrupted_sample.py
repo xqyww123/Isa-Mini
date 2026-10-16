@@ -5,9 +5,11 @@ JSON): ``_validate_sample`` / ``validate_tool_call_json`` / ``_checked_chat``,
 the ``RETRY_TRANSIENT_ON`` narrowing of ``_retry_transient``, the
 ``(_CorruptedSampleError, UnicodeEncodeError)`` arm in ``_api_loop`` (charged,
 capped, context-restarting — and never reaching ``_with_retry``), the fork
-loop's existing transient arm, and the compaction seam (a failed summary
-request = the same charged, capped light restart, on both the automatic and
-the Refresh call site).
+loop's existing transient arm, the fork loop's state (a fork launched from a
+fork copies, or continues, the fork's conversation, with the inherited tools,
+and its usage is folded into the session that launched the fork), and the
+compaction seam (a failed summary request = the same charged, capped light
+restart, on both the automatic and the Refresh call site).
 
 No Isabelle / no REPL / no LLM. Run directly from anywhere (it puts the
 package root on ``sys.path``): ``python test_corrupted_sample.py``. Exits
@@ -15,6 +17,7 @@ non-zero on any failure. Same shape as ``test_deep_restart.py``.
 """
 import asyncio
 import contextlib
+import dataclasses
 import os
 import sys
 from time import time
@@ -28,7 +31,7 @@ from IsaMini.AoA.driver_api import (
 from IsaMini.AoA.language_model_driver import (
     _CorruptedSampleError, _TransientError, _QuotaError, Usage)
 from IsaMini.AoA.model import (
-    Runtime, Role_Major, ResourceExhausted, SessionQuit, Interaction,
+    Runtime, Role_Major, Role_Interaction, ResourceExhausted, SessionQuit, Interaction,
     ForkingMode, Refresh, TOOL_ANSWER_INDEX, TOOL_REFRESH)
 
 LONE = "\ud83d"            # lone high surrogate (孤悬半)
@@ -84,19 +87,23 @@ class FakeProvider(Provider):
     def __init__(self, script):
         self.script = list(script)
         self.calls = 0
-        self.requests = []   # a snapshot of every request's message list
+        self.requests = []       # a snapshot of every request's message list
+        self.previous_ids = []   # every request's previous_response_id
+        self.tools = []          # every request's tools
 
     async def chat(self, messages, tools, *, previous_response_id=None,
                    allowed_tools=None):
         self.calls += 1
         self.requests.append(list(messages))
+        self.previous_ids.append(previous_response_id)
+        self.tools.append(tools)
         item = self.script.pop(0)
         if isinstance(item, BaseException):
             raise item
         return item
 
     def format_tools(self, tool_info):
-        return []
+        return sorted(tool_info)   # the tool names, in a fixed order
 
     def format_assistant_msg(self, response):
         return AssistantMsg(response=response)
@@ -121,7 +128,13 @@ class FakeExecutor:
         self.calls = []
 
     def tool_schemas(self):
-        return {}
+        # Unlike the real schemas, the dispatch tool is withheld from an interaction
+        # fork, so a fork that sends its own schemas instead of the inherited tools
+        # fails the tools check in test_nested_fork_copies_the_forks_conversation.
+        schemas = {"edit": {}, "query": {}}
+        if not isinstance(self.session.role, Role_Interaction):
+            schemas["subagent"] = {}
+        return schemas
 
     async def execute(self, name, args):
         self.calls.append((name, args))
@@ -170,7 +183,9 @@ def make_driver(provider, *, max_retries=5):
     d.logged = []
     d.meta = []
     d._executor = FakeExecutor(d)
-    d.system_prompt = lambda: "SYS"
+    d._tools = d._provider.format_tools(d._executor.tool_schemas())
+    async def _system_prompt(): return "SYS"
+    d.system_prompt = _system_prompt
     async def _initial():
         return "INITIAL PROMPT"
     d.initial_prompt = _initial
@@ -398,7 +413,9 @@ class _Probe(Interaction):
         pass
 
 
-async def _drive_fork(parent):
+async def _drive_forks(parent, executor=FakeExecutor):
+    """Run `parent._run_fork` on a probe; return its answer and every fork made
+    (a fork launched from the fork included), each with an `executor`."""
     saved = APIDriver._make_fork
     forks = []
     def _stub_fork(p, role):
@@ -407,6 +424,8 @@ async def _drive_fork(parent):
         f.role = role
         f.runtime = p.runtime
         f._fork_name = "main.fork_1"
+        f._executor = executor(f)
+        f._tools = []   # as APIDriver.__init__ leaves a new session
         async def _init(root):
             pass
         f.initialize = _init
@@ -423,6 +442,11 @@ async def _drive_fork(parent):
                 parent._run_fork(_Probe(), "question?"), timeout=30)
     finally:
         APIDriver._make_fork = saved
+    return answer, forks
+
+
+async def _drive_fork(parent):
+    answer, forks = await _drive_forks(parent)
     return answer, forks[0]
 
 
@@ -501,6 +525,141 @@ async def test_fork_unicode_error_escapes_by_design():
     except UnicodeEncodeError:
         pass
     check(p.calls == 1, "no retry may be attempted")
+
+
+# ---------------------------------------------------------------------------
+# 3b. fork: the fork loop's state (a fork launched from a fork copies, or
+#     continues, the fork's conversation, with the inherited tools; its usage is
+#     folded into the session that launched the fork; TASK_PROMPT_FORK_PLAN.md §2)
+# ---------------------------------------------------------------------------
+
+class NestingExecutor(FakeExecutor):
+    """On the `nested` tool, the session launches a fork of its own and returns
+    that fork's answer as the tool's result."""
+
+    async def execute(self, name, args):
+        if name == "nested":
+            return (await self.session._run_fork(_Probe(), "nested?"), False)
+        return await super().execute(name, args)
+
+
+NESTED_CALL = resp(tool_calls=[ToolCall("n", "nested", "{}")])
+THREE_CALLS = resp(tool_calls=[ToolCall("a", "other", "{}"), ToolCall("n", "nested", "{}"),
+                               ToolCall("q", "query", "{}")])
+
+
+def stored(r, response_id):
+    """`r` as a provider that stores conversations returns it: with a response id."""
+    return dataclasses.replace(r, response_id=response_id)
+
+
+def with_usage(r, usage):
+    return dataclasses.replace(r, usage=usage)
+
+
+def results_of(request):
+    """(call id, content) of every ToolResultMsg in the request, in order."""
+    return [(m.call_id, m.content) for m in request if isinstance(m, ToolResultMsg)]
+
+
+async def test_nested_fork_copies_the_forks_conversation():
+    """No stored response: a fork launched from a fork copies the fork's
+    conversation, as the fork copied its parent's, so its request extends the
+    fork's last request (the prefix the provider has cached), with the same tools."""
+    p = FakeProvider([NESTED_CALL, ANSWER_CALL, ANSWER_CALL])
+    parent = make_driver(p)
+    parent._messages = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT")]
+    answer, forks = await _drive_forks(parent, executor=NestingExecutor)
+    check(answer == "ANSWERED" and p.calls == 3 and len(forks) == 2,
+          "the fork answers after the fork it launched answered")
+    first, nested = p.requests[0], p.requests[1]
+    check(first[:2] == parent._messages and isinstance(first[2], UserMsg) and len(first) == 3,
+          "the fork's request is the parent's conversation, then the question")
+    check(nested[:3] == first and isinstance(nested[3], AssistantMsg)
+          and isinstance(nested[4], ToolResultMsg) and nested[4].call_id == "n"
+          and nested[4].content.startswith("nested?") and len(nested) == 5,
+          "the nested fork's request is the fork's request, its tool call, and the "
+          "nested question as that call's result")
+    check(p.requests[2] == nested[:4] + [ToolResultMsg(call_id="n", name="nested", content="ANSWERED")],
+          "the fork's next request is its own conversation and the nested fork's answer; "
+          "the nested fork's turns stay out of it")
+    check(p.previous_ids == [None, None, None], "no stored response is continued")
+    check("subagent" in parent._tools and p.tools == [parent._tools] * 3,
+          "every request carries the tools of the session that launched the first fork")
+
+
+async def test_nested_fork_from_a_turn_with_three_calls():
+    """A fork launched from the second call of a turn: the fork appends the turn's
+    results after the whole turn, as the main loop does, so the nested request
+    answers every call of that turn (a provider rejects a request with a call
+    left unanswered), and the fork's own next request carries every result, in
+    call order (the trailing `query` call must not be run first)."""
+    for responses, previous_ids in (
+            ([THREE_CALLS, ANSWER_CALL, ANSWER_CALL], [None, None, None]),
+            ([stored(THREE_CALLS, "r1"), stored(ANSWER_CALL, "r2"), stored(ANSWER_CALL, "r3")],
+             ["r0", "r1", "r1"])):
+        p = FakeProvider(responses)
+        parent = make_driver(p)
+        parent._messages = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT")]
+        if previous_ids[0] is not None:
+            parent._last_response_id = previous_ids[0]
+            parent._msgs_sent_through = len(parent._messages)
+        answer, forks = await _drive_forks(parent, executor=NestingExecutor)
+        check(answer == "ANSWERED" and p.calls == 3 and p.previous_ids == previous_ids,
+              "the fork answers after the fork it launched answered")
+        nested = results_of(p.requests[1])
+        check([c for c, _ in nested] == ["a", "n", "q"] and nested[0][1].startswith("nested?"),
+              "the nested request answers every call of the turn, the question in the first")
+        check(results_of(p.requests[2]) == [("a", "ok"), ("n", "ANSWERED"), ("q", "ok")],
+              "the fork's next request carries the turn's results, in call order")
+
+
+async def test_nested_forks_usage_reaches_the_session_that_launched_the_first_fork():
+    """A fork's own turns are charged to the session that launched it as they
+    run; the turns of a fork launched from the fork are charged to the fork, and
+    folded into the session that launched the fork when the fork ends, cache
+    counts included (request 0 and 2 are the fork's turns, request 1 the nested
+    fork's)."""
+    p = FakeProvider([with_usage(NESTED_CALL, Usage(100, 10, 7, 3)),
+                      with_usage(ANSWER_CALL, Usage(1000, 20, 70, 30)),
+                      with_usage(ANSWER_CALL, Usage(10, 30, 700, 300))])
+    parent = make_driver(p)
+    answer, forks = await _drive_forks(parent, executor=NestingExecutor)
+    check(answer == "ANSWERED" and p.calls == 3,
+          "the fork answers after the fork it launched answered")
+    check((parent.total_input_tokens, parent.total_output_tokens,
+           parent.total_cache_read_input_tokens, parent.total_cache_creation_input_tokens)
+          == (1110, 60, 777, 333),
+          "the totals of the session that launched the first fork include the nested fork's turn")
+    check(forks[1].total_input_tokens == 0 and forks[1].total_output_tokens == 0,
+          "the nested fork's own counters stay empty")
+
+
+async def test_nested_fork_continues_the_forks_response():
+    """A stored response: the fork continues its parent's last response id and
+    sends only the unsent tail; a fork launched from it continues the fork's own
+    last response id the same way."""
+    p = FakeProvider([stored(NESTED_CALL, "r1"), stored(ANSWER_CALL, "r2"),
+                      stored(ANSWER_CALL, "r3")])
+    parent = make_driver(p)
+    parent._messages = [SystemMsg("SYS"), UserMsg("INITIAL PROMPT"),
+                        AssistantMsg(resp(content="noted"))]
+    parent._last_response_id = "r0"
+    parent._msgs_sent_through = len(parent._messages)
+    answer, forks = await _drive_forks(parent, executor=NestingExecutor)
+    check(answer == "ANSWERED" and p.calls == 3 and len(forks) == 2,
+          "the fork answers after the fork it launched answered")
+    check(p.previous_ids == ["r0", "r1", "r1"],
+          "the fork continues the parent's response; the nested fork, and the fork "
+          "after it, continue the fork's")
+    check(len(p.requests[0]) == 1 and isinstance(p.requests[0][0], UserMsg),
+          "the fork sends only the question")
+    check(len(p.requests[1]) == 1 and isinstance(p.requests[1][0], ToolResultMsg)
+          and p.requests[1][0].call_id == "n" and p.requests[1][0].content.startswith("nested?"),
+          "the nested fork sends only the nested question, as the pending call's result")
+    check(len(p.requests[2]) == 1 and isinstance(p.requests[2][0], ToolResultMsg)
+          and p.requests[2][0].content == "ANSWERED",
+          "the fork then sends only the nested fork's answer")
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +938,14 @@ def main():
     print("PASS: fork transient spin is bounded by the run-wide budget")
     asyncio.run(test_fork_unicode_error_escapes_by_design())
     print("PASS: fork UnicodeEncodeError escapes by design")
+    asyncio.run(test_nested_fork_copies_the_forks_conversation())
+    print("PASS: a fork launched from a fork copies the fork's conversation")
+    asyncio.run(test_nested_fork_continues_the_forks_response())
+    print("PASS: a fork launched from a fork continues the fork's stored response")
+    asyncio.run(test_nested_fork_from_a_turn_with_three_calls())
+    print("PASS: a fork launched from the second call of a turn answers every call")
+    asyncio.run(test_nested_forks_usage_reaches_the_session_that_launched_the_first_fork())
+    print("PASS: a nested fork's usage reaches the session that launched the first fork")
     asyncio.run(test_auto_compaction_failure_restarts_after_rerolls())
     print("PASS: auto compaction failure restarts after re-rolls")
     asyncio.run(test_auto_compaction_failure_without_inner_layer())

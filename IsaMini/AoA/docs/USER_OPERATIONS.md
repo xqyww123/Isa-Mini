@@ -288,8 +288,7 @@ arm.
 The package is importable in the Python environment AoA runs in. Importing
 it registers its classes, as importing `IsaMini.AoA` registers the built-in
 ones; the process-wide registries are `OPERATION_REGISTRY` (`model.py`)
-and, new, `TASK_REGISTRY` (`task.py`, beside the `Task` classes: `model.py`
-imports `task.py`, so the task registry cannot live in `model.py`).
+and, new, `TASK_REGISTRY` (`task.py`, beside the `Task` classes).
 `tools/cc_edit.jsonc` is loaded by `edit_schema.py`, which both `model.py`
 and `mcp_http_server.py` import, so the decorators can read its `$defs`.
 
@@ -473,25 +472,70 @@ way, `@aoa_task("usual")` and `@aoa_task("learning")`, and the dispatch in
 `IsaMini_AoA` (`toplevel.py`) is one table lookup. `@aoa_task` makes the
 duplicate-name and abstractness checks of §4.1.
 
+The interface (`task.py`) is two async hooks, each building one whole
+prompt: `system_prompt(role, session)` returns the system prompt, or
+`None` to send none, and `initial_prompt(role, session, has_system)`
+returns the initial message, `has_system` saying whether a system prompt
+is sent. The session appends the tactic block (TACTIC_DESIGN.md §7.3) to
+the system prompt, or to the initial message when there is none; a task
+includes it in neither. `role`, in every hook, is the role of the session
+the prompt is built for, `Role_Major` or `Role_Worker` (`Session` passes
+its own role). An interaction fork has no system prompt or initial
+message of its own: it is sent the system prompt of the session that
+launched it, and sees that session's initial message only inside a
+copied conversation.
+
+A task that wants the framework's prompts with its own words in them
+derives from `StdTask`, which implements both hooks and offers two text
+hooks, `task_system(role)` and `task_initial(role, has_system)`, both
+returning `""` by default:
+
 ```python
 @aoa_task("termination")
-class TerminationTask(Task):
+class TerminationTask(StdTask):
     def __init__(self, payload):
         self.names, self.equations = payload
-    def system_prompt(self, session):
-        return session._build_system_prompt(<reference note>)
-    def initial_prompt_extra(self, session):
-        return <the equations, major agent only>
+    def task_initial(self, role, has_system):
+        if not isinstance(role, Role_Major):
+            return ""
+        return <the equations, ending in a blank line>
 ```
 
-The two hooks are the whole interface (`task.py`): `system_prompt(session)`
-and `initial_prompt_extra(session)`. A task extends the framework's prompts
-by passing its note to `session._build_system_prompt` and appending to the
-initial message, as `LearningTask` does; the variant of the initial message
-for a driver without a system prompt is then the framework's
-(`Session._compute_initial_prompt_base`). A task that returns a system
-prompt of its own owns that variant too: `session.system_prompt() is None`
-is the signal, readable from both hooks.
+The text of either hook is whole lines, each ending in `"\n"`, inserted
+as it is: the framework adds no separator around it, and `""` gives the
+prompt without a task. `task_system`'s text continues the first paragraph
+of the role's body of the system prompt and the framework's paragraph
+break follows, so the text ends in a single `"\n"`, not a blank line.
+`task_initial`'s text opens the initial message and the framework's text
+follows directly, so a text that forms a section of its own ends in a
+blank line, as `LearningTask`'s Isar block does.
+
+The two text hooks receive no session: their text can name no tool (the
+spelling is the driver's, through `Session.tool_name`) and no feature
+gated per call (`write_memory`, experience retrieval). A task that needs
+a value of the session overrides a whole hook of `StdTask` and adds to
+`super()`'s result. In the initial message the text goes at
+`task_initial`'s place, under the same whitespace rule:
+
+```python
+    async def initial_prompt(self, role, session, has_system):
+        return <text> + await super().initial_prompt(role, session, has_system)
+```
+
+In the system prompt, text can only go before or after
+`await super().system_prompt(role, session)` (which is `str | None`):
+text after it follows the tool list and precedes the tactic block, no
+text reaches the place after the first paragraph, and the whitespace
+where the two texts meet is the task's own. Such a hook uses the session
+it is given, never the session of the running context (an interaction
+fork's system prompt is built from the session that launched it, in the
+fork's context), and does not store it on the task (one task serves
+every session of the call, and the hooks run concurrently). As the hooks'
+docstrings say, the system prompt may depend only on the task, the role
+and the session's configuration, since the session may build it again at
+any time; the initial message is memoized and resent at compaction and
+restart. A task whose prompts are not the framework's at all derives from
+`Task` and implements the two hooks itself.
 
 ---
 
@@ -734,7 +778,8 @@ The approved texts (2026-10-08), besides those quoted in §2 and §4.1:
 - the decorators (Python): `Proof operation "Apply" is already registered by
   <module>.<class>`; `Proof operation "Apply": the class Apply is abstract;
   missing: payload`; `Task "usual" is already registered by <module>.<class>`;
-  `Task "abstract": the class Abstract is abstract; missing: system_prompt`;
+  `Task "abstract": the class Abstract is abstract; missing: initial_prompt,
+  system_prompt`;
   and the schema checks, each `User operation "Apply": ` followed by one of
   `its node class defines no construct_schema dict`, `construct_schema is not
   a valid JSON schema: <reason>`, `construct_schema must set

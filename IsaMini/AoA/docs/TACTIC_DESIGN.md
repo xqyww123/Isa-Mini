@@ -24,7 +24,7 @@
 | 计时消息 / 文案 | `TACTIC_TIMES`，标签 22；重放超限文案 `Tactic replay timed out` | owner 2026-10-09 |
 | 探测短路 | `Tactic_Like._probe_residual_schematics` 先做基类的只读整体扫描，无 schematic 即收敛 | owner 2026-10-09 |
 | schematic 目标 | 允许；收敛条件"只有被 ≥2 个派生子目标共享的变量才实例化"，与 `InferenceRule` 共用基类 `Tactic_Like` | owner |
-| prompt 段落 | 草案 B（§7.3）；按白名单顺序逐条渲染；接在 **system prompt 末尾**；无 system prompt 时接在 **initial prompt 末尾**（task 的 extra 之后）；对自写 system prompt 的 task 同样附加；**交互 fork 不显示** | owner 2026-10-10；fork 例外沿用 experience_hint 的既有做法 |
+| prompt 段落 | 草案 B（§7.3）；按白名单顺序逐条渲染；接在 **system prompt 末尾**；无 system prompt 时接在 **initial prompt 末尾**（task 给出的整段 initial prompt 之后）；对自写 system prompt 的 task 同样附加；**交互 fork 收到发起方的 system prompt，段落随之可见** | owner 2026-10-10 定为交互 fork 不显示；2026-10-16 改为统一到发起方（`Session.system_prompt` 向 `parent` 委托） |
 | query 工具 | kind `"proof tactic"` 只在白名单含 query 条目时出现（白名单只有 prompt 条目时不出现，见 §7.4）；**排序检索**的候选集 = query 条目；**`exact_name`** 在**整个白名单**里查，不在即 Undefined；**显示的 interpretation 一律来自白名单**，DB 只提供排序向量 | owner 2026-10-10；第四轮 C5 |
 | 覆盖已有记录 | `Main` 之外的 method 已有流水线记录时，同步写入清掉其 `expr`，其它字段（如 `position`）保留 | owner 2026-10-10 |
 | 非法 kind 标签 | 沿用各查询路径现有行为（直接路径报 "Invalid entity kind" 警告，fork 过滤路径静默丢弃），不改 fork 路径 | owner 2026-10-10（第四轮 C7） |
@@ -252,7 +252,7 @@ def TACTIC(tactic_full: str, arguments: str, fact_refs: 'list[IsabelleFact]',
 
 ### 7.3 prompt 段落（草案 B，owner 已定）
 
-一个 `Session` 辅助函数 `_tactic_prompt_block()`（照 `_lemma_guidance` 的样子）从 `Runtime.tactics` 按白名单顺序渲染 prompt 条目，自带门控：无 prompt 条目或当前是交互 fork 时返回空串（交互 fork 的例外沿用 experience_hint 的既有做法），否则自带前导换行。**只在两个分发点调用**：`Session.system_prompt()`（`sp = self.task.system_prompt(self); return sp if sp is None else sp + block`）和 `_compute_initial_prompt`（`base + extra + (block if self.system_prompt() is None else "")`——在 task 的 extra **之后**）。于是对任何 task——包括自写整段 system prompt 的插件 task——段落恰好出现在两者之一的末尾；驱动若自行覆盖 prompt 则绕过（已知并接受）。
+一个 `Session` 辅助函数 `_tactic_prompt_block()`（照 `_lemma_guidance` 的样子）从 `Runtime.tactics` 按白名单顺序渲染 prompt 条目，自带门控：无 prompt 条目时返回空串，否则自带前导换行。交互 fork 没有自己的 system prompt：driver 发给它的是发起方的；它自己的 `Session.system_prompt()` 向 `parent` 委托、返回同一份（在 ClaudeCode 和 API driver 不带上下文模式下，由它再起的 fork 收到的就是这份）；段落随之可见。**只在两个分发点调用**：`Session.system_prompt()`（`sp = await self.task.system_prompt(role, self); return sp if sp is None else sp + block`）和 `_compute_initial_prompt`（`text = await self.task.initial_prompt(role, self, sp is not None); return text if sp is not None else text + block`——在 task 给出的整段 initial prompt **之后**）。于是对任何 task——包括自写整段 system prompt 的插件 task——段落恰好出现在两者之一的末尾；驱动若自行覆盖 prompt 则绕过（已知并接受）。
 
 ```
 You may use the `Tactic` operation with these tactics:
@@ -283,7 +283,7 @@ You may use the `Tactic` operation with these tactics:
 
 ## 8. 已锁定决策汇总
 
-见 §0。补充实现级裁定：记录值只在 REPLAY 封顶、LIVE 实跑重计；记录值只在装配时装入；探测触发是类属性；`Tactic` 不是选择项、不读 method 表达式；白名单在 `Tactic.gen_single` 查、ML 不查；`activate_tactics` 是白名单的唯一写入点，操作表与 `tactics_by_full` 由 `_user_operations` 与白名单推导，顺序与"白名单非空 ⟺ `Tactic` 在表里"按构造成立；DB 同步是独立一步、在空库提示之后、写前比对、失败即调用失败；AoA 调用的 method 枚举回调为空；显示文字一律来自白名单；prompt 段落交互 fork 不显示。
+见 §0。补充实现级裁定：记录值只在 REPLAY 封顶、LIVE 实跑重计；记录值只在装配时装入；探测触发是类属性；`Tactic` 不是选择项、不读 method 表达式；白名单在 `Tactic.gen_single` 查、ML 不查；`activate_tactics` 是白名单的唯一写入点，操作表与 `tactics_by_full` 由 `_user_operations` 与白名单推导，顺序与"白名单非空 ⟺ `Tactic` 在表里"按构造成立；DB 同步是独立一步、在空库提示之后、写前比对、失败即调用失败；AoA 调用的 method 枚举回调为空；显示文字一律来自白名单；交互 fork 收到发起方的 system prompt，prompt 段落随之可见。
 
 ---
 
@@ -303,7 +303,7 @@ You may use the `Tactic` operation with these tactics:
 | `Tactic6` | 声明 `simp`；事实找不到 / 不可证 / 描述型 | 经 `_edit_tool_logic`：`facts:[{name:"nope"}]`；`facts:[{proposition:"False"}]`；`facts:[{english:"…"}]` | FAILURE "Fact … not found"；`FACT_IN_TIME_FAIL` 原话；Python 校验器的 `ArgumentError`（模型测试不经 MCP schema 校验） |
 | 白名单检查 | `test_*.py`，`bare_session()` 加 `tactics=` 参数（条目可用 Python 拼的假 METHOD 键：16 字节 + 标签 + UTF-8 全名），直接 `Parse_Op_List` | 只声明 `simp` 时写 `tactic:"tactic"`、`tactic:"aoa"`、`tactic:"auto"`，顶层与 `Have` 体内各一次 | 都抛 `ArgumentError`（"must be one of …"），无任何 Isabelle 调用；另断言 `Runtime(["Tactic"])` 被拒（`Tactic` 不是 user operation） |
 | 操作表与 schema | `test_*.py` | `Runtime([], [])` / `activate_tactics` 空与非空各一次；带 user operation 时再激活一次 | 表里 `Tactic` 的有无与 `edit` schema 里 `$defs/Tactic`、`anyOf` 成员的有无**同时**成立；顺序为常驻 → `Tactic` → user operation；枚举值是 `simp` 而非 `HOL.simp`；四种驱动变体一致；`BUILTIN_OPERATIONS` 恰为基础 `$defs` 里有条目的操作；模板通过注册检查；`"proof tactic"` 在 `query` schema 中的有无按 query 条目决定（只有 prompt 条目时不出现），与 `AoA_enable_read_memory` 真/假做叉积 |
-| `TacticPrompt` | `@model_test`，照 `ReadMemoryGate`；**夹具 `.thy` 声明那条多行、含 `⟹` 与嵌套 cartouche 的 prompt 条目**（只有它会被启动同步写进 DB），其余情形在测试体里用 `activate_tactics` 复用 `runtime.tactics` 的键构造 | 五种情形：无 prompt 条目 / 一条 / 那条多行 interpretation / 一个自写 system prompt 的 task / 一个 `system_prompt` 返回 `None` 且 `initial_prompt_extra` 非空的 task | 段落缺席 / 出现在 system prompt 末尾、按白名单顺序 / 出现且归一化、Unicode 无 `\<` 转义、与 DB 记录逐字节相同 / 自写 prompt 之后仍出现 / 出现在 initial prompt 的 extra **之后**（用未缓存的 `_compute_initial_prompt()` 读）；major 与 worker 有、交互 fork 无 |
+| `TacticPrompt` | `@model_test`，照 `ReadMemoryGate`；**夹具 `.thy` 声明那条多行、含 `⟹` 与嵌套 cartouche 的 prompt 条目**（只有它会被启动同步写进 DB），其余情形在测试体里用 `activate_tactics` 复用 `runtime.tactics` 的键构造 | 五种情形：无 prompt 条目 / 一条 / 那条多行 interpretation / 一个自写 system prompt 的 `Task` / 一个 `system_prompt` 返回 `None`、`task_initial` 非空的 `StdTask` | 段落缺席 / 出现在 system prompt 末尾、按白名单顺序 / 出现且归一化、Unicode 无 `\<` 转义、与 DB 记录逐字节相同 / 自写 prompt 之后仍出现 / 出现在 initial prompt 末尾，task 的文字与框架的长版**之后**（用未缓存的 `_compute_initial_prompt()` 读）；major 与 worker 有；交互 fork 收到发起方的那份 |
 | 声明 | ML theory 测试 `Tactic_Declaration_Test.thy`，经 `theory_test` 登记（照 `User_Operation_Replay_Test.thy` 用 `assert` 查 `tactics_of`；**反例写在 `ML ‹…›` 块里**用 `Attrib.attribute_cmd` 从源码文本施加属性并捕获 `ERROR`，否则顶层 `declare` 出错会使整个 theory 失败） | 恰好 §0 的示例；`add:` 省略；`add: simp auto`（漏写 interpretation）；`shown_in` 非法值；`del:`；同名重复；拼错名字 | `simp` in_prompt = false、`induction` = true；省略模式 = `add:`；漏写与非法 `shown_in` 报 `ERROR`（解析失败不产生任何上下文，部分写入按构造不可能，不另测）；省略 `shown_in` = query；`del` 生效；最后声明优先；拼错报 `ERROR` |
 | DB 同步（端到端） | `@model_test`，全新一次性 DB | 调用启动 | 测试体内记录已存在：kind METHOD、名字 `HOL.simp`、interpretation 等于归一化文字（全新 DB 上事先不可能有记录，存在即证明启动同步写了） |
 | DB 同步（单元） | `test_*.py`，一次性 DB，直接调 `declare_interpretation` | 相同文字再调；预置流水线形状的 METHOD 记录（带 `position`、`expr` 非 `None`，interpretation 不同）后调；非 METHOD 键；删掉记录后再调 | 相同文字不写、不作废向量；整条记录等于预置记录换掉 `expr`（`None`）与 interpretation（归一化文字）、向量已作废；非 METHOD 键抛错；记录重现 |

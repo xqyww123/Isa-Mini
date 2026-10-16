@@ -1,0 +1,11 @@
+major: system prompt is the usual one with the marker line inserted: True
+major: the marker line ends the first paragraph: True
+worker: system prompt is the usual one with the marker line inserted: True
+worker: the marker line ends the first paragraph: True
+interaction fork: system prompt is that of the session that launched it, task text included: True
+major: initial message is the marker line, then the usual one: True
+worker: initial message is the marker line, then the usual one: True
+major, no system prompt: system prompt is None: True
+major, no system prompt: initial message is the marker line, then the long variant: True
+worker, no system prompt: system prompt is None: True
+worker, no system prompt: initial message is the marker line, then the long variant: True

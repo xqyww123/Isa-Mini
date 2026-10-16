@@ -1041,8 +1041,8 @@ class APIDriver_OpenAI(APIDriver):
             self.short_context_usage += usage
         super()._accumulate_usage(usage, long_context=long_context, **meta)
 
-    def _accumulate_subagent_costs(self, sub: 'APIDriver_OpenAI'):
-        super()._accumulate_subagent_costs(sub)
+    def _accumulate_sub_session_costs(self, sub: 'APIDriver_OpenAI'):
+        super()._accumulate_sub_session_costs(sub)
         self.short_context_usage += sub.short_context_usage
         self.long_context_usage += sub.long_context_usage
 
