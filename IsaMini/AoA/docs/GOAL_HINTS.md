@@ -153,6 +153,18 @@ is visible in every theory importing it, and a hint declared inside a locale
 or a proof context (`note [[aoa_notice_goal ...]]`) is visible there. Theory
 merge takes the union.
 
+**The ML entry** (2026-10-14). `Agent_Hint.add_goal_hint {text, whole_prop,
+subterm} : Context.generic -> Context.generic` declares one hint from ML,
+for a caller that holds a context as an ML value rather than writing a
+theory — TAT's `Define` job, which declares the hint of one AoA call on
+the goal's proof context, its text carrying the function's equations. The
+two lists hold the patterns of the two clauses as text; each is read in
+pattern mode in the context, beta-eta contracted and checked exactly as
+the attribute reads and checks it (`goal_hint_declaration`, the one body
+of both), the check messages quoting the text given; the serial is
+allocated at the call, so one call is one hint. The attribute is this
+entry behind the parser.
+
 **Renamed attributes.** The four existing attributes take the same prefix:
 `agent_notice_constant` → `aoa_notice_constant`,
 `agent_reject_constant` → `aoa_reject_constant`,
@@ -487,7 +499,9 @@ ML
   bindings and the usage comments that name them (§1); add `goal_hint`,
   the connective set, the two `iNet_Collection` instances, the
   `aoa_notice_goal` attribute with its three declaration-time checks and
-  the approved texts, the walk of §2 and `goal_hints`.
+  the approved texts, the walk of §2 and `goal_hints`. 2026-10-14: the
+  attribute's body factored into `goal_hint_declaration`, and the ML entry
+  `add_goal_hint` over it (§1).
 - `Agent/agent_server.ML`: `flat_goal_of`, called by the `IsaMini.proof_opr`
   callback and by `raw_AoA`; `minilang_flat_goal_packer` packs the hints
   (§4).
@@ -546,6 +560,10 @@ Documentation
 and `fails_with`. No goal hint is declared at top level: each case builds
 exactly the context it names by applying the attribute from source text
 with `declared`, and calls `goal_hints` on a term read in that context.
+Its last case (2026-10-14) builds the contexts through the ML entry
+`add_goal_hint` instead: the running example and the one-hint cases give
+the same texts, an abbreviation is expanded as the pattern is read, and
+three of the refusals above come back with the same messages.
 With the running example's two hints:
 - `gcd a b dvd a ∧ 0 < a` yields both, in declaration order; `gcd a b ≡
   1`, a conclusion that is not a `Trueprop`, yields the subterm hint;

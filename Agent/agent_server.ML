@@ -25,6 +25,11 @@ val AoA_enable_read_memory: bool Config.T
 type tactic_entry = {name: string, full: string, interpretation: string, in_prompt: bool,
                      key: Universal_Key.universal_key}
 val tactics_of : Proof.context -> tactic_entry list
+(* The ML entry of `AoA_tactics add:` (docs/TACTIC_DESIGN.md, section 5.1):
+   entries by method name, each checked as the declaration checks it, a name
+   declared before replaced, as the last declaration wins. *)
+val add_tactics : (xstring * {interpretation: string, in_prompt: bool}) list ->
+  Context.generic -> Context.generic
 
 type state_id = string
 type states = Minilang.state Symtab.table
@@ -598,6 +603,14 @@ fun tactics_of ctxt : tactic_entry list =
       |> sort_by #name
   end
 
+(*one entry, its name resolved in ctxt: the one step of the declaration and of the ML entry*)
+fun add_tactic ctxt (name, entry) =
+  AoA_Tactics.map (Symtab.update (Method.check_name ctxt name, entry))
+
+fun add_tactics entries context =
+  let val ctxt = Context.proof_of context
+   in fold (fn (name, entry) => add_tactic ctxt ((name, Position.none), entry)) entries context end
+
 local
   val mode =
     Args.del -- Args.colon >> K false || Scan.optional (Args.add -- Args.colon >> K true) true
@@ -609,8 +622,7 @@ local
   fun add_entry ctxt =
     Parse.name_position -- Parse.cartouche -- shown_in
     >> (fn ((name, interpretation), in_prompt) =>
-          AoA_Tactics.map (Symtab.update
-            (Method.check_name ctxt name, {interpretation = interpretation, in_prompt = in_prompt})))
+          add_tactic ctxt (name, {interpretation = interpretation, in_prompt = in_prompt}))
   fun del_entry ctxt =
     Parse.name_position >> (fn name => AoA_Tactics.map (Symtab.delete_safe (Method.check_name ctxt name)))
 in

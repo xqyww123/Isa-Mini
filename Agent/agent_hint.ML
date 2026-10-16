@@ -46,6 +46,12 @@ signature AGENT_HINT = sig
   (* The hints of a leading goal (as `Minilang.leading_goal_data` gives it), in
      declaration order; [] when nothing is registered. Never raises. *)
   val goal_hints : Proof.context -> term -> goal_hint list
+  (* The ML entry of `aoa_notice_goal` (docs/GOAL_HINTS.md, section 1): one
+     hint over patterns given as text, each read in pattern mode in the
+     context and checked as the attribute checks it; the serial is allocated
+     at this call, so one call is one hint. *)
+  val add_goal_hint : {text : string, whole_prop : string list, subterm : string list} ->
+    Context.generic -> Context.generic
 end
 
 structure Agent_Hint : AGENT_HINT = struct
@@ -318,16 +324,29 @@ fun clause kind = Scan.lift (Args.$$$ (kind_name kind)) |-- Parse.!!!! patterns 
 
 val clauses = Scan.repeat1 (clause Whole_Prop || clause Subterm)
 
+(* The checks, then the one hint over its patterns as a declaration. The serial
+   is allocated here, once: a declaration is one hint however many patterns it
+   carries and however many facts the attribute is applied to. *)
+fun goal_hint_declaration ctxt text patterns =
+  let
+    val _ = List.app (check_pattern ctxt) patterns
+    val hint = {serial = serial (), text = text}
+  in fold (add_pattern hint) patterns end
+
+fun add_goal_hint {text, whole_prop, subterm} context =
+  let
+    val ctxt = Context.proof_of context
+    fun read kind src =
+      (kind, (src, Envir.beta_eta_contract (Proof_Context.read_term_pattern ctxt src)))
+    val patterns = map (read Whole_Prop) whole_prop @ map (read Subterm) subterm
+  in goal_hint_declaration ctxt text patterns context end
+
 val _ =
   Theory.setup
    (Attrib.setup \<^binding>\<open>aoa_notice_goal\<close>
       (Args.context -- Scan.lift Parse.embedded -- clauses >>
         (fn ((ctxt, text), clauses) =>
-          let
-            val patterns = flat clauses
-            val _ = List.app (check_pattern ctxt) patterns
-            val hint = {serial = serial (), text = text}
-          in Thm.declaration_attribute (K (fold (add_pattern hint) patterns)) end))
+          Thm.declaration_attribute (K (goal_hint_declaration ctxt text (flat clauses)))))
       "register an AoA notice shown when a goal's conclusion matches a pattern")
 
 end

@@ -182,6 +182,32 @@ val _ = List.app (fn clauses => (declared ctxt0 (hint "t" clauses); ()))
 (*a fixed variable passes*)
 val _ = (declared ctxt (hint "t" "whole_prop \<open>a dvd b\<close>"); ())
 
+(*12: the ML entry: the same hints as the attribute, one hint per call however
+  many patterns of either kind it carries, and the same checks*)
+fun added ctxt hint = Context.the_proof (Agent_Hint.add_goal_hint hint (Context.Proof ctxt))
+val ml_both =
+  added ctxt {text = dvd_text, whole_prop = ["_ dvd _"], subterm = []}
+  |> (fn c => added c {text = gcd_text, whole_prop = [], subterm = ["gcd _ _"]})
+val _ = expect "ML entry: the running example" ml_both "gcd a b dvd a \<and> 0 < a" [dvd_text, gcd_text]
+val _ = expect "ML entry: a proposition passed as an argument" ml_both "f (a dvd b) = c" []
+val ml_two = added ctxt {text = "two", whole_prop = ["_ dvd _", "0 < _"], subterm = []}
+val _ = expect "ML entry: the second pattern" ml_two "0 < a" ["two"]
+val _ = expect "ML entry: both patterns, one hint" ml_two "gcd a b dvd a \<and> 0 < a" ["two"]
+val ml_mixed = added ctxt {text = "mixed", whole_prop = ["_ dvd _"], subterm = ["gcd _ _"]}
+val _ = expect "ML entry: both kinds, one hint" ml_mixed "gcd a b dvd a \<and> 0 < a" ["mixed"]
+val _ = expect "ML entry: the subterm clause alone fires in a term position" ml_mixed
+          "f (gcd a b dvd a) = c" ["mixed"]
+val _ = expect "ML entry: an abbreviation is expanded as it is read"
+          (added ctxt {text = "neq", whole_prop = ["_ \<noteq> 0"], subterm = []}) "x \<noteq> 0" ["neq"]
+val _ = fails_with "Goal hint whole_prop \"card _\": its type is nat, not bool"
+          (fn () => added ctxt0 {text = "t", whole_prop = ["card _"], subterm = []})
+val _ = fails_with "Goal hint subterm \"\<forall>x. _ x\": it contains the connective \<forall>"
+          (fn () => added ctxt0 {text = "t", whole_prop = [], subterm = ["\<forall>x. _ x"]})
+val _ = fails_with ("Goal hint whole_prop \"a dvd b\": a is neither a constant nor fixed here; " ^
+                    "write _ or ?a for an open position, or import the theory that defines it")
+          (fn () => added ctxt0 {text = "t", whole_prop = ["a dvd b"], subterm = []})
+val _ = (added ctxt {text = "t", whole_prop = ["a dvd b"], subterm = []}; ())
+
 val _ = writeln "ALL PASS: Goal_Hints_Test"
 end
 \<close>

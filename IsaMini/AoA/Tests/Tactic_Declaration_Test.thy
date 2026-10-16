@@ -62,6 +62,27 @@ val _ = assert "last wins: shown_in" (#in_prompt (the_entry ctxt5 "simp"))
 (*6: a misspelt name is an error of the declaration*)
 val _ = fails_with "Undefined method" (fn () => declared ctxt "smip \<open>simplify\<close>")
 
+(*7: the ML entry: the same entries as the declaration, the last of a name
+  winning, a misspelt name an error*)
+fun added ctxt entries =
+  Context.the_proof (MiniLang_Agent_AoA.add_tactics entries (Context.Proof ctxt))
+val ctxt7 =
+  added ctxt
+    [("auto", {interpretation = "prove by classical reasoning and rewriting", in_prompt = false}),
+     ("simp", {interpretation = "simplify", in_prompt = true})]
+val _ = assert "ML entry: adds" (names ctxt7 = ["auto", "induction", "simp"])
+val _ = assert "ML entry: the full name" (#full (the_entry ctxt7 "auto") = full "auto")
+val _ = assert "ML entry: the interpretation, verbatim"
+          (#interpretation (the_entry ctxt7 "auto") = "prove by classical reasoning and rewriting")
+val _ = assert "ML entry: a query entry" (not (#in_prompt (the_entry ctxt7 "auto")))
+val _ = assert "ML entry: last wins: the interpretation"
+          (#interpretation (the_entry ctxt7 "simp") = "simplify")
+val _ = assert "ML entry: last wins: shown_in" (#in_prompt (the_entry ctxt7 "simp"))
+val _ = assert "ML entry: nothing added is nothing changed"
+          (names (added ctxt []) = names ctxt)
+val _ = fails_with "Undefined method"
+          (fn () => added ctxt [("smip", {interpretation = "simplify", in_prompt = false})])
+
 val _ = writeln "ALL PASS: Tactic_Declaration_Test"
 end
 \<close>
