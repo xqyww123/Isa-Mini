@@ -154,7 +154,7 @@ def main():
     check(approx(parent.total_cost_usd, merged_cost), "after merging a worker, recomputing the parent reproduces the merged cost")
     check(approx(parent.total_cost_usd, Usage(1_000, 100, 0).cost(p) + Usage(300_000, 2_000, 20_000, 5_000).cost(p["long"])), "and it bills the worker's long call at the long rates")
 
-    # --- a per-turn driver (Codex CLI, default model gpt-5.5-high): a turn whose
+    # --- a per-turn driver (Codex CLI on its default model gpt-5.5): a turn whose
     #     summed prompt is 300K is billed at the flat short rates ($1.50), not
     #     at the long rates ($2.955) -- its Usage is a sum over many requests
     from IsaMini.AoA.test_codex_fork import codex_root

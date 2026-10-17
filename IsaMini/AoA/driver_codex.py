@@ -9,6 +9,7 @@ import shlex
 import signal
 import sys
 import tempfile
+import tomllib
 from time import time
 
 import platformdirs
@@ -66,11 +67,12 @@ _MCP_TOOL_PREFIX = f"mcp__{_MCP_SERVER_NAME}__"
 
 @agent_driver("Codex")
 class Codex_Driver(LMDriver):
-    # The full ``model-effort`` string (the codebase convention, e.g. parsed by
-    # `_parse_effort_suffix`). The effort suffix is split off and passed to Codex
-    # via `-c model_reasoning_effort=<effort>`; the bare model goes to `-m` and
-    # drives pricing (so it must be a key in `PRICING`).
-    DEFAULT_MODEL = "gpt-5.5-high"
+    # The bare model, which goes to `-m` and drives pricing (so it must be a key
+    # in `PRICING`), and the effort whenever none is given (a driver string without
+    # an effort suffix, a configuration without `model_reasoning_effort`). The model
+    # applies when neither the driver string nor the Codex configuration names one
+    # (`_configured_model`).
+    DEFAULT_MODEL = "gpt-5.5"
     DEFAULT_EFFORT = "high"
     # Max attempts for an interaction fork to call its answer tool before giving up.
     _FORK_ANSWER_MAX_ATTEMPTS = 4
@@ -96,9 +98,10 @@ class Codex_Driver(LMDriver):
             self._model = parent._model
             self._reasoning_effort = parent._reasoning_effort
         else:
-            self._model, self._reasoning_effort = _parse_effort_suffix(
-                model or argument or self.DEFAULT_MODEL,
-                self.DEFAULT_MODEL, default_effort=self.DEFAULT_EFFORT)
+            self._model, self._reasoning_effort = (
+                _parse_effort_suffix(model or argument, self.DEFAULT_MODEL,
+                                     default_effort=self.DEFAULT_EFFORT)
+                if model or argument else self._configured_model())
         if parent is not None:
             self.working_dir = parent.working_dir
             self.YAML_path = parent.YAML_path
@@ -106,8 +109,12 @@ class Codex_Driver(LMDriver):
             self._http_server = parent._http_server
             # An interaction fork's own thread is ephemeral, so its forks are forked
             # from the thread its parent forks from; a worker starts its own thread
-            # in `_codex_loop`.
+            # in `_codex_loop`. An interaction fork keeps the inherited thread id and
+            # usage total: it writes neither. That usage total lags the turn in
+            # progress of the major or worker whose thread it forks
+            # (docs/COST_ACCOUNTING.md, section 3).
             self._codex_session_id = parent._codex_session_id
+            self._codex_total_usage = parent._codex_total_usage
             self._codex_home_dir = parent._codex_home_dir
             # An interaction fork builds its own commands, so it runs under its
             # parent's instructions file. A worker writes its own in initialize.
@@ -125,6 +132,9 @@ class Codex_Driver(LMDriver):
             # The Codex thread from which this session's interaction forks are
             # forked: this session's current thread, recorded at `thread.started`.
             self._codex_session_id: str | None = None
+            # That thread's usage as its last `turn.completed` reported it: a total
+            # since the thread started, so an exec's own usage is the growth.
+            self._codex_total_usage: dict[str, Any] = {}
             self._model_instructions_path: str | None = None
             # Per-proof isolated CODEX_HOME (shared by this proof's forks/workers),
             # kept separate from the agent's cwd (working_dir) so the copied
@@ -143,10 +153,9 @@ class Codex_Driver(LMDriver):
         self._exec_process: asyncio.subprocess.Process | None = None
 
     def __str__(self) -> str:
-        label = f"{self._model}-{self._reasoning_effort}"
-        if label == self.DEFAULT_MODEL:
-            return self._driver_name
-        return f"{self._driver_name}({label})"
+        # Always with the model: the default comes from the machine's Codex
+        # configuration, so the log must say which model ran.
+        return f"{self._driver_name}({self._model}-{self._reasoning_effort})"
 
     def tool_name(self, t: tool) -> str:
         # Translate an abstract tool id to the flattened codex MCP name the model
@@ -252,9 +261,6 @@ class Codex_Driver(LMDriver):
                     except Exception as e:
                         self.debug_info(f"[CLEANUP] Failed to remove temporary directory {d}: {e}")
 
-    def _on_start_run(self):
-        self.log_AoA_opr(f"Working directory: {self.working_dir}, Log directory: {self.log_dir}")
-
     async def interrupt(self):
         proc = self._exec_process
         if proc is not None:
@@ -283,6 +289,27 @@ class Codex_Driver(LMDriver):
             return candidate
         return platformdirs.user_config_dir("codex", appauthor=False)
 
+    @classmethod
+    def _configured_model(cls) -> tuple[str, str]:
+        # The model and reasoning effort when the driver string names none: those
+        # of the Codex configuration next to the credential (`model` and
+        # `model_reasoning_effort` in config.toml), each key falling back to the
+        # class constant on its own, as Codex reads the file. Codex itself runs
+        # under the per-proof CODEX_HOME, which has no such entries, so the choice
+        # is passed explicitly (`-m`, `model_reasoning_effort=`).
+        try:
+            with open(os.path.join(cls._codex_home(), "config.toml"), "rb") as f:
+                config = tomllib.load(f)
+        except (OSError, ValueError):     # unreadable, not UTF-8, or not TOML
+            config = {}
+        model = config.get("model")
+        effort = config.get("model_reasoning_effort")
+        if not isinstance(model, str) or not model:
+            model = cls.DEFAULT_MODEL
+        if not isinstance(effort, str) or not effort:
+            effort = cls.DEFAULT_EFFORT
+        return model, effort
+
     # ------------------------------------------------------------------
     # Main Agent Loop
     # ------------------------------------------------------------------
@@ -304,6 +331,7 @@ class Codex_Driver(LMDriver):
             # thread it inherited; a retry after a quota or transient error discards
             # the chat), after a Refresh and after a Restart.
             self._codex_session_id = None
+            self._codex_total_usage = {}
             if self._refresh_summary is not None:
                 prompt = ((await self.initial_prompt())
                           + "\n\nAgent's briefing:\n"
@@ -478,7 +506,7 @@ class Codex_Driver(LMDriver):
             raise InternalError("Codex CLI executable `codex` was not found") from e
         self._exec_process = proc
 
-        usage: dict[str, Any] = {}
+        total: dict[str, Any] = {}
         stderr_lines: list[str] = []
         turn_failure: str | None = None
 
@@ -509,11 +537,7 @@ class Codex_Driver(LMDriver):
                         if not self.is_interaction:
                             self._codex_session_id = obj.get("thread_id")
                     case "turn.completed":
-                        usage = obj.get("usage", {})
-                        self.log_cost(
-                            f"input={usage.get('input_tokens', 0)} "
-                            f"cached={usage.get('cached_input_tokens', 0)} "
-                            f"output={usage.get('output_tokens', 0)}")
+                        total = obj.get("usage", {})
                     case "item.started":
                         item = obj.get("item", {})
                         if item.get("type") == "mcp_tool_call":
@@ -575,18 +599,34 @@ class Codex_Driver(LMDriver):
         if self._model_time_start is not None:
             self.total_model_time += time() - self._model_time_start
             self._model_time_start = None
-        self._record_codex_usage(usage)
+        # `turn.completed` reports the thread's total; this exec's usage is the
+        # growth since the thread's last `turn.completed`. An exec that ends
+        # without one (AoA's own interrupt) records nothing and keeps the total.
+        # An interaction fork keeps the total it inherited, as it keeps the thread
+        # id: each attempt forks that thread afresh.
+        if total:
+            usage = {k: v - self._codex_total_usage.get(k, 0)
+                     for k, v in total.items() if isinstance(v, int)}
+            if not self.is_interaction:
+                self._codex_total_usage = total
+            self.log_cost(
+                f"input={usage.get('input_tokens', 0)} "
+                f"cached={usage.get('cached_input_tokens', 0)} "
+                f"output={usage.get('output_tokens', 0)}")
+            self._record_codex_usage(usage)
 
     # ------------------------------------------------------------------
     # Cost tracking
     # ------------------------------------------------------------------
 
     def _record_codex_usage(self, usage: dict):
-        # Codex reports input_tokens INCLUSIVE of cached_input_tokens → normalize.
+        # Codex reports input_tokens INCLUSIVE of the cached and the cache-written
+        # input → normalize.
         self._accumulate_usage(Usage.from_inclusive(
             prompt_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
-            cached=usage.get("cached_input_tokens", 0)))
+            cached=usage.get("cached_input_tokens", 0),
+            cache_creation=usage.get("cache_write_input_tokens", 0)))
 
     def _pricing(self) -> dict:
         return pricing_for(self._model, PRICING["gpt-4.1"])

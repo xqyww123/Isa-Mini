@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Standalone unit tests for the Codex driver's command lines and its
-interaction forks.
+"""Standalone unit tests for the Codex driver: its command lines, its
+interaction forks, its default model and its usage per exec.
 
 Every option precedes the subcommand (codex-cli 0.163.0 refuses ``-s`` after
 ``resume`` or ``fork``). An interaction fork runs as an ephemeral
@@ -8,10 +8,15 @@ Every option precedes the subcommand (codex-cli 0.163.0 refuses ``-s`` after
 commands: a fork launched from a fork forks that same thread without any shared
 lock, and sibling forks run at once. A session records its thread id at
 ``thread.started``, before any tool call can launch a fork; ``_codex_loop``
-clears the id on entry, on Refresh and on Restart; an interaction fork keeps the
-id it inherited. A fork's later attempts resend the question the fork was last
-shown, then the reminder; a transient error forks the thread afresh. A fork is
-advertised the MCP tools of the session that launched it.
+clears the id and its usage total on entry, on Refresh and on Restart; an
+interaction fork keeps the id and the usage total it inherited. A fork's later
+attempts resend the question the fork was last shown, then the reminder; a
+transient error forks the thread afresh. A fork is advertised the MCP tools of
+the session that launched it. With no model in the driver string, the model and
+reasoning effort are the Codex configuration's (``config.toml``), each falling
+back to the class constant; a model in the driver string wins.
+``turn.completed`` reports the thread's total, so an exec records the growth
+since the thread's last ``turn.completed``, and nothing without one.
 
 No Isabelle / no REPL / no codex process: the subprocess tests run a fake codex
 script through the real ``_run_codex_exec``. Run directly from anywhere (it puts
@@ -53,16 +58,21 @@ def check(cond, msg):
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def codex_root():
+def codex_root(config_toml: str | None = None, argument: str | None = None):
     """A major ``Codex_Driver`` (no parent) without file logging, built under a temporary
     CODEX_HOME holding an empty ``auth.json`` (the constructor copies the
-    credential file and never reads it); its directories are removed afterwards."""
+    credential file and never reads it) and, when given, a ``config.toml``;
+    ``argument`` is the driver string's model part. The directories are removed
+    afterwards."""
     old = os.environ.get("CODEX_HOME")
     with tempfile.TemporaryDirectory() as home:
         open(os.path.join(home, "auth.json"), "w").close()
+        if config_toml is not None:
+            with open(os.path.join(home, "config.toml"), "w") as f:
+                f.write(config_toml)
         os.environ["CODEX_HOME"] = home
         try:
-            d = Codex_Driver(None, "")
+            d = Codex_Driver(None, "", argument=argument)
         finally:
             if old is None:
                 os.environ.pop("CODEX_HOME", None)
@@ -156,22 +166,29 @@ def fake_exec(fn):
         Codex_Driver._run_codex_exec = real
 
 
-# A fake codex: prints `thread.started` with the id it is given; when a third
-# argument is given, prints one MCP tool call; when a sentinel file is named,
-# waits for it; then prints `turn.completed`.
+# A fake codex: prints `thread.started` with the id it is given; `--tool` prints
+# one MCP tool call; `--sentinel PATH` waits for that file; then prints
+# `turn.completed` with the thread total `--usage input,cached,output[,cache_write]`
+# (default 7,2,1,0), or nothing more under `--abort` (an exec ended by an
+# interrupt).
 _FAKE_CODEX = '''\
 import json, os, sys, time
+args = sys.argv[2:]
+def opt(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
 print(json.dumps({"type": "thread.started", "thread_id": sys.argv[1]}), flush=True)
-if len(sys.argv) > 3:
+if "--tool" in args:
     print(json.dumps({"type": "item.started", "item": {
         "type": "mcp_tool_call", "server": "proof", "tool": "query", "arguments": {}}}),
           flush=True)
-if len(sys.argv) > 2:
-    while not os.path.exists(sys.argv[2]):
+if opt("--sentinel"):
+    while not os.path.exists(opt("--sentinel")):
         time.sleep(0.01)
-print(json.dumps({"type": "turn.completed",
-                  "usage": {"input_tokens": 7, "cached_input_tokens": 2, "output_tokens": 1}}),
-      flush=True)
+if "--abort" not in args:
+    i, c, o, w = (int(x) for x in (opt("--usage", "7,2,1") + ",0").split(",")[:4])
+    print(json.dumps({"type": "turn.completed", "usage": {
+        "input_tokens": i, "cached_input_tokens": c, "output_tokens": o,
+        "cache_write_input_tokens": w}}), flush=True)
 '''
 
 
@@ -225,6 +242,11 @@ def exec_recorder(d, script: str, thread_ids: list[str], record: list, after_fir
         if after_first is not None and len(record) == 1:
             after_first()
     d._run_codex_exec = wrapped
+
+
+def usage_totals(d):
+    """The session's recorded usage: (uncached input, cached, output)."""
+    return (d.total_input_tokens, d.total_cache_read_input_tokens, d.total_output_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -288,21 +310,20 @@ def test_T3_thread_id_known_during_the_exec():
             script = write_fake_codex(tmp)
             sentinel = os.path.join(tmp, "go")
             task = asyncio.ensure_future(
-                major._run_codex_exec([sys.executable, script, "T1", sentinel]))
+                major._run_codex_exec([sys.executable, script, "T1", "--sentinel", sentinel]))
             seen = await wait_until(lambda: major._codex_session_id == "T1")
             check(seen and not task.done(),
                   "the major records its thread id while its exec is still running")
             open(sentinel, "w").close()
             await task
-            check((major.total_input_tokens, major.total_cache_read_input_tokens,
-                   major.total_output_tokens) == (5, 2, 1),
+            check(usage_totals(major) == (5, 2, 1),
                   "the exec records the turn's usage on the session")
             major._codex_session_id = "P"
             fork = direct_fork(major)
             sentinel = os.path.join(tmp, "go2")
             calls = fork.total_tool_calls
             task = asyncio.ensure_future(
-                fork._run_codex_exec([sys.executable, script, "E1", sentinel, "tool"]))
+                fork._run_codex_exec([sys.executable, script, "E1", "--sentinel", sentinel, "--tool"]))
             seen = await wait_until(lambda: fork.total_tool_calls > calls)
             check(seen and fork._codex_session_id == "P",
                   "an interaction fork keeps the inherited thread id while its exec runs "
@@ -328,9 +349,15 @@ def test_T4_thread_selection_in_the_loop():
             check(record[0][0][-3:] == ["-C", major.working_dir, "init"]
                   and record[1][0][-3:] == ["resume", "T1", "retry"],
                   "a fresh exec, then `resume T1` with the retry prompt")
-            # Refresh and Restart: the next exec is fresh (after a Refresh, with the briefing)
-            for quit, prompt in ((Refresh(briefing="b"), "init\n\nAgent's briefing:\nb"),
-                                 (Restart(), "init")):
+            # the fake reports the same thread total (7,2,1) at every turn.completed:
+            # a fresh exec records it in full, a resume turn records its growth, 0
+            check(usage_totals(major) == (5, 2, 1),
+                  "the retry turn records the growth of the thread total, here nothing")
+            # Refresh and Restart: the next exec is fresh (after a Refresh, with the
+            # briefing) and starts a new thread, whose first total is recorded in full
+            for quit, prompt, totals in (
+                    (Refresh(briefing="b"), "init\n\nAgent's briefing:\nb", (15, 6, 3)),
+                    (Restart(), "init", (25, 10, 5))):
                 record = []
                 loop_stubs(major, unfinished_once=False)
                 exec_recorder(major, script, ["T2", "T3"], record,
@@ -341,21 +368,31 @@ def test_T4_thread_selection_in_the_loop():
                       f"after a {quit.reason} the next exec is fresh and sees no thread id")
                 check(major._codex_session_id == "T3",
                       f"after a {quit.reason} the new thread is recorded")
-            # a worker clears the inherited id before its first exec
+                check(usage_totals(major) == totals,
+                      f"the two threads of the {quit.reason} pass each record their first total in full")
+            # a worker clears the inherited id and usage total before its first exec;
+            # its retry turn is measured over its own thread's total
             major._codex_session_id = "P"
             worker = Codex_Driver(parent=major, role=Role_Worker(
                 target=SimpleNamespace(id="1")))  # type: ignore[arg-type]
             worker._mcp_url = "http://127.0.0.1:1/mcp/w"
-            check(worker._codex_session_id == "P", "a worker is constructed with the major's id")
+            check(worker._codex_session_id == "P"
+                  and worker._codex_total_usage == major._codex_total_usage != {},
+                  "a worker is constructed with the major's id and usage total")
+            before = dict(major._codex_total_usage)
             record = []
-            loop_stubs(worker, unfinished_once=False)
-            exec_recorder(worker, script, ["W1"], record)
+            loop_stubs(worker, unfinished_once=True)
+            exec_recorder(worker, script, ["W1", "W1"], record)
             await worker._codex_loop()
-            check([field for _, field in record] == [None] and record[0][0][-3] == "-C"
+            check([field for _, field in record] == [None, "W1"] and record[0][0][-3] == "-C"
                   and worker._codex_session_id == "W1",
-                  "the worker's first exec is fresh, sees None, and records its own thread")
+                  "the worker's first exec is fresh, sees None, and records its own thread, "
+                  "which its retry turn resumes")
+            check(usage_totals(worker) == (5, 2, 1),
+                  "the worker's first total is recorded in full and its retry turn's growth over it")
             check("--ephemeral" not in record[0][0], "the worker's commands carry no --ephemeral")
-            check(major._codex_session_id == "P", "the major's id is untouched by the worker")
+            check(major._codex_session_id == "P" and major._codex_total_usage == before,
+                  "the major's id and usage total are untouched by the worker")
     asyncio.run(body())
 
 
@@ -476,8 +513,7 @@ def test_T6_nested_fork_and_T9_totals():
             check(record[0][1][-3:] == ["fork", "T0", fork_prompt_for("outer question")],
                   "the outer fork forks the major's thread")
             # T9: the inner fork's usage reaches the major through the outer fork
-            check((major.total_input_tokens, major.total_cache_read_input_tokens,
-                   major.total_output_tokens) == (120, 80, 10),
+            check(usage_totals(major) == (120, 80, 10),
                   "both forks' usage reaches the major (input excludes the cached part)")
             check(outer_after_inner == [60],
                   "the inner fork's usage is folded into the outer fork when the inner fork ends")
@@ -548,13 +584,90 @@ def test_T10_fork_tools_are_those_of_the_session_that_launched_it():
     asyncio.run(body())
 
 
+# ---------------------------------------------------------------------------
+# T11 / T12: the model default and the usage of an exec
+# ---------------------------------------------------------------------------
+
+def test_T11_default_model_is_the_codex_configurations():
+    with codex_root('model = "m-x"\nmodel_reasoning_effort = "low"\n') as d:
+        d._mcp_url = "http://127.0.0.1:1/mcp/main"
+        common = d._codex_common_args()
+        check((d._model, d._reasoning_effort) == ("m-x", "low")
+              and common[common.index("-m") + 1] == "m-x"
+              and 'model_reasoning_effort="low"' in common,
+              "with no model in the driver string, the Codex configuration's model and effort")
+        check(str(d) == "Codex(m-x-low)", "the driver's name carries the model and effort")
+        lines: list = []
+        d.log_AoA_opr = lambda message: lines.append(message)
+        d._on_start_run()
+        check(len(lines) == 1 and lines[0].startswith("Driver Codex(m-x-low), "),
+              "the start line names the model and effort")
+    with codex_root('model = "m-max"\n') as d:
+        check((d._model, d._reasoning_effort) == ("m-max", Codex_Driver.DEFAULT_EFFORT),
+              "a configured model is taken whole, never split at an effort suffix; "
+              "without an effort it takes the default effort")
+    with codex_root('model_reasoning_effort = "medium"\n') as d:
+        check((d._model, d._reasoning_effort) == (Codex_Driver.DEFAULT_MODEL, "medium"),
+              "a configured effort without a model takes the default model")
+    with codex_root() as d:
+        check((d._model, d._reasoning_effort)
+              == (Codex_Driver.DEFAULT_MODEL, Codex_Driver.DEFAULT_EFFORT) == ("gpt-5.5", "high"),
+              "without a configured model or effort, the class constants")
+        check(str(d) == "Codex(gpt-5.5-high)",
+              "the driver's name carries the default model and effort too")
+    with codex_root('model = "m-x"\nmodel_reasoning_effort = "medium"\n', argument="gpt-5.4-low") as d:
+        check((d._model, d._reasoning_effort) == ("gpt-5.4", "low"),
+              "a model and effort in the driver string win over the configuration")
+    with codex_root('model_reasoning_effort = "medium"\n', argument="gpt-5.4") as d:
+        check((d._model, d._reasoning_effort) == ("gpt-5.4", Codex_Driver.DEFAULT_EFFORT),
+              "a driver string without an effort suffix takes the default effort, not the configured one")
+
+
+def test_T12_usage_is_the_growth_of_the_thread_total():
+    async def body():
+        with codex_major() as major, tempfile.TemporaryDirectory() as tmp:
+            script = write_fake_codex(tmp)
+            costs: list = []
+            events: list = []
+            major.log_cost = lambda msg: costs.append(msg)
+            major._log_meta = lambda event_type, **data: events.append(event_type)
+            py = sys.executable
+            await major._run_codex_exec([py, script, "T1", "--usage", "7,2,1"])
+            await major._run_codex_exec([py, script, "T1", "--abort"])
+            await major._run_codex_exec([py, script, "T1", "--usage", "17,6,3"])
+            check(usage_totals(major) == (11, 6, 3),
+                  "a later exec of the thread records the growth of the thread total "
+                  "(input without the cached part)")
+            check(costs == ["input=7 cached=2 output=1", "input=10 cached=4 output=2"]
+                  and events.count("USAGE") == 2,
+                  "an exec without turn.completed writes neither a cost line nor a usage row")
+            await major._run_codex_exec([py, script, "T1", "--usage", "27,8,4,4"])
+            check(usage_totals(major) == (15, 8, 4) and major.total_cache_creation_input_tokens == 4,
+                  "cache-written input is recorded apart from the uncached input")
+            # an interaction fork keeps the inherited total: each attempt is a fresh
+            # ephemeral thread whose total is the source's plus the attempt's own
+            major._codex_session_id = "P"
+            fork = direct_fork(major)
+            fork.log_cost = lambda msg: costs.append(msg)
+            await fork._run_codex_exec([py, script, "E1", "--usage", "34,10,7,4"])
+            await fork._run_codex_exec([py, script, "E2", "--usage", "31,8,5,4"])
+            check(usage_totals(fork) == (9, 2, 4)
+                  and costs[-2:] == ["input=7 cached=2 output=3", "input=4 cached=0 output=1"],
+                  "each fork attempt records its growth over the inherited total")
+            check(fork._codex_session_id == "P" and fork._codex_total_usage is major._codex_total_usage,
+                  "the fork's thread id and usage total stay the inherited ones")
+    asyncio.run(body())
+
+
 def main():
     for t in (test_T1_command_shapes, test_T2_constructor,
               test_T3_thread_id_known_during_the_exec,
               test_T4_thread_selection_in_the_loop, test_T5_fork_attempts,
               test_T6_nested_fork_and_T9_totals, test_T7_sibling_forks_run_concurrently,
               test_T8_transient_error_forks_afresh,
-              test_T10_fork_tools_are_those_of_the_session_that_launched_it):
+              test_T10_fork_tools_are_those_of_the_session_that_launched_it,
+              test_T11_default_model_is_the_codex_configurations,
+              test_T12_usage_is_the_growth_of_the_thread_total):
         print(t.__name__)
         t()
     print("\nall checks passed")

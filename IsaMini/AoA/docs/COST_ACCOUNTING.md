@@ -28,7 +28,7 @@ each is normalized once at ingestion:
 | Provider | Reported prompt count | Cache creation reported? | Normalization |
 |---|---|---|---|
 | Anthropic | already **excludes** cache | yes | pass through (`from_uncached`) |
-| OpenAI | **includes** cached and cache-written | Responses: `input_tokens_details.cache_write_tokens` (read since 2026-09-25); Chat Completions and Codex CLI: no | subtract both (`from_inclusive`) |
+| OpenAI | **includes** cached and cache-written | Responses: `input_tokens_details.cache_write_tokens` (read since 2026-09-25); Codex CLI: `cache_write_input_tokens` (read since 2026-10-17; 0 in every observation so far); Chat Completions: no | subtract both (`from_inclusive`) |
 | Gemini | **includes** cached | no (always 0) | subtract cached (`from_inclusive`) |
 
 Sources:
@@ -58,6 +58,25 @@ Sources:
   session*, not a per-turn amount, so `_accumulate_cost` adds the per-session
   increment over the highest value seen (`_cost_by_session`), never the raw
   value.
+- **Codex's usage source** (`_run_codex_exec`) is `turn.completed.usage`, a
+  *running total within one Codex thread* (a `resume` turn includes the earlier
+  turns; an interaction fork's ephemeral thread includes the history it forked
+  from), so `_run_codex_exec` records the growth since the thread's last
+  `turn.completed` (`_codex_total_usage`), never the raw value (2026-10-17). Two
+  known limits, noted on 2026-10-17 and not repaired:
+  - An exec that AoA ends by its own interrupt (among others: an interaction
+    fork after its answer, the major when the proof is done, a worker when it is
+    wound down) never sees `turn.completed` and records nothing; an interaction
+    fork's ephemeral thread leaves no rollout either, so that usage is recorded
+    nowhere.
+  - An interaction fork takes its growth over the stored total of the major or
+    worker whose thread it forks (passed down unchanged through a fork launched
+    from a fork). That is the thread's total at that session's last
+    `turn.completed` before the fork was launched, so it leaves out that
+    session's turn in progress (during the thread's first turn, the whole
+    history). An attempt that ends without the answer completes normally and
+    also records that part, which that session records as well if its own turn
+    later completes.
 
 ## 4. Pricing & cost formula
 
@@ -88,7 +107,7 @@ long rates as a whole, output included. Such a model's `PRICING` row carries a
 
 Two-tier billing needs each `Usage` to describe exactly one model request.
 Every API driver meets this, because `APIDriver`'s loop records usage once per
-response. The Codex CLI and Claude Code drivers do not: they report per-turn
+response. The Codex CLI and Claude Code drivers do not: they record per-turn
 sums, so they stay on the flat formula above. As a scope decision, only
 `APIDriver_OpenAI` (hence `Codex-API`) bills in two tiers, and the other API
 drivers bill flat. For their own models this changes nothing, because their
