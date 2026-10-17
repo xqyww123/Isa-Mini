@@ -22,6 +22,7 @@ from claude_agent_sdk.types import (
     HookInput,
     HookContext,
     HookJSONOutput,
+    McpServerConfig,
     PreToolUseHookInput,
 )
 import Isabelle_Semantic_Embedding
@@ -48,6 +49,27 @@ def _model_context_window(model: str) -> int:
 def _auto_compact_window(model: str, threshold_pct: float) -> int:
     ctx = _model_context_window(model)
     return max(100_000, min(1_000_000, int(ctx * threshold_pct) + _COMPACT_HEADROOM))
+
+
+# A fork's first request reuses the prompt cache of the conversation it
+# resumes only if its tool definitions are byte-identical to the major's. So
+# every CLI process AoA starts gets the same environment: no claude.ai
+# connectors (they connect asynchronously, so the major's later requests carry
+# their tools and a fresh fork's first request does not; measured 2026-10-17).
+# MCP_CONNECTION_NONBLOCKING is a guard only: the proof server is `alwaysLoad`
+# (below), which already makes the CLI wait for it, up to its 5 s connect cap.
+_CLI_ENV = {
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    "MCP_CONNECTION_NONBLOCKING": "false",
+}
+
+def _proof_server(url: str) -> McpServerConfig:
+    # `alwaysLoad`: the proof tools are in every request instead of being
+    # deferred behind ToolSearch, whose first discovery rewrites the cached
+    # history (measured 2026-10-17); the CLI also connects such a server before
+    # its first request. The key is the CLI's; the SDK's TypedDict lacks it.
+    return cast(McpServerConfig, {"type": "http", "url": url, "alwaysLoad": True})
 
 
 # The API's rejection of a request whose replayed session history contains a
@@ -238,8 +260,8 @@ class ClaudeCode(LMDriver):
             cwd=self.working_dir,
             permission_mode="default",
             allowed_tools=self._role_allowed_tools(),
-            mcp_servers={"proof": {"type": "http", "url": self._mcp_url}},
-            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            mcp_servers={"proof": _proof_server(self._mcp_url)},
+            env=_CLI_ENV,
             settings=json.dumps({"autoCompactWindow":
                 _auto_compact_window(main_model, self.COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},
@@ -881,8 +903,8 @@ class ClaudeCode(LMDriver):
             # conversation's cached prefix; fork narrowing happens in
             # permission_control instead.
             allowed_tools=self._role_allowed_tools(),
-            mcp_servers={"proof": {"type": "http", "url": fork_url}},
-            env={"CLAUDE_CODE_ATTRIBUTION_HEADER": "0"},
+            mcp_servers={"proof": _proof_server(fork_url)},
+            env=_CLI_ENV,
             settings=json.dumps({"autoCompactWindow":
                 _auto_compact_window(model, self.FORK_COMPACT_THRESHOLD)}),
             extra_args={"exclude-dynamic-system-prompt-sections": None},
