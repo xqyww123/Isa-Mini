@@ -2374,10 +2374,13 @@ fun hammer_or_AoA' {fact_override, proof_id, hammer_timeout, async_mode,
                   end
               | _ =>
                   (* async_prove's zero-subgoal short circuit: nothing to
-                     prove, nothing ran; the empty future list means the
-                     write-back above cannot trigger, so this "" is
-                     structurally unreachable for L2/L1 (§2.3). *)
-                  (Future.value (Phi_Proof_Store.zero_times, ""), sequent')
+                     prove, nothing ran; the product is "-", the method that
+                     does nothing, as auto and all_auto answer the same case,
+                     so a caller that keeps the product (TAT's proof
+                     construction) can replay it; the empty future list means
+                     the write-back above cannot trigger, so it never reaches
+                     L2/L1 (§2.3). *)
+                  (Future.value (Phi_Proof_Store.zero_times, "-"), sequent')
           end
   end
 
