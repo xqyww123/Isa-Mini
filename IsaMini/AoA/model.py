@@ -4114,13 +4114,13 @@ class Interaction_InstantiateSchematics(Interaction):
 
 
 class Interaction_InstantiatePostSchematics(Interaction):
-    """Non-forking: after a RULE / CaseSplit / Induction op runs, residual
-    schematic variables may still occur in some open subgoal (the rule's
-    schematics were not all pinned by unification). This asks the agent —
-    inline, mid-edit — to instantiate them so the operation produces a
-    schematic-free state.
+    """Non-forking: after the beginning op of a class that sets
+    `_probes_post_insts` runs, residual schematic variables may still occur
+    in some open subgoal (the rule's schematics were not all pinned by
+    unification). This asks the agent — inline, mid-edit — to instantiate
+    them so the operation produces a schematic-free state.
 
-    Fired by the probe loop in `SubgoalMaker._execute_opr`, once per round,
+    Fired by the probe loop in `SubgoalMaker._run_the_probe`, once per round,
     term variables first and then any remaining type variables (a term value
     pins most type vars via `infer_instantiate`); the loop re-detects after each
     round, so an under-instantiating or type-reintroducing round is caught next
@@ -4444,13 +4444,10 @@ class Node(ABC):
 
     async def _execute_opr(self, from_state: 'Minilang_State',
                            opr: 'Minilang_Operation',
-                           dest: 'Minilang_State | None') -> None:
-        """Chokepoint for executing this node's own operation, taking an
-        explicit `from_state` (the four call sites execute from two different
-        receivers). The base is a plain execute; `SubgoalMaker` overrides it to
-        detect residual schematic variables after an op whose class sets
-        `_probes_post_insts` and prompt the agent to instantiate them before
-        the op is committed."""
+                           dest: 'Minilang_State') -> None:
+        """Chokepoint for executing this node's own operation from an explicit
+        `from_state` (the call sites execute from two different receivers)
+        into `dest`."""
         await from_state.execute(opr, dest)
 
     async def can_operate_on_schematic_goal(
@@ -6809,10 +6806,14 @@ _MAX_POST_INST_ROUNDS = 16
 class SubgoalMaker(GoalContainer, StdBlock):
     _can_host_inherited_children = False
     # Whether this node's beginning op may leave residual schematic variables
-    # that the post-rule instantiation probe (`_execute_opr`) must eliminate:
+    # that the post-rule instantiation probe (`_run_the_probe`, run by
+    # `_refresh_the_beginning_opr` after the beginning op) must eliminate:
     # True on Tactic_Like and CaseSplit_Like; False on UserNode, which a plugin
     # class lists first, so a USER command (it carries no instantiation
-    # rounds) never probes, whichever base the class picks.
+    # rounds) never probes, whichever base the class picks. The probe relies on
+    # one fact about these classes: none of RULE, TACTIC, CASE_SPLIT, INDUCT
+    # advances a session-shared counter (a probe round, the server-side prerun
+    # and the CaseSplit_Like re-execution all run the op again).
     _probes_post_insts: ClassVar[bool] = False
     def _nearest_goal_for_subagent(self) -> 'Node | None':
         # A subgoal-maker's subgoals aren't independently delegatable; redirect up
@@ -6836,7 +6837,9 @@ class SubgoalMaker(GoalContainer, StdBlock):
         # instantiation rounds (each a list of (var-name, value) pairs) baked
         # into the op so that no schematic variable is shared by ≥2 derived
         # subgoals (a variable confined to one subgoal may remain), and the op
-        # replays from cache. Reset on upstream change (see _on_upstream_change).
+        # replays from cache. Assigned only where the probe converges, so a
+        # failing round leaves it None and the next refresh probes again.
+        # Reset on upstream change (see _on_upstream_change).
         # When `_probes_post_insts` is False it stays None and is never read.
         self._post_insts: 'list[list[tuple[str, xterm | xtyp]]] | None' = None
 
@@ -6861,71 +6864,74 @@ class SubgoalMaker(GoalContainer, StdBlock):
             f"{type(self).__name__}.")
 
     async def _probe_residual_schematics(
-            self, from_state: 'Minilang_State', scratch: 'Minilang_State',
-            scratch_op: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
-        """The post-inst probe's convergence check: return the variables that
-        still need instantiating; both maps empty = converged.
+            self, from_state: 'Minilang_State', dest: 'Minilang_State',
+            opr: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
+        """The probe's convergence check: `dest` is the state a round just
+        executed `opr` (the beginning op with the rounds so far) into, from
+        `from_state`; return the variables that still need instantiating; both
+        maps empty = converged.
 
-        Default = the conservative criterion: read the scratch FINAL state
-        and require it schematic-free. Block-opening operations
-        (CaseSplit_Like) MUST keep this default — their only all-cases data
-        source, the Goals message, is emitted before `apply_post_insts` runs,
-        i.e. a pre-instantiation snapshot: a message-based check would never
-        observe the baked rounds and the probe would never converge (C1)."""
-        return await scratch.schematic_variables_of(whole=True)
+        Default = the conservative criterion: read `dest` and require it
+        schematic-free. Block-opening operations (CaseSplit_Like) MUST keep
+        this default — their only all-cases data source, the Goals message, is
+        emitted before `apply_post_insts` runs, i.e. a pre-instantiation
+        snapshot: a message-based check would never observe the baked rounds
+        and the probe would never converge (C1)."""
+        return await dest.schematic_variables_of(whole=True)
 
     def _beginning_opr_with_insts(
-            self, rounds: 'list[list[tuple[str, xterm | xtyp]]]') -> 'Minilang_Operation | FailureReason | None':
-        """Rebuild this node's beginning op with `rounds` baked in, without
-        disturbing `self._post_insts` — used by the probe to re-execute the op
-        with the rounds accumulated so far on a throwaway scratch state."""
-        saved = self._post_insts
-        self._post_insts = rounds
-        try:
-            return self.beginning_opr()
-        finally:
-            self._post_insts = saved
+            self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None'
+    ) -> 'Minilang_Operation | FailureReason':
+        # This node's beginning op with the instantiation rounds `insts` baked
+        # in. For a class that sets `_probes_post_insts` the rounds enter the
+        # op only through this `insts`: its family's `beginning_opr()` passes
+        # `_post_insts`, the probe each round's rounds so far. This default
+        # exists only to fail loudly when such a class forgot to implement it.
+        raise InternalError(
+            f"_beginning_opr_with_insts is not designed for {type(self).__name__}.")
 
-    async def _execute_opr(self, from_state: 'Minilang_State',
-                           opr: 'Minilang_Operation',
-                           dest: 'Minilang_State | None') -> None:
-        if self._probes_post_insts and self._post_insts is None:
-            rounds: 'list[list[tuple[str, xterm | xtyp]]]' = []
-            for _ in range(_MAX_POST_INST_ROUNDS):
-                scratch_op = self._beginning_opr_with_insts(rounds)
-                if not isinstance(scratch_op, Minilang_Operation):
-                    break  # beginning_opr degraded (e.g. FailureReason); let the real execute handle it
-                try:
-                    # STATE-level execute (no recursion); throwaway scratch, not logged.
-                    scratch = await from_state.execute(scratch_op, None, log=False)
-                except (IsabelleError, InternalError):
-                    break  # the base op itself failed — let the real execute below surface it
-                try:
-                    term_vars, type_vars = await self._probe_residual_schematics(
-                        from_state, scratch, scratch_op)
-                    if not term_vars and not type_vars:
-                        self._post_insts = rounds
-                        break
-                    # Term-first: a term value pins most type vars via infer_instantiate,
-                    # so ask for types only once no term vars remain.
-                    if term_vars:
-                        offered, kind = term_vars, "term"
-                    else:
-                        offered, kind = type_vars, "type"
-                    schematic_vars = [(name.unicode, ty.unicode) for name, ty in offered.items()]
-                    rnd = await the_session().launch_interaction(
-                        Interaction_InstantiatePostSchematics(scratch, schematic_vars, kind))
-                    rounds = rounds + [rnd]
-                finally:
-                    if scratch._initialized:
-                        await scratch.reset()
+    async def _run_the_probe(self) -> None:
+        """The post-instantiation probe. `StdBlock._refresh_the_beginning_opr`
+        has executed round 0 (the beginning op with no instantiation round)
+        from `ml_state` into the after-beginning state, `dest`; each later
+        round executes the beginning op, every round so far baked in, into
+        `dest` again, and the convergence check reads `dest`. The converged
+        round's state is the node's result; any IsabelleError is the node's
+        failure."""
+        from_state, dest = self.ml_state, self._state_after_beginning()
+        assert from_state is not dest, "each round re-executes from an untouched from_state"
+        def built(rounds: 'list[list[tuple[str, xterm | xtyp]]]') -> Minilang_Operation:
+            opr = self._beginning_opr_with_insts(rounds)
+            # What degrades a beginning op never reads the rounds, and
+            # StdBlock._refresh_the_beginning_opr has already checked this op.
+            assert isinstance(opr, Minilang_Operation), \
+                f"a probe round expects a Minilang_Operation, got {type(opr).__name__}"
+            return opr
+        rounds: 'list[list[tuple[str, xterm | xtyp]]]' = []
+        opr = built(rounds)
+        while True:
+            term_vars, type_vars = await self._probe_residual_schematics(
+                from_state, dest, opr)
+            if not term_vars and not type_vars:
+                self._post_insts = rounds
+                return
+            # Term-first: a term value pins most type vars via infer_instantiate,
+            # so ask for types only once no term vars remain.
+            if term_vars:
+                offered, kind = term_vars, "term"
             else:
+                offered, kind = type_vars, "type"
+            schematic_vars = [(name.unicode, ty.unicode) for name, ty in offered.items()]
+            rnd = await the_session().launch_interaction(
+                Interaction_InstantiatePostSchematics(dest, schematic_vars, kind))
+            rounds = rounds + [rnd]
+            if len(rounds) == _MAX_POST_INST_ROUNDS:
                 raise IsabelleError(
                     [f"Could not eliminate the residual schematic variables of this "
                      f"{opr.command} operation within {_MAX_POST_INST_ROUNDS} rounds of "
                      f"instantiation."], None)
-            opr = cast(Minilang_Operation, self.beginning_opr())
-        await super()._execute_opr(from_state, opr, dest)
+            opr = built(rounds)
+            await self._execute_opr(from_state, opr, dest)
 
     def _all_fixed_facts_before_a_child(self, child: 'Node', ret: Hyps) -> Hyps:
         super()._all_fixed_facts_before_a_child(child, ret)
@@ -7254,6 +7260,11 @@ class SubgoalMaker(GoalContainer, StdBlock):
         fail = await super()._refresh_the_beginning_opr()
         if fail is not None:
             return fail
+        if self._probes_post_insts and self._post_insts is None:
+            try:
+                await self._run_the_probe()
+            except IsabelleError as err:
+                return self._beginning_opr_err_msgs(err)
         s0 = self._state_after_beginning()
         if not s0.initialized():
             raise InternalError("The state after beginning is not initialized, meaning the node is not refreshed")
@@ -7346,6 +7357,8 @@ class SubgoalMaker(GoalContainer, StdBlock):
 
 class CaseSplit_Like(SubgoalMaker):
     _probes_post_insts: ClassVar[bool] = True
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        return self._beginning_opr_with_insts(self._post_insts)
     # Subclass-specific "kind" label — overridden on CaseSplit / Induction.
     # Used by `_rematch` when building `Interaction_MapCase`.  Named
     # `_case_kind` (not `_kind`) to avoid shadowing Node's instance-level
@@ -7869,14 +7882,14 @@ class UserNode(Node):
 
     async def _execute_opr(self, from_state: 'Minilang_State',
                            opr: 'Minilang_Operation',
-                           dest: 'Minilang_State | None') -> None:
+                           dest: 'Minilang_State') -> None:
         await super()._execute_opr(from_state, opr, dest)
         # The one-subgoal rule of a Leaf: a second derived subgoal would have no
         # NEXT to reach it.
         if not isinstance(self, Leaf):
             return
         # interpret_i reports one Goals for every USER step
-        assert dest is not None and dest.new_subgoals_count is not None
+        assert dest.new_subgoals_count is not None
         if dest.new_subgoals_count > 1:
             raise IsabelleError([
                 f'User operation "{self.operation_name()}" left {dest.new_subgoals_count} '
@@ -10746,6 +10759,8 @@ class Tactic_Like(SubgoalMaker):
     message being emitted before the instantiation rounds apply.  Takes the
     ToolArg's positional `proofs`, one body per derived subgoal."""
     _probes_post_insts: ClassVar[bool] = True
+    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+        return self._beginning_opr_with_insts(self._post_insts)
     # The header of a failure the ML side did not head with its own
     # "Fail to apply ..." line.
     _fail_header: ClassVar[str]
@@ -10763,7 +10778,7 @@ class Tactic_Like(SubgoalMaker):
     async def can_operate_on_schematic_goal(
             self, state: 'Minilang_State',
             opr: 'Minilang_Operation') -> str | None:
-        # Allowed (S3): the post-rule probe in SubgoalMaker._execute_opr
+        # Allowed (S3): the post-rule probe in SubgoalMaker._run_the_probe
         # interacts on any variable shared by ≥2 derived subgoals. The
         # violating variables may be introduced by the rule itself, so they
         # cannot be computed before execution anyway — the check necessarily
@@ -10771,12 +10786,12 @@ class Tactic_Like(SubgoalMaker):
         return None
 
     async def _probe_residual_schematics(
-            self, from_state: 'Minilang_State', scratch: 'Minilang_State',
-            scratch_op: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
-        # The read-only whole scan first: a final state with no schematic
+            self, from_state: 'Minilang_State', dest: 'Minilang_State',
+            opr: 'Minilang_Operation') -> 'tuple[Vars, TVars]':
+        # The read-only whole scan of `dest` first: a state with no schematic
         # variable is converged, with no server-side prerun.
         term_vars, type_vars = await super()._probe_residual_schematics(
-            from_state, scratch, scratch_op)
+            from_state, dest, opr)
         if not term_vars and not type_vars:
             return term_vars, type_vars
         # S4 relaxation (§5.4): interact only on variables shared by ≥2 derived
@@ -10784,9 +10799,9 @@ class Tactic_Like(SubgoalMaker):
         # business. Safe here because the op is single-frame: the per-subgoal
         # query reads the prerun's FINAL state, which is post-instantiation, so
         # convergence observes the baked rounds. The query preruns the op again
-        # server-side; the double execution (scratch + prerun) is deliberate —
-        # see the batch-6 record.
-        derived = await from_state.schematic_vars_of_derived_subgoals(scratch_op)
+        # server-side; the double execution (the round's own + the prerun) is
+        # deliberate — see the batch-6 record.
+        derived = await from_state.schematic_vars_of_derived_subgoals(opr)
         def shared(idx: int) -> 'dict[IsaTerm, IsaTerm]':
             counts: dict[str, int] = {}
             rep: 'dict[str, tuple[IsaTerm, IsaTerm]]' = {}
@@ -10966,7 +10981,9 @@ class InferenceRule(Tactic_Like):
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
         self._print_derived_goal(indent, file)
-    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
+    def _beginning_opr_with_insts(
+            self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None'
+    ) -> 'Minilang_Operation | FailureReason':
         if isinstance(self.rule_ref, IsabelleFact_Unfound):
             return FailureReason(f"Inference rule fact \"{self.rule_ref.name().unicode}\" not found")
         if self.rule_ref is not None and _binds_no_theorem([self.rule_ref]):
@@ -10974,7 +10991,7 @@ class InferenceRule(Tactic_Like):
             # mentions the empty fact.
             return FailureReason(
                 f"Inference rule \"{self.rule_ref.name().unicode}\" binds no theorem here. It's empty.")
-        return Minilang_Operation.RULE(self.rule_ref, self._post_insts)
+        return Minilang_Operation.RULE(self.rule_ref, insts)
     async def _rewrite_trial(self) -> bool:
         """Probe whether `self.rule_ref` works as a goal-only rewrite: run a
         throwaway SIMPLIFY on a fresh scratch state and accept if the goal is
@@ -11156,20 +11173,23 @@ class Tactic(Tactic_Like):
         if self.status.status == EvaluationStatus.Status.SUCCESS:
             _backfill_recorded_fact_proofs(self.fact_refs, self._state_after_beginning())
 
-    def _tactic_opr(self, recorded_times: 'tuple[int, int] | None') -> 'Minilang_Operation | FailureReason':
+    def _tactic_opr(self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None',
+                    recorded_times: 'tuple[int, int] | None') -> 'Minilang_Operation | FailureReason':
         facts = self.fact_refs if self.fact_refs is not None else []
         failure = _unfound_failure(facts)     # a missing fact fails the step (Obvious drops it)
         if failure is not None:
             return failure
         return Minilang_Operation.TACTIC(self.tactic_full, self.arguments, facts,
-                                         self._post_insts, recorded_times)
-    def beginning_opr(self) -> 'Minilang_Operation | FailureReason':
-        return self._tactic_opr(None)      # a live op never carries the record
+                                         insts, recorded_times)
+    def _beginning_opr_with_insts(
+            self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None'
+    ) -> 'Minilang_Operation | FailureReason':
+        return self._tactic_opr(insts, None)      # a live op never carries the record
     def assembled_beginning_opr(self) -> 'Minilang_Operation | FailureReason':
         # the live run's last TACTIC_TIMES, from the after-beginning state
         times = next((m.times_ms for m in reversed(self._state_after_beginning().messages)
                       if isinstance(m, Tactic_Times_Msg)), None)
-        return self._tactic_opr(times)
+        return self._tactic_opr(self._post_insts, times)
 
     def quickview_title(self) -> str:
         return f"Tactic ({self.tactic.unicode}{' ' + self.arguments if self.arguments else ''})"
@@ -11409,13 +11429,14 @@ class CaseSplit(CaseSplit_Like):
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def beginning_opr(self) -> Minilang_Operation:
+    def _beginning_opr_with_insts(
+            self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> Minilang_Operation:
         return Minilang_Operation.CASE_SPLIT(
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
             self._resolved_rule_str,
             self.no_simp,
-            self._post_insts)
+            insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Case analysis failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:
@@ -11691,7 +11712,8 @@ class Induction(CaseSplit_Like):
         super()._print_header(indent, file)
         self._print_evaluation_status(indent, file)
         if show_warnings: self._print_warnings(indent, file, [Warning.Position.HEADER])
-    def beginning_opr(self) -> Minilang_Operation:
+    def _beginning_opr_with_insts(
+            self, insts: 'list[list[tuple[str, xterm | xtyp]]] | None') -> Minilang_Operation:
         return Minilang_Operation.INDUCT(
             self.target_isabelle_term,
             cast(list[varname_spec] | None, self._case_vars_of_child(0)),
@@ -11699,7 +11721,7 @@ class Induction(CaseSplit_Like):
             [r.full_name for r in self.fact_refs_to_generalize],
             self._resolved_rule_str,
             self.no_simp,
-            self._post_insts)
+            insts)
     def _beginning_opr_err_msgs(self, err : IsabelleError) -> FailureReason:
         return FailureReason(f"Induction failed because: {"\n".join(err.errors)}")
     def _child_refresh_failure_err_msgs(self, child : Node) -> FailureReason:

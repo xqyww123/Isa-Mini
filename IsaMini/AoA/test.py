@@ -1222,11 +1222,12 @@ async def _test_PostInstRuleShared(root: Root, file: MyIO):
     # ?c spans TWO derived subgoals (Q ?c, R ?c) — the S4-relaxed convergence
     # (interact only on variables shared by ≥2 derived subgoals) must still
     # fire here, keeping the interaction covered now that the confined-variable
-    # fixtures no longer trigger it.
+    # fixtures no longer trigger it.  One instantiation round: two executions.
     print_header("Initial", file)
     root.print(0, file)
     kinds: list[str] = []
     root.session.launch_interaction = _post_inst_stub(file, {"?c": "0::nat"}, kinds)
+    runs = _count_operations(root.session, "RULE")
     root.session.age += 1
     await root.fill("1", [InferenceRule.gen_single({
         "thought": "apply sharedrule (residual ?c spans both derived subgoals)",
@@ -1234,6 +1235,7 @@ async def _test_PostInstRuleShared(root: Root, file: MyIO):
     print_header("After InferenceRule (?c instantiated across both subgoals)", file)
     root.print(0, file)
     await _assert_schematic_free(root, file, kinds)
+    assert runs["n"] == 2, runs
 
 
 @model_test("GateSchematic", "Test_GateSchematic.thy", 16)
@@ -19047,6 +19049,20 @@ def _count_derived_subgoal_preruns(calls: dict):
         Minilang_State.schematic_vars_of_derived_subgoals = original  # type: ignore[method-assign]
     return restore
 
+def _count_operations(session: Session, command: str, fail_at: int | None = None) -> dict:
+    """Count the executions of `command` the session starts (failing ones
+    included), through its own `on_operation_start` hook; no restore is
+    needed, the session belongs to this case alone.  The `fail_at`-th start
+    raises IsabelleError(["injected"]) before it reaches Isabelle."""
+    runs = {"n": 0}
+    def on_operation_start(step_id, operation, args):
+        if operation == command:
+            runs["n"] += 1
+            if runs["n"] == fail_at:
+                raise IsabelleError(["injected"], None)
+    session.on_operation_start = on_operation_start
+    return runs
+
 
 def _count_unfinished(root: Root, file: MyIO) -> int:
     unfinished: set[Node] = set()
@@ -19096,9 +19112,11 @@ async def _test_Tactic1(root: Root, file: MyIO):
 @model_test("Tactic2", "Test_Tactic2.thy", 9, isolated_db=True)
 async def _test_Tactic2(root: Root, file: MyIO):
     """The probe's short-circuit: a Tactic leaving no schematic variable
-    converges on the read-only whole scan, with no server-side prerun."""
+    converges on the read-only whole scan, with no server-side prerun and one
+    execution."""
     calls = {"n": 0}
     restore = _count_derived_subgoal_preruns(calls)
+    runs = _count_operations(root.session, "TACTIC")
     try:
         root.session.age += 1
         await root.fill("1", [Tactic.gen_single({"thought": "simp closes it", "tactic": "simp"})])
@@ -19107,7 +19125,7 @@ async def _test_Tactic2(root: Root, file: MyIO):
     print_header("After simp", file)
     root.print(0, file)
     file.write(f"derived-subgoal preruns: {calls['n']}\n")
-    assert calls["n"] == 0
+    assert calls["n"] == 0 and runs["n"] == 1, runs
     assert _count_unfinished(root, file) == 0
 
 
@@ -19134,12 +19152,15 @@ async def _test_Tactic3(root: Root, file: MyIO):
 @model_test("Tactic4", "Test_Tactic4.thy", 10, isolated_db=True)
 async def _test_Tactic4(root: Root, file: MyIO):
     """The errors of the arguments come verbatim from Isabelle: the method's
-    own parser, the lexer, and a method that does not apply."""
+    own parser, the lexer, and a method that does not apply.  Each failing op
+    runs once."""
+    runs = _count_operations(root.session, "TACTIC")
     first = True
     for thought, tactic, arguments in [
             ("a bad argument", "simp", "foo"),
             ("an unclosed cartouche", "simp", "‹junk"),
             ("a rule that does not match", "rule", "conjI")]:
+        before = runs["n"]
         root.session.age += 1
         gns = [Tactic.gen_single({"thought": thought, "tactic": tactic, "arguments": arguments})]
         await (root.fill("1", gns) if first else root.amend("1", gns))
@@ -19149,18 +19170,21 @@ async def _test_Tactic4(root: Root, file: MyIO):
         node = root.locate_node("1")
         file.write(f"status: {node.status.status.name}\n")
         assert node.status.status == EvaluationStatus.Status.FAILURE
+        assert runs["n"] - before == 1, runs
 
 
 @model_test("Tactic5", "Test_Tactic5.thy", 14, isolated_db=True)
 async def _test_Tactic5(root: Root, file: MyIO):
-    """The shared-variable criterion of Tactic_Like, with the prerun counter
-    cumulative: `rule exI` leaves ?x in its one subgoal -- no interaction, one
-    prerun; `rule conjI` on it shares ?x between two subgoals -- one term
-    interaction answered `?x := 0`, one more prerun, no schematic left; the two
-    cases close by the sorried facts."""
+    """The shared-variable criterion of Tactic_Like, with the prerun and
+    execution counters cumulative: `rule exI` leaves ?x in its one subgoal --
+    no interaction, one prerun, one execution; `rule conjI` on it shares ?x
+    between two subgoals -- one term interaction answered `?x := 0`, one more
+    prerun, two more executions (the round's own each time), no schematic
+    left; the two cases close by the sorried facts."""
     calls = {"n": 0}
     kinds: list[str] = []
     restore = _count_derived_subgoal_preruns(calls)
+    runs = _count_operations(root.session, "TACTIC")
     async def stub(interaction):
         if isinstance(interaction, Interaction_InstantiatePostSchematics):
             kinds.append(interaction.kind)
@@ -19177,7 +19201,7 @@ async def _test_Tactic5(root: Root, file: MyIO):
         print_header("After rule exI", file)
         root.print(0, file)
         file.write(f"interactions: {kinds}, preruns: {calls['n']}\n")
-        assert kinds == [] and calls["n"] == 1
+        assert kinds == [] and calls["n"] == 1 and runs["n"] == 1, runs
         # one derived subgoal opens no GoalNode: the next step is the sibling step 2
         root.session.age += 1
         await root.fill("2", [Tactic.gen_single({"thought": "split the conjunction",
@@ -19185,7 +19209,7 @@ async def _test_Tactic5(root: Root, file: MyIO):
         print_header("After rule conjI", file)
         root.print(0, file)
         file.write(f"interactions: {kinds}, preruns: {calls['n']}\n")
-        assert kinds == ["term"] and calls["n"] == 2
+        assert kinds == ["term"] and calls["n"] == 2 and runs["n"] == 3, runs
         conj = cast(Tactic, root.locate_node("2"))
         tvs, tyvs = await conj._state_after_beginning().schematic_variables_of(whole=True)
         file.write(f"schematic variables left: {bool(tvs or tyvs)}\n")
@@ -19201,6 +19225,33 @@ async def _test_Tactic5(root: Root, file: MyIO):
     finally:
         restore()
     assert _count_unfinished(root, file) == 0
+
+
+@model_test("PostInstRoundFailure", "Test_PostInstRoundFailure.thy", 14, isolated_db=True)
+async def _test_PostInstRoundFailure(root: Root, file: MyIO):
+    """A probe round after round 0 that fails is the node's failure (C24):
+    `rule conjI` shares ?x, the agent answers `?x := 0`, and the round
+    carrying that answer fails by an injected error -- the node fails, keeps
+    no instantiation round, its op ran twice (round 0 and the failing round),
+    and it shows no derived goal.  Only the status reaches the golden."""
+    kinds: list[str] = []
+    root.session.launch_interaction = _post_inst_stub(MyIO(io.StringIO()), {"?x": "0::nat"}, kinds)
+    root.session.age += 1
+    await root.fill("1", [Tactic.gen_single({"thought": "a witness, picked later",
+                                             "tactic": "rule", "arguments": "exI"})])
+    runs = _count_operations(root.session, "TACTIC", fail_at=2)
+    root.session.age += 1
+    await root.fill("2", [Tactic.gen_single({"thought": "split the conjunction",
+                                             "tactic": "rule", "arguments": "conjI"})])
+    node = cast(Tactic, root.locate_node("2"))
+    file.write(f"status: {node.status.status.name}\n")
+    assert node.status.status == EvaluationStatus.Status.FAILURE, runs
+    assert node._post_insts is None and runs["n"] == 2 and kinds == ["term"], (runs, kinds)
+    assert node.status.reason is not None and "injected" in node.status.reason.reason
+    # dest keeps round 0's goal (D7); a failed node does not show it (D8)
+    assert node.goal() is not None
+    shown = node.print_string(0) + node.quickview_string(0)
+    assert "derived goal" not in shown, shown
 
 
 @model_test("Tactic6", "Test_Tactic6.thy", 9, isolated_db=True)
