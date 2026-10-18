@@ -19,6 +19,14 @@ handles each piece.
 val AoA_Debug = Attrib.setup_config_bool \<^binding>\<open>AoA_Debug\<close> (K false);
 val _ = Config.register_rpc_option "AoA_Debug" (Config.bool_value AoA_Debug);
 
+(* Whether the split segment runs: the preprocessing that races auto, clarsimp
+   and the custom split over every goal of a call whose largest goal exceeds
+   preprocess_size_threshold.  false — the segment answers NO_SPLIT, and the
+   recorded script is "", so a replay skips it too.  A caller that must hand
+   the agent a goal exactly as it stands (TAT's Define, DEFINE.md §7) puts it
+   to false on the call's context. *)
+val AoA_auto_split = Attrib.setup_config_bool \<^binding>\<open>AoA_auto_split\<close> (K true);
+
 signature GOAL_PREPROCESS = sig
   val split_skip_size : int
   val preprocess_size_threshold : int
@@ -97,7 +105,8 @@ fun split_race ctxt st =
         Int.max (Infra_Filter.smart_size_of_term p, mx))
       (Thm.prems_of st) 0
   in
-    if max_goal_size <= preprocess_size_threshold then NO_SPLIT
+    if not (Config.get ctxt AoA_auto_split) orelse max_goal_size <= preprocess_size_threshold
+    then NO_SPLIT
     else
       let
         val _ = dbg ctxt ("Max subgoal size " ^

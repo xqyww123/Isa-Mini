@@ -3942,6 +3942,10 @@ theory_test("TacticReplay_Minilang", "Tactic_Replay_Test.thy")
 # declaration checks, below the agent.
 theory_test("GoalHints_Minilang", "Goal_Hints_Test.thy")
 
+# The configuration option AoA_auto_split (docs/AUTO_INTRO_DECISION.md, section
+# 8): false keeps the split segment from running and records nothing.
+theory_test("AutoSplitOption_Minilang", "Auto_Split_Option_Test.thy")
+
 # The automatic Intro decision (docs/AUTO_INTRO_DECISION.md, section 7): the
 # three layers on a term and on a state, the exemptions' positions and checks,
 # below the agent.

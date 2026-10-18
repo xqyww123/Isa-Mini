@@ -640,7 +640,12 @@ maximum over all goals), the split segment
 (`Goal_Preprocess.preprocess_split_recorded`, a timed race of `auto`,
 `clarsimp` and `custom_split_tac`) runs on every goal of the call, so a small
 goal a hook or an exemption is meant to keep may be rewritten, or closed,
-because another goal of the same call is large.
+because another goal of the same call is large. A caller that must hand the
+agent a goal exactly as it stands puts the configuration option
+`AoA_auto_split` (`Agent/preprocess.ML`, true by default) to false on the
+call's context: the segment then answers `NO_SPLIT` whatever the goals' size
+and records `""`, so a replay skips it too; TAT's `Define` does so on both of
+its calls (`DEFINE.md` §7). `Tests/Auto_Split_Option_Test.thy` pins it.
 An Isar command declaring a hook from ML source is left until someone needs
 one. Which goals TAT's `Define` keeps as they stand, and the goal hints it
 words beside that, are TAT's (`DEFINE.md` §7).
