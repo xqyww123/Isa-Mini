@@ -76,6 +76,8 @@ class Codex_Driver(LMDriver):
     DEFAULT_EFFORT = "high"
     # Max attempts for an interaction fork to call its answer tool before giving up.
     _FORK_ANSWER_MAX_ATTEMPTS = 4
+    # Heads the results of the fork's own searches, resent on a later attempt.
+    _FORK_SEARCHES_HEADER = "Results of the searches you ran before this retry:"
 
     # Agent-facing tool-name table. Every AoA proof tool is served by the `proof`
     # MCP server, which codex flattens to `mcp__proof__<id>` (see _MCP_TOOL_PREFIX).
@@ -694,8 +696,9 @@ class Codex_Driver(LMDriver):
     async def _run_fork_attempts(self, prompt_text: str, tag: str) -> None:
         # Run by the interaction fork. Each attempt forks the inherited thread
         # afresh (an ephemeral thread cannot be resumed), so a later attempt resends
-        # the question the fork was last shown, then the reminder: the other
-        # drivers' model sees both in its conversation.
+        # the question the fork was last shown, the results of its own searches,
+        # then the reminder: the other drivers' model sees all of it in its
+        # conversation.
         role = self.role
         assert isinstance(role, Role_Interaction)
         for attempt in range(self._FORK_ANSWER_MAX_ATTEMPTS):
@@ -703,6 +706,8 @@ class Codex_Driver(LMDriver):
             prompt = self._fork_prompt(
                 pending.interaction, prompt_text if attempt == 0 else role.prompt)
             if attempt > 0:
+                if role.searches:
+                    prompt += "\n\n" + self._FORK_SEARCHES_HEADER + "\n" + "\n\n".join(role.searches)
                 prompt += ("\n\nYou haven't submitted your answer. Call the "
                            f"`{self.tool_name(pending.interaction.answer_tool_name)}` "
                            "tool to submit it.")

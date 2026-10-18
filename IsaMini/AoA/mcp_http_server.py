@@ -47,7 +47,7 @@ from .model import (
     CannotDelete_Root, NodeNotFound, ProofTreeTooDeep,
     EvaluationStatus, WorkerHandle, WorkerYield, Have, EditVerdict, _is_strict_ancestor,
     _is_direct_global_decl, _enclosing_global_decl,
-    Parse_Op_List, Interaction_BadAnswer, SessionQuit,
+    Parse_Op_List, Interaction_BadAnswer, SessionQuit, Role_Interaction,
     AnswerIndexes, AnswerIndex, AnswerIndexesOrName, AnswerIndexesOrSpec,
     AnswerInstantiate, AnswerRefutation, AnswerStruggleAssessment,
     AnswerMissingLemmas, AnswerConstraintRequest,
@@ -1752,6 +1752,10 @@ async def _subagent_tool_logic(session: Session, args: dict) -> tuple[str, bool]
     checkpoint). When difficulty is yielded, a non-forking
     ``Interaction_DifficultyEvaluation`` asks the dispatcher to continue or abandon
     (auto-cancel + comment)."""
+    # An interaction fork never dispatches: `_check_tool_permission` refuses its call
+    # before this point, so a fork reaching here is a bug of the permission layer.
+    if session.is_interaction:
+        raise InternalError("subagent called by an interaction fork")
     _tn = session.tool_name(TOOL_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -1994,6 +1998,8 @@ async def _close_subagent_tool_logic(session: Session, args: dict) -> tuple[str,
     wrong sub-agent. A handle that is not the caller's own direct sub-agent reports
     "no sub-agent here" (immediate-only — a nested grandchild is invisible to it).
     (NO broad try/except per the expose-errors rule — only `NodeNotFound` is caught.)"""
+    if session.is_interaction:      # as `_subagent_tool_logic`: refused before this point
+        raise InternalError("cancel_subagent called by an interaction fork")
     _tn = session.tool_name(TOOL_CLOSE_SUBAGENT)
     session.log_tool_call(_tn, args)
 
@@ -2760,6 +2766,8 @@ class ToolExecutor:
                             session, n, arguments)
                 case "query":
                     result, is_error = await _query_tool_logic(session, arguments)
+                    if not is_error and isinstance(session.role, Role_Interaction):
+                        session.role.searches.append(result)   # resent by a Codex fork on a later attempt
                     # Missing-lemma survey checkpoint: every N successful
                     # `query` TOOL CALLS (not batched sub-queries; errored
                     # calls deliberately don't count — they carry no retrieval

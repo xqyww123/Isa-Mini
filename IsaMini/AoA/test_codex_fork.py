@@ -41,7 +41,7 @@ from IsaMini.AoA.driver_codex import Codex_Driver
 from IsaMini.AoA.language_model_driver import _TransientError
 from IsaMini.AoA.model import (
     ContinuingInteraction, Fork_Pending, ForkingMode, InternalError, Refresh, Restart,
-    Role_Interaction, Role_Worker, TOOL_ANSWER_INDEX, TOOL_SUBAGENT)
+    Role_Interaction, Role_Worker, TOOL_ANSWER_INDEX, TOOL_SEARCH, TOOL_SUBAGENT)
 from IsaMini.AoA.test_corrupted_sample import fast_sleep
 from IsaMini.AoA.test_session_quit import _Probe
 
@@ -430,6 +430,37 @@ def test_T5_fork_attempts():
             await fork._run_fork_attempts("Q", "[t]")
             check(record == [fork._build_fork_cmd("P", fork_prompt_for("Q"))],
                   "attempt 1 forks the inherited thread with the question as launched")
+            # the fork searches during attempt 1 (`yes_recursive`): the results of its `query`
+            # calls, taken down by the executor, are resent on attempt 2 between the question
+            # and the reminder, under the header
+            fork = direct_fork(major, _StagedProbe(), "Q")
+            fork.fork_pending.interaction.fork_allowed_tools = [TOOL_ANSWER_INDEX, TOOL_SEARCH]  # type: ignore[union-attr]
+            executor = mcp.ToolExecutor(fork)
+            fork.check_budget = lambda: False
+            executor._should_loop_restart = lambda session, name, arguments: False
+            found = iter(["found: lemma_a", "found: lemma_b"])
+
+            async def fake_query(session, arguments):
+                return (next(found), False)
+            searched: list = []
+
+            async def two_searches():
+                for _ in range(2):
+                    searched.append(await executor.execute("query", {"queries": []}))
+            real_query = mcp._query_tool_logic
+            mcp._query_tool_logic = fake_query
+            try:
+                record = recorder(fork, 2, during_first=two_searches)
+                await fork._run_fork_attempts("Q", "[t]")
+            finally:
+                mcp._query_tool_logic = real_query
+            check(searched == [("found: lemma_a", False), ("found: lemma_b", False)],
+                  "the fork's searches answer what the query tool answers")
+            check(len(record) == 2
+                  and record[1] == fork._build_fork_cmd("P", fork_prompt_for("Q")
+                                                        + "\n\nResults of the searches you ran before this retry:\n"
+                                                        "found: lemma_a\n\nfound: lemma_b" + reminder),
+                  "attempt 2 resends the question, the results of the fork's searches, then the reminder")
             # the interaction re-prompts itself during attempt 1 (as Interaction_Memorize
             # does when it advances its stage): attempt 2 resends that question
             fork = direct_fork(major, _ContinuingProbe(ContinuingInteraction(new_prompt="stage 2")), "Q")
@@ -576,6 +607,15 @@ def test_T10_fork_tools_are_those_of_the_session_that_launched_it():
                   "a fork, and a fork launched from it, are advertised the major's tools")
             check("is not allowed" in (mcp._check_tool_permission(fork, TOOL_SUBAGENT) or ""),
                   "a fork's subagent call is refused")
+            for logic in (mcp._subagent_tool_logic, mcp._close_subagent_tool_logic):
+                try:
+                    await logic(fork, {"step_id": "1"})
+                    raised = None
+                except Exception as e:
+                    raised = e
+                check(isinstance(raised, InternalError) and "called by an interaction fork" in str(raised),
+                      f"{logic.__name__} run by a fork, past the permission check, raises InternalError"
+                      f" (got {type(raised).__name__})")
             major._can_offer_dispatch_tools = lambda: False
             check(TOOL_SUBAGENT not in mcp._tool_schemas_for(inner)
                   and mcp._tool_schemas_for(inner) == mcp._tool_schemas_for(major),

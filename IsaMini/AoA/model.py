@@ -12258,6 +12258,9 @@ class Role_Interaction:
     prompt: str
     resume_id: str | None
     mode: ForkingMode
+    # The results of the fork's own `query` calls, in order: a Codex fork resends
+    # them after the question on a later attempt, its thread being forked afresh.
+    searches: list[str] = field(default_factory=list)
 
 Role = Role_Major | Role_Worker | Role_Interaction
 
