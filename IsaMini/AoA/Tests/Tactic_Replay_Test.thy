@@ -25,7 +25,6 @@ open User_Operation_Test MiniLang_Agent
 val ctxt = Named_Target.theory_init \<^theory>
 fun config mode : MiniLang_Agent.config =
   (fst default_cfg, snd default_cfg, {prem_counter = Synchronized.var "Tactic_Replay_Test" 0}, mode)
-fun state_of ctxt prop = Minilang.INIT ctxt (Goal.init (Thm.cterm_of ctxt (Syntax.read_prop ctxt prop)))
 fun run mode cmd s = Minilang.record_reporter (interpret_i (config mode) cmd) s
 fun tactic name recorded = TACTIC (name, "", [], [], recorded)
 val tiny = Phi_Proof_Store.times_of_ms (1, 1)

@@ -2563,13 +2563,12 @@ class Minilang_State:
                                                    [v.ascii for v in var_names],
                                                    [f.ascii for f in fact_names]))
         return Intro_Bindings_Msg._unpack_bindings(bindings_data)
-    async def need_intro(self, consider_conj: bool) -> bool:
-        """
-        Check if the leading proof goal needs INTRO (i.e., has quantified variables or premises).
-        If consider_conj is True, also considers conjunction as needing intro.
-        """
-        result = await self.connection.callback("IsaMini.need_intro", (self.name, consider_conj))
-        return result
+    async def decide_auto_intro(self) -> bool:
+        """Whether AoA inserts its automatic Intro on the leading goal (the
+        automatic Intro decision, docs/AUTO_INTRO_DECISION.md): the goal opens
+        with a quantifier or a premise (need_intro), and the verdict of the
+        three layers (hooks, exemptions, default) is Intro."""
+        return await self.connection.callback("IsaMini.decide_auto_intro", self.name)
     async def _retrieve_entity_with_diagnostics(self, entities: list[tuple[EntityKind, str]]
         ) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
         """Retrieve entity info in this state's context; see
@@ -5661,8 +5660,6 @@ class NonLeaf_Node(Node):
         next_idx = child_idx + 1
         if any(isinstance(s, (Intro, Induction)) for s in self.sub_nodes[next_idx:]):
             return
-        if not await child.resulting_state().need_intro(False):
-            return
         if next_idx < len(self.sub_nodes):
             # Fractional id strictly between the two siblings — must go through
             # local_step_between; an inline `child + [1]` collides when the
@@ -5673,15 +5670,52 @@ class NonLeaf_Node(Node):
             if not self.opening():
                 return
             new_id = self._local_step_of_next_proof_step()
-        ml_state = await child.resulting_state().clone(None)
-        config = NodeConfig(new_id, ml_state, self)
-        try:
-            intro = Intro(config, "", None, _auto_injected=True)
-        except ProofTreeTooDeep:
+        intro = await self._make_automatic_intro(child.resulting_state(), new_id)
+        if intro is None:
             return
-        the_session().auto_intro_nodes.append(intro)
         self.sub_nodes.insert(next_idx, intro)
         await intro._refresh_me_alone(auto_intro=True)
+    async def _make_automatic_intro(
+            self, state: 'Minilang_State', step: local_step,
+            gns: 'Sequence[Parsed_Opr]' = ()) -> 'Intro | None':  # type: ignore  — `Intro`'s class identity is erased to type[Any] by @proof_operation, so it can't form a union annotation
+        """The automatic Intro on the leading goal of `state`, to be placed at
+        the local step `step` before the body `gns`, or None when
+        ``_should_inject_leading_intro`` answers false for that body (with no
+        body, that is the automatic Intro decision alone,
+        docs/AUTO_INTRO_DECISION.md) or the tree is too deep. The one way an
+        automatic Intro is built, so every one of them passes through the
+        decision; the caller places it."""
+        if not await self._should_inject_leading_intro(state, gns):
+            return None
+        ml_state = await state.clone(None)
+        try:
+            intro = Intro(NodeConfig(step, ml_state, self), "", None, _auto_injected=True)
+        except ProofTreeTooDeep:
+            return None
+        the_session().auto_intro_nodes.append(intro)
+        return intro
+    async def _should_inject_leading_intro(
+            self, state: 'Minilang_State', gns: 'Sequence[Parsed_Opr]') -> bool:
+        """Decide whether to auto-inject an Intro before the body `gns`,
+        evaluated against `state` (the body's pre-state).
+
+        Mirrors the historical gate — inject when the automatic Intro decision
+        says so and the body contains no Intro or Induction — with ONE
+        loosening: a body whose FIRST step is an Induction whose target hits a
+        not-yet-introduced leading ∀/⋀ binder still gets the Intro. (The agent
+        wrote `[Induction]` where it should have written `[Intro, Induction]`;
+        inducting on a still-bound variable is ill-typed otherwise.) The
+        loosening applies only once the decision has answered true: a goal
+        whose verdict is No_Intro gets no Intro before an Induction either."""
+        if not await state.decide_auto_intro():
+            return False
+        if not any(gn.cls is Intro or gn.cls is Induction for gn in gns):
+            return True
+        first = gns[0]
+        if first.cls is Induction:
+            tgt = first.raw.get("target_isabelle_term")
+            return bool(tgt) and await state.induction_target_hits_leading_binder(tgt)
+        return False
     def _local_step_of_next_proof_step(self) -> local_step:
         if self.sub_nodes:
             return incr_id_major(self.sub_nodes[-1].local_step)
@@ -6353,10 +6387,11 @@ class StdBlock(NonLeaf_Node):
         """Consume ``self._proof`` (a pre-parsed list[Parsed_Opr]) at first
         refresh and attach each as a direct child of this block.
 
-        If ``auto_intro`` is True (only Have today) and the provided body's
-        first Parsed_Opr is NOT an ``Intro``, an auto-Intro is injected before
-        the provided list when the current goal state calls for one
-        (``need_intro(False)``).
+        If ``auto_intro`` is True (``Have``, ``SetupRewriting``), an automatic
+        Intro is placed before the provided body when
+        ``_should_inject_leading_intro`` says so, and as the only child when
+        no body is given and the automatic Intro decision says so
+        (``_make_automatic_intro``).
 
         If any children were inherited via ``_amend_from`` (previous
         block's sub_nodes) and a provided list is given, they are redirected
@@ -6383,18 +6418,11 @@ class StdBlock(NonLeaf_Node):
             self.sub_nodes = []
             gns = list(self._proof)
             self._proof = None
-            if auto_intro and await self._should_inject_leading_intro(
-                    self._state_after_beginning(), gns):
-                local_step = self._local_step_of_next_proof_step()
-                ml_state = await self._state_after_beginning().clone(None)
-                config = NodeConfig(local_step, ml_state, self)
-                try:
-                    intro = Intro(config, "", None, _auto_injected=True)
-                except ProofTreeTooDeep:
-                    pass
-                else:
+            if auto_intro:
+                intro = await self._make_automatic_intro(
+                    self._state_after_beginning(), self._local_step_of_next_proof_step(), gns)
+                if intro is not None:
                     self.sub_nodes.append(intro)
-                    the_session().auto_intro_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self._state_after_beginning().clone(None)
@@ -6424,40 +6452,12 @@ class StdBlock(NonLeaf_Node):
                     for d in inherited:
                         await d.aclose_all_subagents()
             return None
-        if (auto_intro
-                and not self.sub_nodes
-                and await self._state_after_beginning().need_intro(False)):
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self._state_after_beginning().clone(None)
-            config = NodeConfig(local_step, ml_state, self)
-            try:
-                intro = Intro(config, "", None, _auto_injected=True)
-            except ProofTreeTooDeep:
-                pass
-            else:
+        if auto_intro and not self.sub_nodes:
+            intro = await self._make_automatic_intro(
+                self._state_after_beginning(), self._local_step_of_next_proof_step())
+            if intro is not None:
                 self.sub_nodes.append(intro)
-                the_session().auto_intro_nodes.append(intro)
         return None
-    async def _should_inject_leading_intro(
-            self, state: 'Minilang_State', gns: 'list[Parsed_Opr]') -> bool:
-        """Decide whether to auto-inject an Intro before the body `gns`,
-        evaluated against `state` (the body's pre-state).
-
-        Mirrors the historical gate — inject when the goal needs intro and the
-        body does not already lead with structured introduction — with ONE
-        loosening: a body whose FIRST step is an Induction whose target hits a
-        not-yet-introduced leading ∀/⋀ binder still gets the Intro. (The agent
-        wrote `[Induction]` where it should have written `[Intro, Induction]`;
-        inducting on a still-bound variable is ill-typed otherwise.)"""
-        if not await state.need_intro(False):
-            return False
-        if not any(gn.cls is Intro or gn.cls is Induction for gn in gns):
-            return True
-        first = gns[0]
-        if first.cls is Induction:
-            tgt = first.raw.get("target_isabelle_term")
-            return bool(tgt) and await state.induction_target_hits_leading_binder(tgt)
-        return False
     async def append(
         self, gns: 'list[Parsed_Opr]',
         op: 'EditOperation' = EditOperation.FILL,
@@ -6692,17 +6692,10 @@ class GoalNode(StdBlock):
         if self._pending_proof is not None and not self.sub_nodes:
             gns = self._pending_proof
             self._pending_proof = None
-            if await self._should_inject_leading_intro(self.ml_state, gns):
-                local_step = self._local_step_of_next_proof_step()
-                ml_state = await self.ml_state.clone(None)
-                config = NodeConfig(local_step, ml_state, self)
-                try:
-                    intro = Intro(config, "", None, _auto_injected=True)
-                except ProofTreeTooDeep:
-                    pass
-                else:
-                    self.sub_nodes.append(intro)
-                    the_session().auto_intro_nodes.append(intro)
+            intro = await self._make_automatic_intro(
+                self.ml_state, self._local_step_of_next_proof_step(), gns)
+            if intro is not None:
+                self.sub_nodes.append(intro)
             for gn in gns:
                 local_step = self._local_step_of_next_proof_step()
                 ml_state = await self.ml_state.clone(None)
@@ -6713,17 +6706,11 @@ class GoalNode(StdBlock):
                     if isinstance(e, ProofTreeTooDeep):
                         the_session()._depth_limit_exceeded = True
                     break
-        elif is_init and not self.sub_nodes and await self.ml_state.need_intro(False):
-            local_step = self._local_step_of_next_proof_step()
-            ml_state = await self.ml_state.clone(None)
-            config = NodeConfig(local_step, ml_state, self)
-            try:
-                intro = Intro(config, "", None, _auto_injected=True)
-            except ProofTreeTooDeep:
-                pass
-            else:
+        elif is_init and not self.sub_nodes:
+            intro = await self._make_automatic_intro(
+                self.ml_state, self._local_step_of_next_proof_step())
+            if intro is not None:
                 self.sub_nodes.append(intro)
-                the_session().auto_intro_nodes.append(intro)
         return await super()._refresh_me_alone(auto_intro)
     async def _auto_intro_after_me(self) -> None:
         pass

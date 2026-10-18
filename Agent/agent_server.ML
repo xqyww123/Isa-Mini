@@ -1233,15 +1233,14 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
         timeout = NONE
       }
 
-      val need_intro_callback = {
-        name = "IsaMini.need_intro",
+      (* The automatic Intro decision (IsaMini/AoA/docs/AUTO_INTRO_DECISION.md):
+         whether AoA inserts its automatic Intro on the state's leading goal. *)
+      val decide_auto_intro_callback = {
+        name = "IsaMini.decide_auto_intro",
         on_interrupt = Remote_Procedure_Calling.Reraise,
-        arg_schema = unpackPair (unpackString, unpackBool),
+        arg_schema = unpackString,
         ret_schema = packBool,
-        function = (fn (state_id, _) =>
-          let val s0 = get_state state_id
-           in MiniLang_Agent.check_need_intro s0
-          end),
+        function = (fn state_id => Auto_Intro.decide (get_state state_id)),
         timeout = NONE
       }
 
@@ -1950,7 +1949,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
           mk_callback lookup_fact_callback,
           make_retrieve_entity_callback (fn _ => thm_roles) au,
           mk_callback compute_bindings_callback,
-          mk_callback need_intro_callback,
+          mk_callback decide_auto_intro_callback,
           mk_callback check_term_callback,
           mk_callback induction_target_hits_binder_callback,
           mk_callback unfold_syntax_callback,

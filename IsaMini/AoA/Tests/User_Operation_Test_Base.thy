@@ -48,6 +48,12 @@ fun declared name ctxt text =
       val att = Attrib.attribute_cmd ctxt (Token.make_src (name, Position.none) toks)
    in Context.the_proof (snd (Thm.apply_attribute att Drule.dummy_thm (Context.Proof ctxt))) end
 
+(*a Minilang state on a goal given as a term, or as text read in schematic
+  mode, so that a goal may carry a schematic variable*)
+fun state_of_term ctxt t = Minilang.INIT ctxt (Goal.init (Thm.cterm_of ctxt t))
+fun state_of ctxt prop =
+  state_of_term ctxt (Syntax.read_prop (Proof_Context.set_mode Proof_Context.mode_schematic ctxt) prop)
+
 (*the argument as the codec hands it over: read by the registration's own
   unpack_arg into the type that registration hides, and shown inverse: packed
   by pack_arg back into the bytes unpack_arg read*)

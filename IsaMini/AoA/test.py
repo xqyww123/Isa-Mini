@@ -3767,10 +3767,10 @@ async def _test_Intro_no_intro_bindings(root: Root, file: MyIO):
     if s.leading_goal:
         file.write(f", leading={s.leading_goal.conclusion.unicode}")
     file.write("\n")
-    # Step 1.True.1: Intro with a fact_binding. Empirically verified via
-    # `ml_state.need_intro(...)` probe that both need_intro(True) and
-    # need_intro(False) return False at `1.True` (the case hypothesis is
-    # already a named local premise, not an outer ⟹), so AUTO_INTRO
+    # Step 1.True.1: Intro with a fact_binding. Empirically verified via an
+    # `ml_state.decide_auto_intro()` probe (then named `need_intro`) that it
+    # returns False at `1.True` (the case hypothesis is already a named local
+    # premise, not an outer ⟹), so AUTO_INTRO
     # short-circuits without emitting INTRO_BINDINGS. Pre-fix the Python
     # `_refresh_the_beginning_opr` then raised:
     #   Expected exactly one Intro_Bindings_Msg in Intro's messages, got 0
@@ -3941,6 +3941,11 @@ theory_test("TacticReplay_Minilang", "Tactic_Replay_Test.thy")
 # Goal hints (docs/GOAL_HINTS.md, section 7): the matching walk and the
 # declaration checks, below the agent.
 theory_test("GoalHints_Minilang", "Goal_Hints_Test.thy")
+
+# The automatic Intro decision (docs/AUTO_INTRO_DECISION.md, section 7): the
+# three layers on a term and on a state, the exemptions' positions and checks,
+# below the agent.
+theory_test("AutoIntroDecision_Minilang", "Auto_Intro_Decision_Test.thy")
 
 
 # --- the sample plugin (Tests/Sample_Plugin.thy, Tests/sample_plugin/): user-defined
@@ -17837,6 +17842,128 @@ async def _test_goal_hints_supplied_proof(root: Root, file: MyIO):
     file.write(f"fill 1: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
     render(file, "proof.yaml: no notice", lambda buf: session.print_proof_scope(0, buf))
     render(file, "quickview: no notice", lambda buf: session.quickview_proof_scope(0, buf))
+
+
+@model_test("AutoIntroDecision", "Test_AutoIntroDecision.thy", 19)
+async def _test_auto_intro_decision(root: Root, file: MyIO):
+    """docs/AUTO_INTRO_DECISION.md section 7: the three layers through a real
+    AoA call. The fixture's hook, on the theory, forces the automatic Intro on
+    any goal mentioning Suc; its exemption, on the call's proof context, keeps
+    it from goals concluding `0 <= _`; every other goal gets the default. Each
+    step names the layer and the insertion site it exercises."""
+    session = root.session
+    print_header("Initial: the exemption, no automatic Intro under the main goal", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("1", [Have.gen_single({
+        "thought": "the default: an automatic Intro at 1.1",
+        "statement": {"english": "every natural number is below its successor",
+                      "conclusion": r"\<forall>y::nat. 0 < y + 1"},
+        "name": "h_default"})])
+    print_header("Step 1, the default", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("2", [Have.gen_single({
+        "thought": "the exemption: no automatic Intro, the footer asks for 2.1",
+        "statement": {"english": "zero is below every natural number",
+                      "conclusion": r"\<forall>y::nat. 0 \<le> y"},
+        "name": "h_exempt"})])
+    print_header("Step 2, the exemption", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("3", [Have.gen_single({
+        "thought": "the hook overrides the exemption: an automatic Intro at 3.1",
+        "statement": {"english": "zero is below every successor",
+                      "conclusion": r"\<forall>y::nat. 0 \<le> Suc y"},
+        "name": "h_hook"})])
+    print_header("Step 3, the hook over the exemption", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("4", [Have.gen_single({
+        "thought": "the exemption on a body supplied with its goal: the body is the Obvious alone",
+        "statement": {"english": "zero is below every natural number",
+                      "conclusion": r"\<forall>y::nat. 0 \<le> y"},
+        "name": "h_supplied",
+        "proof": [{"operation": "Obvious", "facts": []}]})])
+    print_header("Step 4, the exemption on a supplied body", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("5", [Have.gen_single({
+        "thought": "the exemption on a body led by an Induction: no automatic Intro before it",
+        "statement": {"english": "zero is below every natural number",
+                      "conclusion": r"\<forall>y::nat. 0 \<le> y"},
+        "name": "h_induction",
+        "proof": [{"operation": "Induction",
+                   "thought": "induction on y",
+                   "target_isabelle_term": "y",
+                   "variables": [{"name": "y", "status": "fixed"}],
+                   "proofs": "GivenLater"}]})])
+    print_header("Step 5, the exemption on a body led by an Induction", file)
+    root.print(0, file)
+    session.age += 1
+    await root.insert_before("5.1", [Intro.gen_single({
+        "thought": "the agent's own Intro before its Induction",
+        "variable_bindings": ["y"]})])
+    print_header("Step 5, the agent's own Intro inserted before the Induction", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("6", [Intro.gen_single({
+        "thought": "the agent's own Intro on the exempted main goal",
+        "variable_bindings": ["x"]})])
+    print_header("Step 6, the agent's own Intro", file)
+    root.print(0, file)
+    session.age += 1
+    for step in ["1.2", "2.1", "3.2", "5.1.0.1", "7"]:
+        await root.fill(step, [Obvious.gen_single({"facts": []})])
+    print_header("Everything closed", file)
+    root.print(0, file)
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("AutoIntroRelation", "Test_AutoIntroRelation.thy", 20, isolated_db=True)
+async def _test_auto_intro_relation(root: Root, file: MyIO):
+    """docs/AUTO_INTRO_DECISION.md section 7: the motivating need end to end.
+    The exemption keeps the termination goal as `termination` opens it, so
+    `relation` applies at step 1; of the two subgoals it derives, the `wf`
+    subgoal has no binder and the recursive-call subgoal gets its automatic
+    Intro."""
+    session = root.session
+    print_header("Initial: no automatic Intro under the termination goal", file)
+    root.print(0, file)
+    session.age += 1
+    outcome = await root.fill("1", [Tactic.gen_single({
+        "thought": "a measure that decreases at the recursive call",
+        "tactic": "relation",
+        "arguments": r'"measure (\<lambda>(i, N). N + 1 - i)"'})])
+    file.write(f"fill 1: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
+    print_header("After relation: the wf subgoal bare, the recursive-call subgoal introduced", file)
+    root.print(0, file)
+    session.age += 1
+    await root.fill("1.1.1", [Obvious.gen_single({"facts": []})])
+    await root.fill("1.2.2", [Obvious.gen_single({"facts": []})])
+    print_header("Everything closed", file)
+    root.print(0, file)
+    assert _count_unfinished(root, file) == 0
+
+
+@model_test("AutoIntroPatCompleteness", "Test_AutoIntroPatCompleteness.thy", 30, isolated_db=True)
+async def _test_auto_intro_pat_completeness(root: Root, file: MyIO):
+    """docs/AUTO_INTRO_DECISION.md section 7: the running example's hook. The
+    completeness goal of `function sum_upto` is kept as it stands, so
+    `pat_completeness` applies at step 1; the compatibility goal of the same
+    call gets its automatic Intro."""
+    session = root.session
+    print_header("Initial: the completeness goal bare, the compatibility goal introduced", file)
+    root.print(0, file)
+    session.age += 1
+    outcome = await root.fill("goal1.1", [Tactic.gen_single({
+        "thought": "case analysis on the constructors",
+        "tactic": "pat_completeness"})])
+    file.write(f"fill goal1.1: committed {len(outcome.committed)}, failure {outcome.failure is not None}\n")
+    await root.fill("goal2.2", [Obvious.gen_single({"facts": []})])
+    print_header("Everything closed", file)
+    root.print(0, file)
+    assert _count_unfinished(root, file) == 0
 
 
 @model_test("Define_WorkerScope_Deferred", "Test_Define_WorkerScope_Deferred.thy", 10)

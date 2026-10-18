@@ -4,7 +4,9 @@ Status: design, settled 2026-10-09 and revised after two reviews, the last
 on 2026-10-10; implemented 2026-10-10 in the order of section 9; revised
 2026-10-12 after the review of the implementation (the keyword is
 mandatory, §1; a fully applied connective of the table is not a position,
-§2.2 and §2.3).
+§2.2 and §2.3); revised 2026-10-17 with `docs/AUTO_INTRO_DECISION.md` (the
+automatic Intro decision, §2.1; the registry as an application of the
+functor `Goal_Patterns`, §3).
 
 > References use stable symbol names, never line numbers — line numbers drift.
 > Grep for the symbol.
@@ -208,9 +210,11 @@ succeeds, so the walk never raises, and `Pattern.match` never meets a loose
 bound variable.
 
 **What is never visited.** Before AoA shows a goal it applies an `Intro`
-step whenever `need_intro` holds (`library/proof.ML`): the premises of a
-Pure `⟹`, the antecedent of a `⟶`, and the `x ∈ A` of a `∀x∈A` at the head
-of the goal become hypotheses, and hypotheses are not matched (§8). The
+step whenever the automatic Intro decision says so
+(`docs/AUTO_INTRO_DECISION.md`: `need_intro` holds, `library/proof.ML`, and
+the verdict is `Intro`): the premises of a Pure `⟹`, the antecedent of a
+`⟶`, and the `x ∈ A` of a `∀x∈A` at the head of the goal become hypotheses,
+and hypotheses are not matched (§8). The
 hints of a goal must not depend on whether that step has run, nor on
 whether the goal sits inside a conjunction where it does not run; so the
 walk never visits what `Intro` would turn into a hypothesis: the premises
@@ -319,28 +323,35 @@ each pattern is, and the once-per-session rule (§5) bounds the total.
 
 ## 3. The registry
 
-`Agent_Hint` gains:
+`Agent_Hint` gains (revised 2026-10-17 with `docs/AUTO_INTRO_DECISION.md`
+§5: the pair of nets and the walk over them are the functor `Goal_Patterns`
+at the top of `agent_hint.ML`, which the auto-Intro exemptions apply too):
 
 ```sml
 type goal_hint = {serial : serial, text : string}
 
 (* one element per (pattern, hint); a hint with n patterns is n elements *)
-structure Whole_Prop_Patterns = iNet_Collection(
+structure Goal_Hint_Patterns = Goal_Patterns(
   type T = term * goal_hint
   fun eq ((p1, h1), (p2, h2)) = #serial h1 = #serial h2 andalso p1 aconv p2
   val key_of = fst)
-structure Subterm_Patterns = iNet_Collection( (* same parameters *) )
 
 val goal_hints : Proof.context -> term -> goal_hint list
   (* the hints of a leading goal, in declaration order; [] when nothing is registered *)
 ```
 
-`iNet_Collection` (`Performant_Isabelle_ML/library/inet_collection.ML`) is
+`Goal_Patterns` builds the whole_prop net and the subterm net as two
+`iNet_Collection` instances (`Performant_Isabelle_ML/library/inet_collection.ML`,
 the existing `Generic_Data` slot over an `iNet` with `add`, `del` and
 `iNet.merge eq` for theory merge; `my_object_logic.ML` already uses its thm
-specialisation. The key is the pattern, the element carries the hint, so
-`iNet.match_term` on a subterm returns the candidate `(pattern, hint)` pairs
-directly. The serial is allocated by `serial ()` at declaration; it orders
+specialisation) and owns the matching of §2.4 over them, `fold_matches`,
+which `goal_hints` folds into an `Inttab` by serial. `fold_matches` runs
+`Goal_Positions.fold_positions`, the walk over the positions of §2.2 and
+§2.3; `Goal_Positions`, beside the functor at the top of `agent_hint.ML`,
+holds the connective table of §2.2 and the binder rule of §2.1. The key is the pattern, the
+element carries the hint, so `iNet.match_term` on a subterm returns the
+candidate `(pattern, hint)` pairs directly. The serial is allocated by
+`serial ()` at declaration; it orders
 the output and is the identity the Python side deduplicates on, as the
 string `"goal:<serial>"`, in the same `shown_hints` set as the constant
 names and `unfold:conditional-definition`.

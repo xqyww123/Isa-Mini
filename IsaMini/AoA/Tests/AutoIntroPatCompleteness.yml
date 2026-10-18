@@ -1,0 +1,78 @@
+--------------------------------------------------
+Initial: the completeness goal bare, the compatibility goal introduced
+--------------------------------------------------
+variables:
+  - sum_upto_graph: nat × nat ⇒ nat ⇒ bool
+  - sum_upto_rel: nat × nat ⇒ nat × nat ⇒ bool
+  - sum_upto_sumC: nat × nat ⇒ nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+proof goals:
+  - goal index: 1
+    - goal id: goal1
+      variables:
+        - sum_upto_dom: nat × nat ⇒ bool
+        - sum_upto: nat ⇒ nat ⇒ nat
+      goal: ∀P (x :: nat × nat). (∀i (N :: nat). x = (i, N) ⟶ P) ⟶ P
+      proof: empty
+      Unfinished Proof! Call command `edit` with action `fill` and target step `goal1.1` to provide the proof.
+  - goal index: 2
+    - goal id: goal2
+      variables:
+        - sum_upto_dom: nat × nat ⇒ bool
+        - sum_upto: nat ⇒ nat ⇒ nat
+      goal: ∀i N i1 (N1 :: nat). (i, N) = (i1, N1) ⟶ (if N < i then (0 :: nat) else i + sum_upto_sumC (Suc i, N)) = (if N1 < i1 then (0 :: nat) else i1 + sum_upto_sumC (Suc i1, N1))
+      proof:
+        - step id: goal2.1
+          operation: Intro
+          fixing variables:
+            - i: nat
+            - N: nat
+            - i1: nat
+            - N1: nat
+          assuming premises:
+            - premise0: (i, N) = (i1, N1)
+      Unfinished Proof! Call command `edit` with action `fill` and target step `goal2.2` to provide the proof for the following goal.
+      pending proof goal:
+        (if N < i then (0 :: nat) else i + sum_upto_sumC (Suc i, N)) = (if N1 < i1 then (0 :: nat) else i1 + sum_upto_sumC (Suc i1, N1))
+fill goal1.1: committed 1, failure False
+--------------------------------------------------
+Everything closed
+--------------------------------------------------
+variables:
+  - sum_upto_graph: nat × nat ⇒ nat ⇒ bool
+  - sum_upto_rel: nat × nat ⇒ nat × nat ⇒ bool
+  - sum_upto_sumC: nat × nat ⇒ nat
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+proof goals:
+  - goal index: 1
+    - goal id: goal1
+      variables:
+        - sum_upto_dom: nat × nat ⇒ bool
+        - sum_upto: nat ⇒ nat ⇒ nat
+      goal: ∀P (x :: nat × nat). (∀i (N :: nat). x = (i, N) ⟶ P) ⟶ P
+      proof:
+        - step id: goal1.1
+          thought: case analysis on the constructors
+          operation: Tactic
+          tactic: pat_completeness
+          derived goal:
+            True
+  - goal index: 2
+    - goal id: goal2
+      variables:
+        - sum_upto_dom: nat × nat ⇒ bool
+        - sum_upto: nat ⇒ nat ⇒ nat
+      goal: ∀i N i1 (N1 :: nat). (i, N) = (i1, N1) ⟶ (if N < i then (0 :: nat) else i + sum_upto_sumC (Suc i, N)) = (if N1 < i1 then (0 :: nat) else i1 + sum_upto_sumC (Suc i1, N1))
+      proof:
+        - step id: goal2.1
+          operation: Intro
+          fixing variables:
+            - i: nat
+            - N: nat
+            - i1: nat
+            - N1: nat
+          assuming premises:
+            - premise0: (i, N) = (i1, N1)
+        - step id: goal2.2
+          operation: Obvious
+Unfinished nodes: 0

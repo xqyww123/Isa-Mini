@@ -1,0 +1,515 @@
+--------------------------------------------------
+Initial: the exemption, no automatic Intro under the main goal
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+--------------------------------------------------
+Step 1, the default
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+Unfinished Proof! Call command `edit` with action `fill` and target step `2` to provide the proof.
+--------------------------------------------------
+Step 2, the exemption
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+Unfinished Proof! Call command `edit` with action `fill` and target step `3` to provide the proof.
+--------------------------------------------------
+Step 3, the hook over the exemption
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) ≤ Suc y
+Unfinished Proof! Call command `edit` with action `fill` and target step `4` to provide the proof.
+--------------------------------------------------
+Step 4, the exemption on a supplied body
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) ≤ Suc y
+  - step id: 4
+    thought: the exemption on a body supplied with its goal: the body is the Obvious alone
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_supplied
+    proof:
+      - step id: 4.1
+        operation: Obvious
+Unfinished Proof! Call command `edit` with action `fill` and target step `5` to provide the proof.
+--------------------------------------------------
+Step 5, the exemption on a body led by an Induction
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) ≤ Suc y
+  - step id: 4
+    thought: the exemption on a body supplied with its goal: the body is the Obvious alone
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_supplied
+    proof:
+      - step id: 4.1
+        operation: Obvious
+  - step id: 5
+    thought: the exemption on a body led by an Induction: no automatic Intro before it
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_induction
+    proof:
+      - step id: 5.1
+        thought: induction on y
+        operation: Induction
+        target term: y
+        Error: Induction failed because: Unable to figure out induct rule
+    Unfinished Proof! Call command `edit` with action `fill` and target step `5.2` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+Unfinished Proof! Call command `edit` with action `fill` and target step `6` to provide the proof.
+--------------------------------------------------
+Step 5, the agent's own Intro inserted before the Induction
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) ≤ Suc y
+  - step id: 4
+    thought: the exemption on a body supplied with its goal: the body is the Obvious alone
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_supplied
+    proof:
+      - step id: 4.1
+        operation: Obvious
+  - step id: 5
+    thought: the exemption on a body led by an Induction: no automatic Intro before it
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_induction
+    proof:
+      - step id: 5.0A
+        thought: the agent's own Intro before its Induction
+        operation: Intro
+        fixing variables:
+          - y: nat
+      - step id: 5.1
+        thought: induction on y
+        operation: Induction
+        target term: y
+        cases:
+          - goal id: 5.1.0
+            goal: (0 :: nat) ≤ (0 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `5.1.0.1` to provide the proof.
+          - goal id: 5.1.Suc
+            variables:
+              - y: nat
+            premises:
+              - Suc.IH: (0 :: nat) ≤ y
+            goal: True
+            proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `6` to provide the proof.
+--------------------------------------------------
+Step 6, the agent's own Intro
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `1.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) < y + (1 :: nat)
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof: empty
+    Unfinished Proof! Call command `edit` with action `fill` and target step `2.1` to provide the proof for the following goal.
+    pending proof goal:
+      ∀(y :: nat). (0 :: nat) ≤ y
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+    Unfinished Proof! Call command `edit` with action `fill` and target step `3.2` to provide the proof for the following goal.
+    pending proof goal:
+      (0 :: nat) ≤ Suc y
+  - step id: 4
+    thought: the exemption on a body supplied with its goal: the body is the Obvious alone
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_supplied
+    proof:
+      - step id: 4.1
+        operation: Obvious
+  - step id: 5
+    thought: the exemption on a body led by an Induction: no automatic Intro before it
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_induction
+    proof:
+      - step id: 5.0A
+        thought: the agent's own Intro before its Induction
+        operation: Intro
+        fixing variables:
+          - y: nat
+      - step id: 5.1
+        thought: induction on y
+        operation: Induction
+        target term: y
+        cases:
+          - goal id: 5.1.0
+            goal: (0 :: nat) ≤ (0 :: nat)
+            proof: empty
+            Unfinished Proof! Call command `edit` with action `fill` and target step `5.1.0.1` to provide the proof.
+          - goal id: 5.1.Suc
+            variables:
+              - y: nat
+            premises:
+              - Suc.IH: (0 :: nat) ≤ y
+            goal: True
+            proof: empty
+  - step id: 6
+    thought: the agent's own Intro on the exempted main goal
+    operation: Intro
+    fixing variables:
+      - x: nat
+Unfinished Proof! Call command `edit` with action `fill` and target step `7` to provide the proof for the following goal.
+pending proof goal:
+  (0 :: nat) ≤ x
+--------------------------------------------------
+Everything closed
+--------------------------------------------------
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: ∀(x :: nat). (0 :: nat) ≤ x
+proof:
+  - step id: 1
+    thought: the default: an automatic Intro at 1.1
+    operation: Have
+    statement:
+      english: every natural number is below its successor
+      conclusion: \<forall>y::nat. 0 < y + 1
+    name: h_default
+    proof:
+      - step id: 1.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+      - step id: 1.2
+        operation: Obvious
+  - step id: 2
+    thought: the exemption: no automatic Intro, the footer asks for 2.1
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_exempt
+    proof:
+      - step id: 2.1
+        operation: Obvious
+  - step id: 3
+    thought: the hook overrides the exemption: an automatic Intro at 3.1
+    operation: Have
+    statement:
+      english: zero is below every successor
+      conclusion: \<forall>y::nat. 0 \<le> Suc y
+    name: h_hook
+    proof:
+      - step id: 3.1
+        operation: Intro
+        fixing variables:
+          - y: nat
+      - step id: 3.2
+        operation: Obvious
+  - step id: 4
+    thought: the exemption on a body supplied with its goal: the body is the Obvious alone
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_supplied
+    proof:
+      - step id: 4.1
+        operation: Obvious
+  - step id: 5
+    thought: the exemption on a body led by an Induction: no automatic Intro before it
+    operation: Have
+    statement:
+      english: zero is below every natural number
+      conclusion: \<forall>y::nat. 0 \<le> y
+    name: h_induction
+    proof:
+      - step id: 5.0A
+        thought: the agent's own Intro before its Induction
+        operation: Intro
+        fixing variables:
+          - y: nat
+      - step id: 5.1
+        thought: induction on y
+        operation: Induction
+        target term: y
+        cases:
+          - goal id: 5.1.0
+            goal: (0 :: nat) ≤ (0 :: nat)
+            proof:
+              - step id: 5.1.0.1
+                operation: Obvious
+          - goal id: 5.1.Suc
+            variables:
+              - y: nat
+            premises:
+              - Suc.IH: (0 :: nat) ≤ y
+            goal: True
+            proof: empty
+  - step id: 6
+    thought: the agent's own Intro on the exempted main goal
+    operation: Intro
+    fixing variables:
+      - x: nat
+  - step id: 7
+    operation: Obvious
+Unfinished nodes: 0

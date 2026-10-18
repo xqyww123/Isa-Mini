@@ -516,7 +516,8 @@ unified diff is on disk at `Tests/<name>.diff` (and `<name>.actual.yml`).
 | `Tests/Sample_Plugin.thy`, `Tests/sample_plugin/` | The sample plugin of the test suite: the two halves of four user operations. |
 | `../../Agent/agent_server.ML`, `../../Agent/Minilang_AoA.thy`, `../../library/proof.ML` | ML side. |
 | `../../Agent/agent_config.ML`, `../../Agent/agent_plugin.ML` | ML side: the agent's `config` type, and the registries of user operations and tasks. |
-| `../../Agent/agent_hint.ML` | ML side: the Agent Hint Registry — the constant and fact hints (`aoa_notice_constant`, `aoa_reject_constant`, `aoa_notice`, `aoa_reject`; fixtures `Tests/Test_Hint*.thy`) and the goal hints (`aoa_notice_goal`; design `docs/GOAL_HINTS.md`; `Tests/Goal_Hints_Test.thy`, `Tests/Test_GoalHints*.thy`). |
+| `../../Agent/agent_hint.ML` | ML side: the Agent Hint Registry — the constant and fact hints (`aoa_notice_constant`, `aoa_reject_constant`, `aoa_notice`, `aoa_reject`; fixtures `Tests/Test_Hint*.thy`), the goal hints (`aoa_notice_goal`; design `docs/GOAL_HINTS.md`; `Tests/Goal_Hints_Test.thy`, `Tests/Test_GoalHints*.thy`) and the auto-Intro exemptions (`aoa_no_auto_intro`; design `docs/AUTO_INTRO_DECISION.md`), the last two over the pattern modules `Goal_Positions` and `Goal_Patterns` at the top of the file. |
+| `../../Agent/agent_auto_intro.ML` | ML side: the automatic Intro decision — the auto-Intro hooks, then the exemptions, then the default (`Auto_Intro.decide`; design `docs/AUTO_INTRO_DECISION.md`; `Tests/Auto_Intro_Decision_Test.thy`; fixtures `Tests/Test_AutoIntroDecision.thy`, `Tests/Test_AutoIntroRelation.thy`, `Tests/Test_AutoIntroPatCompleteness.thy`). |
 
 **User-defined proof operations.** A plugin adds proof operations or tasks to
 AoA without editing it: an Isabelle theory registers them through

@@ -5,11 +5,18 @@ begin
 (* declare [[ML_debugger]] *)
 ML_file "helper.ML"
 
-(* Agent Hint Registry: theory-local notice/reject hints fired when the agent
-   uses a registered constant/fact. Loaded before agent.ML (which calls
-   Agent_Hint.check_ and before agent_packer.ML/agent_server.ML (which pack
-   Agent_Hint.HINT_NOTICE). *)
+(* Agent Hint Registry: the constant and fact hints fired when the agent uses
+   a registered constant or fact, the goal hints (docs/GOAL_HINTS.md) and the
+   auto-Intro exemptions (docs/AUTO_INTRO_DECISION.md), the last two over the
+   shared pattern modules at the top of the file. Loaded before agent.ML
+   (which calls Agent_Hint.check_term and check_fact_refs) and before
+   agent_packer.ML and agent_server.ML (which pack Agent_Hint.HINT_NOTICE). *)
 ML_file "agent_hint.ML"
+
+(* The automatic Intro decision (IsaMini/AoA/docs/AUTO_INTRO_DECISION.md):
+   the auto-Intro hooks, then Agent_Hint's exemptions, then the default. Only
+   agent_server.ML calls it. *)
+ML_file "agent_auto_intro.ML"
 
 (* The parts of MiniLang_Agent.config, then the registry of user operations
    and tasks (docs/USER_OPERATIONS.md): both load before agent.ML, which

@@ -1,0 +1,73 @@
+--------------------------------------------------
+Initial: no automatic Intro under the termination goal
+--------------------------------------------------
+premises:
+  - termination: wf ?R ⟶ (∀i (N :: nat). ¬ N < i ⟶ ((Suc i, N), i, N) ∈ ?R) ⟶ All sum_upto_dom
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: All sum_upto_dom
+proof: empty
+Unfinished Proof! Call command `edit` with action `fill` and target step `1` to provide the proof.
+fill 1: committed 1, failure False
+--------------------------------------------------
+After relation: the wf subgoal bare, the recursive-call subgoal introduced
+--------------------------------------------------
+premises:
+  - termination: wf ?R ⟶ (∀i (N :: nat). ¬ N < i ⟶ ((Suc i, N), i, N) ∈ ?R) ⟶ All sum_upto_dom
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: All sum_upto_dom
+proof:
+  - step id: 1
+    thought: a measure that decreases at the recursive call
+    operation: Tactic
+    tactic: relation
+    arguments: "measure (\<lambda>(i, N). N + 1 - i)"
+    derived subgoals:
+      - goal id: 1.1
+        goal: wf (measure (λ(i, N). N + (1 :: nat) - i))
+        proof: empty
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.1.1` to provide the proof.
+      - goal id: 1.2
+        goal: ∀i (N :: nat). ¬ N < i ⟶ ((Suc i, N), i, N) ∈ measure (λ(i1, N1). N1 + (1 :: nat) - i1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - i: nat
+              - N: nat
+            assuming premises:
+              - premise0: ¬ N < i
+        Unfinished Proof! Call command `edit` with action `fill` and target step `1.2.2` to provide the proof for the following goal.
+        pending proof goal:
+          ((Suc i, N), i, N) ∈ measure (λ(i1, N1). N1 + (1 :: nat) - i1)
+--------------------------------------------------
+Everything closed
+--------------------------------------------------
+premises:
+  - termination: wf ?R ⟶ (∀i (N :: nat). ¬ N < i ⟶ ((Suc i, N), i, N) ∈ ?R) ⟶ All sum_upto_dom
+You can write global declarations by calling command `edit` with action `fill` and target step `global.1`. If you find the background theory is missing any lemmas you need, formalize and prove them here.
+goal: All sum_upto_dom
+proof:
+  - step id: 1
+    thought: a measure that decreases at the recursive call
+    operation: Tactic
+    tactic: relation
+    arguments: "measure (\<lambda>(i, N). N + 1 - i)"
+    derived subgoals:
+      - goal id: 1.1
+        goal: wf (measure (λ(i, N). N + (1 :: nat) - i))
+        proof:
+          - step id: 1.1.1
+            operation: Obvious
+      - goal id: 1.2
+        goal: ∀i (N :: nat). ¬ N < i ⟶ ((Suc i, N), i, N) ∈ measure (λ(i1, N1). N1 + (1 :: nat) - i1)
+        proof:
+          - step id: 1.2.1
+            operation: Intro
+            fixing variables:
+              - i: nat
+              - N: nat
+            assuming premises:
+              - premise0: ¬ N < i
+          - step id: 1.2.2
+            operation: Obvious
+Unfinished nodes: 0
