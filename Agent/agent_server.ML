@@ -43,24 +43,35 @@ val zero_cost: agent_cost
    its locally-timed " time=" field) and the phi-side give-up print. *)
 val string_of_cost : agent_cost -> string
 
-(* Raised by raw_AoA to signal the agent gave up (surrender/refute/resource
-   exhaustion). Exposed so the REPL-app wrapper in the Minilang_AoA_REPL session
-   can catch it after the app moved out of this structure.
+(* Why an agent run gave up, as Python names it: "refute", "surrender",
+   "resource_exhausted", "resource_unavailable" or "technical_failure". *)
+type reason = string
+
+(* Raised by raw_AoA to signal the agent gave up: the reason, the detail — the
+   agent's own words for a refutation or a surrender, a diagnostic line for the
+   others, possibly empty — and the cost. Exposed so the REPL-app wrapper in the
+   Minilang_AoA_REPL session can catch it after the app moved out of this
+   structure.
    Also raised BEFORE any agent starts (with reason "technical_failure" and
    zero_cost) when the goal cannot be brought into an AoA-workable shape —
    e.g. merge_segment (the third preprocessing segment) fails to atomize the
    shared-schematic subgoals. *)
-exception Agent_Give_Up of string * string * agent_cost
+exception Agent_Give_Up of reason * string * agent_cost
 
-(* Failure-dispatch banners (PHI_VC_SOLVER D51): one line per give-up reason;
-   method_error renders a give-up as `banner_of reason ^ "\n" ^ detail`. *)
-val banner_of : string -> string
+(* Failure-dispatch banners (PHI_VC_SOLVER D51): one line per give-up reason. *)
+val banner_of : reason -> string
 
-(* The one rendering, for a method, of what an agent run raises: a give-up
-   under its banner; the engine's Internal_Failure by its own message, since
+(* The message of a give-up, for whoever shows it: the banner over the detail,
+   the banner alone when the detail is empty.  method_error and TAT's construct
+   share it. *)
+val give_up_message : reason -> string -> string
+
+(* The one rendering, for a method, of what an agent run raises: a give-up by
+   give_up_message; the engine's Internal_Failure by its own message, since
    it says the PROVER broke, not that the goal is hard, and nothing between a
    method and Isar renders it; anything else re-raised.  The `aoa` and
-   `hammer_or_aoa` methods and TAT's construct share it. *)
+   `hammer_or_aoa` methods call it; TAT's construct for the engine's failure
+   alone, a give-up being its product. *)
 val method_error : exn -> 'a
 
 (* The Minilang configuration shared by live agent runs and `aoa_replay` (D35).
@@ -166,7 +177,7 @@ val hammer_or_AoA' :
 
 (* Body of `by hammer_or_aoa` (registered in Minilang_AoA.thy): hammer_or_AoA
    with async_mode = Sync, stores per config.  Renders every give-up reason
-   through banner_of; agent_cost goes to plain tracing (§6.2). *)
+   through give_up_message; agent_cost goes to plain tracing (§6.2). *)
 val hammer_or_aoa_method : thm list -> context_state -> context_state Seq.result Seq.seq
 
 (* The blob of a stored proof -- base64 of msgpack (split script, op stream) --
@@ -217,7 +228,9 @@ fun string_of_cost ({input, cache_write, cache_read, output, cost, tool_calls,
     " model_time=", Real.fmt (StringCvt.FIX (SOME 2)) model_time, "s",
     " quota_wait_time=", Real.fmt (StringCvt.FIX (SOME 2)) quota_wait_time, "s"]
 
-exception Agent_Give_Up of string * string * agent_cost
+type reason = string
+
+exception Agent_Give_Up of reason * string * agent_cost
 
 fun banner_of "refute" =
       "Refuted: the proof agent found this proof obligation does not hold:"
@@ -232,7 +245,10 @@ fun banner_of "refute" =
   | banner_of reason =
       "The proof agent gave up for an unrecognized reason (" ^ reason ^ "):"
 
-fun method_error (Agent_Give_Up (reason, detail, _)) = error (banner_of reason ^ "\n" ^ detail)
+fun give_up_message reason "" = banner_of reason
+  | give_up_message reason detail = banner_of reason ^ "\n" ^ detail
+
+fun method_error (Agent_Give_Up (reason, detail, _)) = error (give_up_message reason detail)
   | method_error (Phi_Sledgehammer_Solver.Auto_Fail (Phi_Sledgehammer_Solver.Internal_Failure msg)) =
       error msg
   | method_error exn = Exn.reraise exn
@@ -2389,7 +2405,7 @@ fun hammer_or_AoA args ctxt sequent =
    in (Future.map snd fut, sequent') end
 
 (* `by hammer_or_aoa` ≈ hammer_or_AoA (§2.3); always async_mode = Sync.  All five
-   give-up reasons render through the one banner_of (§6.2); the core layers
+   give-up reasons render through the one give_up_message (§6.2); the core layers
    throw only structured exceptions; agent_cost at the method layer goes to
    plain tracing.  The text future is deliberately dropped — the text was
    already stored inside hammer_or_AoA; do not join it. *)
