@@ -3,16 +3,19 @@
 interaction forks, its default model and its usage per exec.
 
 Every option precedes the subcommand (codex-cli 0.163.0 refuses ``-s`` after
-``resume`` or ``fork``). An interaction fork runs as an ephemeral
+``resume`` or ``fork``), and every command ends in ``-``: the prompt goes to
+codex's stdin, so no command-line limit bounds it. An interaction fork runs as an ephemeral
 ``codex exec fork`` of the thread its parent forks from, and builds its own
 commands: a fork launched from a fork forks that same thread without any shared
 lock, and sibling forks run at once. A session records its thread id at
 ``thread.started``, before any tool call can launch a fork; ``_codex_loop``
 clears the id and its usage total on entry, on Refresh and on Restart; an
-interaction fork keeps the id and the usage total it inherited. A fork's later
-attempts resend the question the fork was last shown, then the reminder; a
-transient error forks the thread afresh. A fork is advertised the MCP tools of
-the session that launched it. With no model in the driver string, the model and
+interaction fork keeps the id and the usage total it inherited. A fork's attempts
+send the question the fork was last shown and the results of its own searches, a
+later attempt with the reminder after them; after a transient error the thread is
+forked afresh with the question and the searches, no reminder. A fork is advertised
+the MCP tools of the session that launched it, and the dispatch tools refuse it at
+their own door. With no model in the driver string, the model and
 reasoning effort are the Codex configuration's (``config.toml``), each falling
 back to the class constant; a model in the driver string wins.
 ``turn.completed`` reports the thread's total, so an exec records the growth
@@ -166,16 +169,25 @@ def fake_exec(fn):
         Codex_Driver._run_codex_exec = real
 
 
-# A fake codex: prints `thread.started` with the id it is given; `--tool` prints
-# one MCP tool call; `--sentinel PATH` waits for that file; then prints
-# `turn.completed` with the thread total `--usage input,cached,output[,cache_write]`
-# (default 7,2,1,0), or nothing more under `--abort` (an exec ended by an
-# interrupt).
+# A fake codex: under `--config-error` fails before reading anything, as codex does
+# on a bad configuration; else reads the prompt from stdin as codex does under `-`
+# (`--echo PATH` writes it to that file); prints `thread.started` with the id it is
+# given; `--tool` prints one MCP tool call; `--sentinel PATH` waits for that file;
+# then prints `turn.completed` with the thread total `--usage
+# input,cached,output[,cache_write]` (default 7,2,1,0), or nothing more under
+# `--abort` (an exec ended by an interrupt).
 _FAKE_CODEX = '''\
 import json, os, sys, time
 args = sys.argv[2:]
 def opt(name, default=None):
     return args[args.index(name) + 1] if name in args else default
+if "--config-error" in args:
+    print("Error loading config.toml: unknown field", file=sys.stderr, flush=True)
+    sys.exit(1)
+prompt = sys.stdin.buffer.read().decode("utf-8")
+if opt("--echo"):
+    with open(opt("--echo"), "w", encoding="utf-8") as f:
+        f.write(prompt)
 print(json.dumps({"type": "thread.started", "thread_id": sys.argv[1]}), flush=True)
 if "--tool" in args:
     print(json.dumps({"type": "item.started", "item": {
@@ -230,15 +242,15 @@ def loop_stubs(d, *, unfinished_once: bool):
 
 
 def exec_recorder(d, script: str, thread_ids: list[str], record: list, after_first=None):
-    """Wrap ``d._run_codex_exec``: record ``(cmd, d._codex_session_id)`` at entry,
-    then run the fake codex through the real method with the next thread id;
+    """Wrap ``d._run_codex_exec``: record ``(cmd, prompt, d._codex_session_id)`` at
+    entry, then run the fake codex through the real method with the next thread id;
     ``after_first()`` runs once the first exec has returned."""
     real = Codex_Driver._run_codex_exec
     ids = iter(thread_ids)
 
-    async def wrapped(cmd):
-        record.append((cmd, d._codex_session_id))
-        await real(d, [sys.executable, script, next(ids)])
+    async def wrapped(cmd, prompt):
+        record.append((cmd, prompt, d._codex_session_id))
+        await real(d, [sys.executable, script, next(ids)], prompt)
         if after_first is not None and len(record) == 1:
             after_first()
     d._run_codex_exec = wrapped
@@ -260,15 +272,15 @@ def test_T1_command_shapes():
             fork = direct_fork(major)
             for d, who in ((major, "the major"), (fork, "the fork")):
                 common = d._codex_common_args()
-                exec_cmd = d._build_exec_cmd("p")
-                resume_cmd = d._build_resume_cmd("T", "p")
-                fork_cmd = d._build_fork_cmd("T", "p")
-                check(exec_cmd == ["codex", "exec", *common, "-C", d.working_dir, "p"],
-                      f"{who}: a fresh exec is the options, then the working directory and the prompt")
-                check(resume_cmd == ["codex", "exec", *common, "resume", "T", "p"],
-                      f"{who}: a resume is the options, then `resume`, the thread id and the prompt")
-                check(fork_cmd == ["codex", "exec", *common, "fork", "T", "p"],
-                      f"{who}: a fork is the options, then `fork`, the thread id and the prompt")
+                exec_cmd = d._build_exec_cmd()
+                resume_cmd = d._build_resume_cmd("T")
+                fork_cmd = d._build_fork_cmd("T")
+                check(exec_cmd == ["codex", "exec", *common, "-C", d.working_dir, "-"],
+                      f"{who}: a fresh exec is the options, then the working directory and `-`, the prompt on stdin")
+                check(resume_cmd == ["codex", "exec", *common, "resume", "T", "-"],
+                      f"{who}: a resume is the options, then `resume`, the thread id and `-`")
+                check(fork_cmd == ["codex", "exec", *common, "fork", "T", "-"],
+                      f"{who}: a fork is the options, then `fork`, the thread id and `-`")
                 check(resume_cmd.index("-s") < resume_cmd.index("resume")
                       and fork_cmd.index("-s") < fork_cmd.index("fork"),
                       f"{who}: the sandbox option precedes the subcommand")
@@ -276,7 +288,7 @@ def test_T1_command_shapes():
                       f"{who}: the commands carry the major's instructions file")
             check("--ephemeral" not in major._codex_common_args(),
                   "the major's commands carry no --ephemeral")
-            fork_cmd = fork._build_fork_cmd("T", "p")
+            fork_cmd = fork._build_fork_cmd("T")
             check("--ephemeral" in fork_cmd and fork_cmd.index("--ephemeral") < fork_cmd.index("fork"),
                   "the fork's commands carry --ephemeral, before the subcommand")
             check(endpoint_arg("http://127.0.0.1:1/mcp/main.fork_1") in fork_cmd
@@ -309,8 +321,10 @@ def test_T3_thread_id_known_during_the_exec():
         with codex_major() as major, tempfile.TemporaryDirectory() as tmp:
             script = write_fake_codex(tmp)
             sentinel = os.path.join(tmp, "go")
+            echo = os.path.join(tmp, "prompt.txt")
+            big = "∀x. P x ⟹ 𝗏0 " * 20_000      # longer than a command-line argument may be; Isabelle symbols, one beyond the BMP
             task = asyncio.ensure_future(
-                major._run_codex_exec([sys.executable, script, "T1", "--sentinel", sentinel]))
+                major._run_codex_exec([sys.executable, script, "T1", "--sentinel", sentinel, "--echo", echo], big))
             seen = await wait_until(lambda: major._codex_session_id == "T1")
             check(seen and not task.done(),
                   "the major records its thread id while its exec is still running")
@@ -318,12 +332,23 @@ def test_T3_thread_id_known_during_the_exec():
             await task
             check(usage_totals(major) == (5, 2, 1),
                   "the exec records the turn's usage on the session")
+            with open(echo, encoding="utf-8") as f:
+                check(f.read() == big, "the prompt reaches codex through stdin, in UTF-8, a 300 KB one too")
+            # codex failing before it reads the prompt: the pipe breaks under the write, and
+            # what is reported is codex's own diagnostic, not the broken pipe
+            try:
+                await major._run_codex_exec([sys.executable, script, "T1", "--config-error"], big)
+                raised = None
+            except Exception as e:
+                raised = e
+            check(isinstance(raised, InternalError) and "Error loading config.toml: unknown field" in str(raised),
+                  f"an exec that fails before reading the prompt reports codex's diagnostic (got {raised!r})")
             major._codex_session_id = "P"
             fork = direct_fork(major)
             sentinel = os.path.join(tmp, "go2")
             calls = fork.total_tool_calls
             task = asyncio.ensure_future(
-                fork._run_codex_exec([sys.executable, script, "E1", "--sentinel", sentinel, "--tool"]))
+                fork._run_codex_exec([sys.executable, script, "E1", "--sentinel", sentinel, "--tool"], ""))
             seen = await wait_until(lambda: fork.total_tool_calls > calls)
             check(seen and fork._codex_session_id == "P",
                   "an interaction fork keeps the inherited thread id while its exec runs "
@@ -344,10 +369,10 @@ def test_T4_thread_selection_in_the_loop():
             loop_stubs(major, unfinished_once=True)
             exec_recorder(major, script, ["T1", "T1"], record)
             await major._codex_loop()
-            check([field for _, field in record] == [None, "T1"],
+            check([field for _, _, field in record] == [None, "T1"],
                   "the first exec starts with no thread; the retry turn sees the recorded id")
-            check(record[0][0][-3:] == ["-C", major.working_dir, "init"]
-                  and record[1][0][-3:] == ["resume", "T1", "retry"],
+            check(record[0][0][-3:] == ["-C", major.working_dir, "-"] and record[0][1] == "init"
+                  and record[1][0][-3:] == ["resume", "T1", "-"] and record[1][1] == "retry",
                   "a fresh exec, then `resume T1` with the retry prompt")
             # the fake reports the same thread total (7,2,1) at every turn.completed:
             # a fresh exec records it in full, a resume turn records its growth, 0
@@ -363,8 +388,8 @@ def test_T4_thread_selection_in_the_loop():
                 exec_recorder(major, script, ["T2", "T3"], record,
                               after_first=lambda q=quit: setattr(major, "quit_info", q))
                 await major._codex_loop()
-                check([field for _, field in record] == [None, None]
-                      and record[1][0][-3:] == ["-C", major.working_dir, prompt],
+                check([field for _, _, field in record] == [None, None]
+                      and record[1][0][-3:] == ["-C", major.working_dir, "-"] and record[1][1] == prompt,
                       f"after a {quit.reason} the next exec is fresh and sees no thread id")
                 check(major._codex_session_id == "T3",
                       f"after a {quit.reason} the new thread is recorded")
@@ -384,7 +409,7 @@ def test_T4_thread_selection_in_the_loop():
             loop_stubs(worker, unfinished_once=True)
             exec_recorder(worker, script, ["W1", "W1"], record)
             await worker._codex_loop()
-            check([field for _, field in record] == [None, "W1"] and record[0][0][-3] == "-C"
+            check([field for _, _, field in record] == [None, "W1"] and record[0][0][-3] == "-C"
                   and worker._codex_session_id == "W1",
                   "the worker's first exec is fresh, sees None, and records its own thread, "
                   "which its retry turn resumes")
@@ -405,13 +430,13 @@ def test_T5_fork_attempts():
                 "`mcp__proof__answer_index` tool to submit it.")
 
     def recorder(fork, answer_on: int | None, during_first=None):
-        """Replace the fork's exec: record the command, run ``during_first`` inside
-        the first attempt (as the model's tool calls would run), and answer on
+        """Replace the fork's exec: record ``(cmd, prompt)``, run ``during_first``
+        inside the first attempt (as the model's tool calls would run), and answer on
         attempt ``answer_on``."""
         record: list = []
 
-        async def fake(cmd):
-            record.append(cmd)
+        async def fake(cmd, prompt):
+            record.append((cmd, prompt))
             if during_first is not None and len(record) == 1:
                 await during_first()
             if len(record) == answer_on:
@@ -427,47 +452,47 @@ def test_T5_fork_attempts():
             major._codex_session_id = "P"
             fork = direct_fork(major, _StagedProbe(), "Q")
             record = recorder(fork, 1)
-            await fork._run_fork_attempts("Q", "[t]")
-            check(record == [fork._build_fork_cmd("P", fork_prompt_for("Q"))],
+            await fork._run_fork_attempts("[t]")
+            check(record == [(fork._build_fork_cmd("P"), fork_prompt_for("Q"))],
                   "attempt 1 forks the inherited thread with the question as launched")
-            # the fork searches during attempt 1 (`yes_recursive`): the results of its `query`
-            # calls, taken down by the executor, are resent on attempt 2 between the question
-            # and the reminder, under the header
+            # the fork searches during attempt 1 (`yes_recursive`): the results of its successful
+            # `query` calls, taken down by the executor — a failed call's error is not —, are
+            # resent on attempt 2 between the question and the reminder, under the header
             fork = direct_fork(major, _StagedProbe(), "Q")
             fork.fork_pending.interaction.fork_allowed_tools = [TOOL_ANSWER_INDEX, TOOL_SEARCH]  # type: ignore[union-attr]
             executor = mcp.ToolExecutor(fork)
             fork.check_budget = lambda: False
             executor._should_loop_restart = lambda session, name, arguments: False
-            found = iter(["found: lemma_a", "found: lemma_b"])
+            answers = iter([("found: lemma_a", False), ("bad context_at", True), ("found: lemma_b", False)])
 
             async def fake_query(session, arguments):
-                return (next(found), False)
+                return next(answers)
             searched: list = []
 
-            async def two_searches():
-                for _ in range(2):
+            async def three_searches():
+                for _ in range(3):
                     searched.append(await executor.execute("query", {"queries": []}))
             real_query = mcp._query_tool_logic
             mcp._query_tool_logic = fake_query
             try:
-                record = recorder(fork, 2, during_first=two_searches)
-                await fork._run_fork_attempts("Q", "[t]")
+                record = recorder(fork, 2, during_first=three_searches)
+                await fork._run_fork_attempts("[t]")
             finally:
                 mcp._query_tool_logic = real_query
-            check(searched == [("found: lemma_a", False), ("found: lemma_b", False)],
-                  "the fork's searches answer what the query tool answers")
+            check(searched == [("found: lemma_a", False), ("bad context_at", True), ("found: lemma_b", False)],
+                  "the fork's searches answer what the query tool answers, the failed one too")
             check(len(record) == 2
-                  and record[1] == fork._build_fork_cmd("P", fork_prompt_for("Q")
-                                                        + "\n\nResults of the searches you ran before this retry:\n"
-                                                        "found: lemma_a\n\nfound: lemma_b" + reminder),
+                  and record[1] == (fork._build_fork_cmd("P"),
+                                    fork_prompt_for("Q") + "\n\nResults of the searches you ran before this retry:\n"
+                                    "found: lemma_a\n\nfound: lemma_b" + reminder),
                   "attempt 2 resends the question, the results of the fork's searches, then the reminder")
             # the interaction re-prompts itself during attempt 1 (as Interaction_Memorize
             # does when it advances its stage): attempt 2 resends that question
             fork = direct_fork(major, _ContinuingProbe(ContinuingInteraction(new_prompt="stage 2")), "Q")
             record = recorder(fork, 2, during_first=answer_call(fork))
-            await fork._run_fork_attempts("Q", "[t]")
+            await fork._run_fork_attempts("[t]")
             check(len(record) == 2
-                  and record[1] == fork._build_fork_cmd("P", fork_prompt_for("stage 2") + reminder),
+                  and record[1] == (fork._build_fork_cmd("P"), fork_prompt_for("stage 2") + reminder),
                   "attempt 2 forks the thread again and resends the question the fork was "
                   "last shown, then the reminder")
             # the interaction is replaced during attempt 1: attempt 2 resends the
@@ -476,29 +501,29 @@ def test_T5_fork_attempts():
             later.stage = 3
             fork = direct_fork(major, _ContinuingProbe(ContinuingInteraction(new_interaction=later)), "Q")
             record = recorder(fork, 2, during_first=answer_call(fork))
-            await fork._run_fork_attempts("Q", "[t]")
+            await fork._run_fork_attempts("[t]")
             check(len(record) == 2 and fork.fork_pending.interaction is later  # type: ignore[union-attr]
-                  and record[1] == fork._build_fork_cmd("P", fork_prompt_for("stage 3") + reminder),
+                  and record[1] == (fork._build_fork_cmd("P"), fork_prompt_for("stage 3") + reminder),
                   "after a replacement, attempt 2 resends the replacement's question, then the reminder")
             # never answers, nothing shown anew: the question as launched, never rendered again
             fork = direct_fork(major, _StagedProbe(), "Q")
             record = recorder(fork, None)
             try:
-                await fork._run_fork_attempts("Q", "[t]")
+                await fork._run_fork_attempts("[t]")
                 check(False, "a fork that never answers raises")
             except InternalError as e:
                 check("[t] fork did not submit an answer after 4 attempts" in str(e),
                       "a fork that never answers raises after the fourth attempt")
             check(len(record) == 4
-                  and all(c == fork._build_fork_cmd("P", fork_prompt_for("Q") + reminder)
+                  and all(c == (fork._build_fork_cmd("P"), fork_prompt_for("Q") + reminder)
                           for c in record[1:]),
                   "every later attempt resends the question as launched, then the reminder")
             fork = direct_fork(major, prompt="Q")
             fork._codex_session_id = None
             record = recorder(fork, 1)
-            await fork._run_fork_attempts("Q", "[t]")
-            check(record == [fork._build_exec_cmd(fork_prompt_for("Q"))] and "--ephemeral" in record[0]
-                  and "fork" not in record[0],
+            await fork._run_fork_attempts("[t]")
+            check(record == [(fork._build_exec_cmd(), fork_prompt_for("Q"))] and "--ephemeral" in record[0][0]
+                  and "fork" not in record[0][0],
                   "with no thread to fork, the attempt is a fresh ephemeral exec")
     asyncio.run(body())
 
@@ -514,8 +539,8 @@ def test_T6_nested_fork_and_T9_totals():
             record: list = []
             outer_after_inner: list = []
 
-            async def fake(self, cmd):
-                record.append((self._fork_name, cmd))
+            async def fake(self, cmd, prompt):
+                record.append((self._fork_name, cmd, prompt))
                 if self._fork_name == "main.fork_1":
                     # a `query` inside the outer fork's exec launches a fork
                     inner = await self._do_fork(_Probe(), "inner question")
@@ -533,15 +558,15 @@ def test_T6_nested_fork_and_T9_totals():
                     return
             check(result == ("outer", "inner answer"),
                   "a fork launched from a fork answers, and the outer fork returns")
-            check([name for name, _ in record] == ["main.fork_1", "main.fork_1.fork_1"],
+            check([name for name, _, _ in record] == ["main.fork_1", "main.fork_1.fork_1"],
                   "the outer fork's exec started first, and the inner fork's exec ran inside it")
             inner_cmd = record[1][1]
-            check(inner_cmd[-3:] == ["fork", "T0", fork_prompt_for("inner question")],
+            check(inner_cmd[-3:] == ["fork", "T0", "-"] and record[1][2] == fork_prompt_for("inner question"),
                   "the inner fork forks the major's thread")
             check(endpoint_arg("http://127.0.0.1:1/mcp/main.fork_1.fork_1") in inner_cmd
                   and "--ephemeral" in inner_cmd,
                   "the inner fork is ephemeral and uses its own MCP endpoint")
-            check(record[0][1][-3:] == ["fork", "T0", fork_prompt_for("outer question")],
+            check(record[0][1][-3:] == ["fork", "T0", "-"] and record[0][2] == fork_prompt_for("outer question"),
                   "the outer fork forks the major's thread")
             # T9: the inner fork's usage reaches the major through the outer fork
             check(usage_totals(major) == (120, 80, 10),
@@ -557,7 +582,7 @@ def test_T7_sibling_forks_run_concurrently():
             major._codex_session_id = "T0"
             barrier = asyncio.Barrier(2)
 
-            async def fake(self, cmd):
+            async def fake(self, cmd, prompt):
                 # both forks must be inside their exec at the same time
                 await asyncio.wait_for(barrier.wait(), 5)
                 self.fork_pending.answer.set_result(self._fork_name)
@@ -579,16 +604,20 @@ def test_T8_transient_error_forks_afresh():
             major._codex_session_id = "T0"
             calls: list = []
 
-            async def fake(self, cmd):
-                calls.append(cmd)
+            async def fake(self, cmd, prompt):
+                calls.append((cmd, prompt))
                 if len(calls) == 1:
+                    self.role.searches.append("found: x")       # the fork searched, then its exec failed
                     raise _TransientError("boom")
                 self.fork_pending.answer.set_result(1)
             with fake_exec(fake):
                 result = await asyncio.wait_for(major._do_fork(_Probe(), "q"), 10)
-            check(result == 1 and len(calls) == 2
-                  and calls[1][-3:] == ["fork", "T0", fork_prompt_for("q")],
-                  "after a transient error the thread is forked afresh with the full prompt")
+            check(result == 1 and len(calls) == 2 and calls[0][1] == fork_prompt_for("q")
+                  and calls[1][0][-3:] == ["fork", "T0", "-"]
+                  and calls[1][1] == fork_prompt_for("q")
+                  + "\n\nResults of the searches you ran before this retry:\nfound: x",
+                  "after a transient error the thread is forked afresh with the question and the results "
+                  "of the fork's searches, no reminder")
     asyncio.run(body())
 
 
@@ -616,6 +645,16 @@ def test_T10_fork_tools_are_those_of_the_session_that_launched_it():
                 check(isinstance(raised, InternalError) and "called by an interaction fork" in str(raised),
                       f"{logic.__name__} run by a fork, past the permission check, raises InternalError"
                       f" (got {type(raised).__name__})")
+            # the guard keeps the major and a worker — a session with a parent — out of its way: both
+            # reach the tool's own first refusal
+            worker = Codex_Driver(parent=major, role=Role_Worker(target=SimpleNamespace(id="1")))  # type: ignore[arg-type]
+            for who, s in (("the major", major), ("a worker", worker)):
+                try:
+                    outcome = await mcp._subagent_tool_logic(s, {"step_id": ""})
+                except Exception as e:
+                    outcome = e
+                check(outcome == ("`step_id` is required — specify which step to delegate.", True),
+                      f"{who} passes the guard of _subagent_tool_logic (got {outcome!r})")
             major._can_offer_dispatch_tools = lambda: False
             check(TOOL_SUBAGENT not in mcp._tool_schemas_for(inner)
                   and mcp._tool_schemas_for(inner) == mcp._tool_schemas_for(major),
@@ -672,16 +711,16 @@ def test_T12_usage_is_the_growth_of_the_thread_total():
             major.log_cost = lambda msg: costs.append(msg)
             major._log_meta = lambda event_type, **data: events.append(event_type)
             py = sys.executable
-            await major._run_codex_exec([py, script, "T1", "--usage", "7,2,1"])
-            await major._run_codex_exec([py, script, "T1", "--abort"])
-            await major._run_codex_exec([py, script, "T1", "--usage", "17,6,3"])
+            await major._run_codex_exec([py, script, "T1", "--usage", "7,2,1"], "")
+            await major._run_codex_exec([py, script, "T1", "--abort"], "")
+            await major._run_codex_exec([py, script, "T1", "--usage", "17,6,3"], "")
             check(usage_totals(major) == (11, 6, 3),
                   "a later exec of the thread records the growth of the thread total "
                   "(input without the cached part)")
             check(costs == ["input=7 cached=2 output=1", "input=10 cached=4 output=2"]
                   and events.count("USAGE") == 2,
                   "an exec without turn.completed writes neither a cost line nor a usage row")
-            await major._run_codex_exec([py, script, "T1", "--usage", "27,8,4,4"])
+            await major._run_codex_exec([py, script, "T1", "--usage", "27,8,4,4"], "")
             check(usage_totals(major) == (15, 8, 4) and major.total_cache_creation_input_tokens == 4,
                   "cache-written input is recorded apart from the uncached input")
             # an interaction fork keeps the inherited total: each attempt is a fresh
@@ -689,8 +728,8 @@ def test_T12_usage_is_the_growth_of_the_thread_total():
             major._codex_session_id = "P"
             fork = direct_fork(major)
             fork.log_cost = lambda msg: costs.append(msg)
-            await fork._run_codex_exec([py, script, "E1", "--usage", "34,10,7,4"])
-            await fork._run_codex_exec([py, script, "E2", "--usage", "31,8,5,4"])
+            await fork._run_codex_exec([py, script, "E1", "--usage", "34,10,7,4"], "")
+            await fork._run_codex_exec([py, script, "E2", "--usage", "31,8,5,4"], "")
             check(usage_totals(fork) == (9, 2, 4)
                   and costs[-2:] == ["input=7 cached=2 output=3", "input=4 cached=0 output=1"],
                   "each fork attempt records its growth over the inherited total")

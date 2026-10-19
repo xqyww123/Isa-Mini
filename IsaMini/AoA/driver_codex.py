@@ -341,11 +341,11 @@ class Codex_Driver(LMDriver):
                 self._refresh_summary = None
             while True:
                 if self._codex_session_id is None:
-                    cmd = self._build_exec_cmd(prompt)
+                    cmd = self._build_exec_cmd()
                 else:
-                    cmd = self._build_resume_cmd(self._codex_session_id, prompt)
+                    cmd = self._build_resume_cmd(self._codex_session_id)
 
-                await self._run_codex_exec(cmd)
+                await self._run_codex_exec(cmd, prompt)
 
                 if self.check_budget():
                     break
@@ -455,17 +455,19 @@ class Codex_Driver(LMDriver):
 
     def _codex_exec_cmd(self, *tail: str) -> list[str]:
         # Every option precedes any subcommand: `resume` and `fork` refuse `-s`
-        # after them (codex-cli 0.163.0).
-        return ["codex", "exec", *self._codex_common_args(), *tail]
+        # after them (codex-cli 0.163.0). The trailing `-` is the prompt: codex reads
+        # it from stdin, which `_run_codex_exec` writes, so no command-line length
+        # limit bounds it.
+        return ["codex", "exec", *self._codex_common_args(), *tail, "-"]
 
-    def _build_exec_cmd(self, prompt: str) -> list[str]:
-        return self._codex_exec_cmd("-C", self.working_dir, prompt)
+    def _build_exec_cmd(self) -> list[str]:
+        return self._codex_exec_cmd("-C", self.working_dir)
 
-    def _build_resume_cmd(self, session_id: str, prompt: str) -> list[str]:
-        return self._codex_exec_cmd("resume", session_id, prompt)
+    def _build_resume_cmd(self, session_id: str) -> list[str]:
+        return self._codex_exec_cmd("resume", session_id)
 
-    def _build_fork_cmd(self, session_id: str, prompt: str) -> list[str]:
-        return self._codex_exec_cmd("fork", session_id, prompt)
+    def _build_fork_cmd(self, session_id: str) -> list[str]:
+        return self._codex_exec_cmd("fork", session_id)
 
     # ------------------------------------------------------------------
     # Subprocess execution
@@ -485,20 +487,21 @@ class Codex_Driver(LMDriver):
             raise _TransientError(message)
         raise InternalError(f"Codex CLI failed: {message}")
 
-    async def _run_codex_exec(self, cmd: list[str]) -> None:
-        # One exec is one turn: run it, keep the model-time clock (stopped while a
-        # tool call runs) and record the turn's usage.
+    async def _run_codex_exec(self, cmd: list[str], prompt: str) -> None:
+        # One exec is one turn: run it with the prompt on its stdin, keep the
+        # model-time clock (stopped while a tool call runs) and record the turn's
+        # usage.
         self._model_time_start = time()
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.working_dir,
                 env={**os.environ, "CODEX_HOME": self._codex_home_dir},
-                # codex 0.141.0 reads stdin (appends it as a <stdin> block) even
-                # when the prompt is passed as an argv argument, and blocks until
-                # EOF. Hand it an immediate EOF so an inherited, non-EOF stdin in
-                # the AoA server process can never hang the codex subprocess.
-                stdin=asyncio.subprocess.DEVNULL,
+                # The prompt's pipe: codex reads stdin to EOF under the command's
+                # trailing `-`, and feed_prompt below writes the prompt and closes the
+                # pipe, so the EOF always comes and the AoA server process's own stdin
+                # is never inherited.
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024,
@@ -512,6 +515,19 @@ class Codex_Driver(LMDriver):
         stderr_lines: list[str] = []
         turn_failure: str | None = None
 
+        async def feed_prompt():
+            # Beside the reading of stdout: a prompt longer than the pipe's buffer
+            # drains only while codex runs; codex exiting before it has read it all
+            # closes the pipe, and its exit status is read below.
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(prompt.encode("utf-8"))
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                proc.stdin.close()
+
         async def drain_stderr():
             assert proc.stderr is not None
             async for line in proc.stderr:
@@ -520,6 +536,7 @@ class Codex_Driver(LMDriver):
                     stderr_lines.append(text)
                     del stderr_lines[:-50]
 
+        stdin_task = asyncio.create_task(feed_prompt())
         stderr_task = asyncio.create_task(drain_stderr())
         try:
             assert proc.stdout is not None
@@ -575,6 +592,7 @@ class Codex_Driver(LMDriver):
                         self.warn_AoA_opr(f"Turn failed: {turn_failure}")
             returncode = await proc.wait()
             await stderr_task
+            await stdin_task
         finally:
             # On cancellation (e.g. Isabelle interrupt) proc.wait() never
             # returned: kill the whole process group so codex and its children
@@ -585,10 +603,11 @@ class Codex_Driver(LMDriver):
                 except ProcessLookupError:
                     pass
             self._exec_process = None
-            if not stderr_task.done():
-                stderr_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stderr_task
+            for task in (stdin_task, stderr_task):
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
 
         if turn_failure is not None:
             self._raise_codex_failure(turn_failure)
@@ -662,7 +681,7 @@ class Codex_Driver(LMDriver):
         try:
           while True:
             try:
-                await fork._run_fork_attempts(prompt_text, tag)
+                await fork._run_fork_attempts(tag)
                 break
             except _QuotaError as e:
                 self.warn_AoA_opr(f"{tag} Quota exhausted, waiting 20min to retry"
@@ -693,27 +712,28 @@ class Codex_Driver(LMDriver):
             prompt += f"\nAnswer the question above by calling the `{answer_tool}` tool."
         return prompt
 
-    async def _run_fork_attempts(self, prompt_text: str, tag: str) -> None:
+    async def _run_fork_attempts(self, tag: str) -> None:
         # Run by the interaction fork. Each attempt forks the inherited thread
-        # afresh (an ephemeral thread cannot be resumed), so a later attempt resends
-        # the question the fork was last shown, the results of its own searches,
-        # then the reminder: the other drivers' model sees all of it in its
-        # conversation.
+        # afresh (an ephemeral thread cannot be resumed), so every attempt sends what
+        # the role holds -- the question the fork was last shown, then the results of
+        # its own searches --, a later attempt with the reminder after them, as the
+        # other drivers' model sees them in its conversation. A re-entry after a
+        # transient or quota error (`_run_fork`) starts again at the first attempt:
+        # the question and the searches, no reminder.
         role = self.role
         assert isinstance(role, Role_Interaction)
         for attempt in range(self._FORK_ANSWER_MAX_ATTEMPTS):
             pending = role.pending
-            prompt = self._fork_prompt(
-                pending.interaction, prompt_text if attempt == 0 else role.prompt)
+            prompt = self._fork_prompt(pending.interaction, role.prompt)
+            if role.searches:
+                prompt += "\n\n" + self._FORK_SEARCHES_HEADER + "\n" + "\n\n".join(role.searches)
             if attempt > 0:
-                if role.searches:
-                    prompt += "\n\n" + self._FORK_SEARCHES_HEADER + "\n" + "\n\n".join(role.searches)
                 prompt += ("\n\nYou haven't submitted your answer. Call the "
                            f"`{self.tool_name(pending.interaction.answer_tool_name)}` "
                            "tool to submit it.")
-            cmd = (self._build_exec_cmd(prompt) if self._codex_session_id is None
-                   else self._build_fork_cmd(self._codex_session_id, prompt))
-            await self._run_codex_exec(cmd)
+            cmd = (self._build_exec_cmd() if self._codex_session_id is None
+                   else self._build_fork_cmd(self._codex_session_id))
+            await self._run_codex_exec(cmd, prompt)
             if pending.answer.done():
                 return
             self.log_interaction(
