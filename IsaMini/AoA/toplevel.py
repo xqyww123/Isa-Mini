@@ -320,8 +320,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
                     f"falling back to 'no'. "
                     f"Known: {sorted(INTERACTIVE_RETRIEVAL_MAP)}")
             interactive_retrieval = InteractiveRetrievalMode.NO
-        # Past the cache, about to enter the agent.  Sits inside this `else`, so
-        # the test driver -- handled by the branch above -- reports nothing.
+        # Past the proof store and the engine, both on the ML side, about to enter
+        # the agent.  Sits inside this `else`, so the test driver -- handled by
+        # the branch above -- reports nothing.
         # Note this says "entered the agent", NOT "spent model tokens": a user
         # who has not logged in to their model provider still gets here.
         usage_count.report(usage_count.EVENT_AGENT)

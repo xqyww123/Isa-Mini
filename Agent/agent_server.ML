@@ -62,8 +62,8 @@ exception Agent_Give_Up of reason * string * agent_cost
 val banner_of : reason -> string
 
 (* The message of a give-up, for whoever shows it: the banner over the detail,
-   the banner alone when the detail is empty.  method_error and TAT's construct
-   share it. *)
+   the banner alone when the detail is empty.  method_error, TAT's construct and
+   phi's obligation solver (reasoners.ML) share it. *)
 val give_up_message : reason -> string -> string
 
 (* The one rendering, for a method, of what an agent run raises: a give-up by

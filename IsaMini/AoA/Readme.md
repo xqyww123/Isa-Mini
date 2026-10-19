@@ -26,6 +26,9 @@ theorem sqrt2_not_rational: "sqrt 2 ∉ ℚ" by aoa
 end
 ```
 
+Behind the scenes, `by aoa` first looks the goal up in the proof cache (section 4.2),
+then tries Sledgehammer, and only if both come up empty does it start the agent.
+
 ## 3. Choosing a model and providing credentials
 
 By default, AoA drives Claude through the Claude Code CLI, so before first use you need to log in by running:
@@ -35,7 +38,7 @@ claude '/login'
 But AoA also supports other LLMs; In short, switching models is a single declare:
 ```isabelle
 theory Scratch
-  imports Complex_Main Minilang_Agent.Minilang_Agent
+  imports Complex_Main Minilang_AoA.Minilang_AoA
 begin
 
 declare [[AoA_driver = "OpenAI.gpt-5.5-high"]]
@@ -43,7 +46,7 @@ theorem sqrt2_not_rational: "sqrt 2 ∉ ℚ" by aoa
 
 end
 ```
-which runs the proof with GPT-5.5 at high reasoning effort. The configuration option `AoA_driver` takes a string of the form `Driver` or `Driver.option`, where `Driver` is currently one of `ClaudeCode`, `ChatGPT`, `Codex-API`, or `DeepSeek`. The sections below describe each driver and the options it accepts.
+which has the agent use GPT-5.5 at high reasoning effort. The configuration option `AoA_driver` takes a string of the form `Driver` or `Driver.option`, where `Driver` is currently one of `ClaudeCode`, `OpenAI`, `Codex-API`, or `DeepSeek`. The sections below describe each driver and the options it accepts.
 
 To change the default for a whole installation instead of one theory, set the Isabelle settings variable `AOA_DRIVER` (same `Driver` or `Driver.option` string) in `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`; a `declare [[AoA_driver = ...]]` in a theory still takes precedence.
 
@@ -103,7 +106,7 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, then restart Isabell
 
 ### 3.4 DeepSeek
 
-The option is V4-pro or V4-flash (default V4-flash), or a full model id:
+The option is V4-pro or V4-flash (default V4-pro), or a full model id:
 ```isabelle
 declare [[AoA_driver = "DeepSeek"]]                    (* default: deepseek-v4-pro *)
 declare [[AoA_driver = "DeepSeek.V4-pro"]]             (* deepseek-v4-pro *)
@@ -122,8 +125,10 @@ to `$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`, and restart Isabelle
 
 ### 4.1 Logs
 
-Every `by aoa` invocation writes a full record — the model's reasoning, its tool
-calls, and each proof operation — under `$(isabelle getenv -b ISABELLE_HOME_USER)/log/AoA/`
+Whenever `by aoa` runs the agent, it writes a full record — the model's reasoning,
+its tool calls, and each proof operation — under `$(isabelle getenv -b ISABELLE_HOME_USER)/log/AoA/`.
+If the proof cache or Sledgehammer already takes care of the goal, the agent never
+runs and no log is written.
 
 Change the directory, or set it to `""` to turn logging off:
 ```isabelle
@@ -158,7 +163,8 @@ declare [[AoA_enable_read_memory = false]]   (* do not retrieve stored experienc
 
 Both default to `true`. Turning retrieval off requires turning recording off as
 well (recording checks new experience against the stored ones, which would read
-them back); `by aoa` refuses the other combination. With retrieval off the agent
+them back); `by aoa` refuses the other combination whenever it has to run the
+agent. With retrieval off the agent
 is never shown the stored experience, so a run is unaffected by what earlier runs
 learnt — for benchmarks, use both `false`.
 
@@ -170,12 +176,12 @@ documented separately:
 
 ### 4.5 Usage count
 
-Each time `by aoa` runs, AoA sends one small anonymous report, so that we can see
-how much AoA is being used. It contains three things: whether the proof was
-replayed from the cache or actually run by the agent, the AoA version, and the
-operating system. Nothing that identifies you or your work is stored — no account,
-no machine identifier, no file names, no goals, no proof text. The reports are only
-ever aggregated into a daily tally.
+Each time `by aoa` runs the agent, AoA sends one small anonymous report, so that we
+can see how much AoA is being used. No report is sent for a goal that the proof
+cache or Sledgehammer takes care of. The report contains three things: a note that
+the agent ran, the AoA version, and the operating system. Nothing that identifies
+you or your work is stored — no account, no machine identifier, no file names, no
+goals, no proof text. The reports are only ever aggregated into a daily tally.
 
 To switch it off, add
 

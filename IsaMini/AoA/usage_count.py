@@ -1,9 +1,10 @@
-"""Usage count -- how often `by aoa` is used.
+"""Usage count -- how often `by aoa` runs the agent.
 
-One anonymous HTTP report per execution of the `by aoa` proof method, sent to a
-Cloudflare Worker that keeps a per-day tally.  No identifier of any kind is sent:
-the payload is the event kind, the AoA version and `sys.platform`, and nothing
-else.
+One anonymous HTTP report each time `by aoa` runs the agent, sent to a
+Cloudflare Worker that keeps a per-day tally.  A goal that the proof store or
+the engine (Sledgehammer) settles never reaches the Python side, so no report
+is sent for it.  No identifier of any kind is sent: the payload is the event
+kind, the AoA version and `sys.platform`, and nothing else.
 
 Two rules govern everything here:
 
@@ -31,7 +32,8 @@ ENDPOINT = "https://aoa.qiyuan.me/usage_counter"
 _TIMEOUT = 3.0
 
 # The single event kind, mirroring the Worker's allow-list.  `agent` is a `by aoa`
-# that entered the proof agent.  Replays are not reported.
+# that entered the proof agent.  A goal the proof store or the engine
+# (Sledgehammer) settles never reaches this side and is not reported.
 EVENT_AGENT = "agent"
 
 
@@ -94,7 +96,7 @@ async def _send(event: str) -> None:
 
 
 def report(event: str) -> None:
-    """Report one `by aoa` execution.  Returns immediately; never raises.
+    """Report one run of the agent.  Returns immediately; never raises.
 
     Fire-and-forget by design: the report is not awaited and is not retried, so a
     process that exits first simply loses it.  The attached RPC host dies by
