@@ -43,13 +43,15 @@ ML_file "agent_server.old.ML"
 ML_file "tactic.ML.old" *)
 
 method_setup aoa = \<open>
-  (* CONTEXT_METHOD prepends `ALLGOALS Goal.conjunction_tac`, splitting a Pure
+  (* `aoa` and `hammer_or_aoa` are one method under two names: the hammer_or_AoA
+     facade (§2.3) — store lookup, engine search, then the AoA agent.
+     CONTEXT_METHOD prepends `ALLGOALS Goal.conjunction_tac`, splitting a Pure
      meta-conjunction goal `A &&& B` (as produced by multi-`shows` why3 VCs)
      into separate subgoals before the agent runs — matching how every stock
-     Isabelle method handles `&&&`. A raw `K MiniLang_Agent_AoA.method` skips
-     this, leaving the agent a `&&&` goal that its object-level conjunction
+     Isabelle method handles `&&&`. A raw `K MiniLang_Agent_AoA.hammer_or_aoa_method`
+     skips this, leaving the agent a `&&&` goal that its object-level conjunction
      ops (SplitConjs/conjI) cannot handle. *)
-  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.method))
+  Scan.succeed (K (Method.CONTEXT_METHOD MiniLang_Agent_AoA.hammer_or_aoa_method))
 \<close>
 
 method_setup hammer_or_aoa = \<open>

@@ -594,8 +594,8 @@ val hammer_or_AoA :
   -> string future * thm
 ```
 
-`method` and `hammer_or_aoa_method` — the bodies of `by aoa` and
-`by hammer_or_aoa` — keep their signatures and pass `usual` and `[]`: a
+`hammer_or_aoa_method` — the body of `by aoa` and of `by hammer_or_aoa` —
+keeps its signature and passes `usual` and `[]`: a
 proof written by hand runs with the resident operations only. Only a
 caller in ML selects. An SML record argument is given exactly its declared
 fields, so every caller that writes one out changes with it: `AoA_REPL_App`

@@ -1,8 +1,9 @@
 (* The AoA REPL-server app: registers "Minilang.AoA". Moved here out of
    Agent/agent_server.ML so that the Minilang_AoA session no longer depends on
    Isa_REPL. This session (Minilang_AoA_REPL) imports Minilang_AoA + Isa_REPL;
-   the app just delegates to MiniLang_Agent_AoA.run_AoA (the same caching
-   wrapper that `by aoa` uses), so no proof logic lives here.
+   the app just delegates to MiniLang_Agent_AoA.run_AoA (the proof-store
+   wrapper around the agent; `by aoa` puts the engine before it), so no proof
+   logic lives here.
 
    Test bypass: when the driver is `test.…` the app passes
    read_store = SOME false — the ~372 snapshot cases drive the model BY HAND

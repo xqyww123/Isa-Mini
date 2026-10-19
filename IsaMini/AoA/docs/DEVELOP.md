@@ -321,8 +321,12 @@ through `print_proof_scope`; the `recall` tool reads it back.
 ## 8. Entry, RPC, and caching
 
 - `by aoa` → the `method_setup aoa` in `Agent/Minilang_AoA.thy`; method body is
-  `MiniLang_Agent_AoA.method` in `Agent/agent_server.ML`. Default driver from config
-  `AoA_driver`.
+  `MiniLang_Agent_AoA.hammer_or_aoa_method` in `Agent/agent_server.ML` — the proof
+  store looked up, then the engine (Sledgehammer and friends), then the AoA agent;
+  `by hammer_or_aoa` is the same method under its older name. Under a test driver
+  naming its case (`test.<case>`) the engine is skipped: the case is the agent. The
+  bare `test` driver keeps the engine and never reaches a model. Default driver from
+  config `AoA_driver`.
 - AoA is **one long-lived RPC command** `IsaMini.AoA` (ML builds `aoa_cmd` in `agent_server.ML`;
   Python handler `IsaMini_AoA`, decorated `@isabelle_remote_procedure("IsaMini.AoA")` in
   `toplevel.py`). Within it, **Python calls back into ML** repeatedly (`proof_opr`, `reset_state`,

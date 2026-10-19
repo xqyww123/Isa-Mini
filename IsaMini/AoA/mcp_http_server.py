@@ -68,7 +68,7 @@ from .model import (
     LOOP_REPEAT_THRESHOLD,
     Role_Worker,
     Surrender, Refute, Refresh,
-    LMUnreachable, ResourceUnavailable, TechnicalFailure,
+    LMUnreachable, ResourceExhausted, ResourceUnavailable, TechnicalFailure,
     TOOL_REFRESH, TOOL_WRITE_MEMORY,
     print_indent, print_goal, MyIO,
 )
@@ -459,7 +459,9 @@ async def _edit_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
                 f"Proof tree depth exceeded limit, "
                 f"new limit: {session._depth_limit}")
             if session._retry_count >= session.max_retries:
-                session.settle_quit(Surrender(
+                # The retry budget is used up, this exceedance its last charge:
+                # a budget's end, not the agent's own surrender.
+                session.settle_quit(ResourceExhausted(
                     f"proof tree depth exceeded limit {session._depth_limit - 5}"))
                 await session.interrupt()
             else:
