@@ -343,12 +343,12 @@ fun string_of_type_full_sort ctxt =
               |> Config.put Printer.show_markup false
               |> Config.put Printer.show_structs false
               |> Config.put Printer.show_question_marks true
-     in Syntax.string_of_typ ctxt'
-     #> RPC_Pretty.trim_markup
+     in Syntax.pretty_typ ctxt'
+     #> RPC_Pretty.plain_string
     end
 
 fun string_of_sort ctxt =
-    Syntax.string_of_sort ctxt #> RPC_Pretty.trim_markup
+    Syntax.pretty_sort ctxt #> RPC_Pretty.plain_string
 
 fun string_of_thm ctxt th = string_of_term ctxt (Thm.prop_of th)
 

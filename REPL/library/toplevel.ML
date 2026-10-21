@@ -22,8 +22,8 @@ fun rollback name (_, history) =
 
 local open MessagePackBinIO.Pack
 in
-fun pack_typ ctxt ty = packString (trim_markup (Syntax.string_of_typ  ctxt ty))
-fun pack_term ctxt tm = packString (trim_markup (Syntax.string_of_term ctxt tm))
+fun pack_typ ctxt ty = packString (RPC_Pretty.plain_string (Syntax.pretty_typ ctxt ty))
+fun pack_term ctxt tm = packString (RPC_Pretty.plain_string (Syntax.pretty_term ctxt tm))
 fun pack_items ctxt =
   let val pack_variables = packPairList (packString, pack_typ ctxt)
       val pack_facts     = packPairList (packString, pack_term ctxt)
