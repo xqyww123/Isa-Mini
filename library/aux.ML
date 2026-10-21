@@ -66,25 +66,10 @@ end
 structure Minilang_Aux : MINILANG_AUX = struct
 open Minilang_Aux
 
-fun trim_markup msg =
-  let fun auto _ [] = []
-        | auto acc (#"\127" :: L) = auto acc L
-        | auto acc (#"\005" :: L) = auto (not acc) L
-        | auto true (x :: L) = x :: auto true L
-        | auto false (_ :: L) = auto false L
-      val s = String.size msg
-      val ex = Unsynchronized.ref false
-      val i  = Unsynchronized.ref 0
-      val _ = while !i < s
-                 do if String.sub (msg, !i) = #"\005" orelse
-                       String.sub (msg, !i) = #"\127"
-                    then (ex := true ;
-                           i := s)
-                    else ( i := !i + 1)
-   in if !ex
-    then String.implode (auto true (String.explode msg))
-    else msg
-  end
+(* the visible text of a string carrying markup (Pure's, which skips hidden
+   bodies such as a typing element's type), without DEL characters *)
+val trim_markup =
+  Protocol_Message.clean_output #> String.translate (fn #"\127" => "" | c => String.str c)
 
 
 (** Aux Isar Commands **)
