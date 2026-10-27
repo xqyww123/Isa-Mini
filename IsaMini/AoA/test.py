@@ -18267,7 +18267,7 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     * Upstream (ML, environment-dependent): `pide_state.command_at_position`
       can return a DEGENERATE session-export-DB snapshot in which the whole
       theory file is a single `Command.unparsed`, so the "declaring command
-      source" of a library theorem (`_get_definition_with_pos`) comes back as
+      source" of a library theorem (`_definition_at`) comes back as
       the entire theory.  `PIDE_State.command_at_position` has a guard that
       re-cuts such a dump (Tools/pide_state.ML, the `s <= 1` branch), but it
       falls through to `NONE => SOME r` (returns the whole file) when the
@@ -18284,7 +18284,7 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
       printed verbatim, with NO length cap.
 
     The test forces the one environment-dependent upstream call
-    (`retrieval._get_definition_with_pos`) to return a whole-theory blob —
+    (`retrieval._definition_at`) to return a whole-theory blob —
     exactly what the degenerate DB snapshot produces — and asserts the full
     `query` tool (`_query_tool_logic`, real path) does NOT echo the theory body
     back.  It fails today (no downstream cap) and passes once the renderer
@@ -18319,21 +18319,21 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
 
     # Patch the (environment-dependent) declaring-command fetch so the degenerate
     # whole-theory dump is produced deterministically, regardless of REPL/DB
-    # health. `_get_def_for_fetched` calls this as a module global of retrieval.
-    orig = _retrieval._get_definition_with_pos
+    # health. `_format_fetched_entity` calls this as a module global of retrieval.
+    orig = _retrieval._definition_at
     fetch_called = []
 
-    async def _fake_def(connection, kind, uk, ctxt=None):
+    async def _fake_def(connection, pos):
         fetch_called.append(True)
         return (WHOLE_THEORY, IsabellePosition(0, 1, "/mock/MockTopo.thy"))
 
-    _retrieval._get_definition_with_pos = _fake_def  # type: ignore[assignment]
+    _retrieval._definition_at = _fake_def  # type: ignore[assignment]
     try:
         result, is_error = await _query_tool_logic(
             root.session,
             {'queries': [{'kinds': ['lemma'], 'exact_name': 'tendsto_sandwich'}]})
     finally:
-        _retrieval._get_definition_with_pos = orig
+        _retrieval._definition_at = orig
 
     leaked_header = "theory MockTopo" in result
     leaked_body = "mock_interior_lemma_30" in result
@@ -18348,7 +18348,7 @@ async def _test_query_whole_file_dump(root: Root, file: MyIO):
     # def-source never reached the renderer guard and the test would pass
     # vacuously (e.g. if `tendsto_sandwich` failed to resolve in the live DB).
     assert fetch_called, (
-        "_get_definition_with_pos was never invoked: the whole-theory source "
+        "_definition_at was never invoked: the whole-theory source "
         "never reached the renderer guard, so this test would pass vacuously")
     # The looked-up entity itself must still be reported.
     assert "tendsto_sandwich" in result, f"entity went missing: {result[:500]}"

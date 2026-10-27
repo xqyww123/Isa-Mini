@@ -24,7 +24,7 @@ from Isabelle_RPC_Host.universal_key import (
 from Isabelle_Semantic_Embedding.semantics import (
     trunc_expr as _trunc_expr_base,
     trunc_expr,
-    _get_definition_with_pos,
+    _definition_at,
     Semantic_DB,
     apply_live_name_if_member,
 )
@@ -319,10 +319,13 @@ async def _format_fetched_entity(
     # Skip the declaring-command source for theorem collections: the
     # `named_theorems` declaration adds little beyond the entity's name and
     # English interpretation (and often dumps a whole sibling-bundle list),
-    # so it is pure noise per the bundle's own description.
-    if def_info is True and session is not None and f.entity.kind != EntityKind.THEOREM_COLLECTION:
+    # so it is pure noise per the bundle's own description.  Skip it for proof
+    # methods too: a tactic is shown by its declared interpretation, never by
+    # its `method_setup` source (docs/TACTIC_DESIGN.md).
+    if (def_info is True and session is not None and f.position is not None
+            and f.entity.kind not in (EntityKind.THEOREM_COLLECTION, EntityKind.METHOD)):
         rs = ml_state or session.retrieval_state()
-        def_info = await _get_def_for_fetched(rs.connection, f, ctxt=rs.name)
+        def_info = await _definition_at(rs.connection, f.position)
     if isinstance(def_info, tuple) and session is not None:
         source, cmd_pos = def_info
         if not _PROOF_COMMAND_RE.match(source) and not _is_whole_theory_source(source):
@@ -619,17 +622,6 @@ async def _run_knn_for_query(
         exact_name=exact_name,
         target_type=q.get("target_type") or "")
     return (fetched, warnings, None, total)
-
-
-async def _get_def_for_fetched(
-    connection, f: RetrievedEntity, ctxt: Any = None,
-) -> tuple[str, IsabellePosition] | None:
-    """Fetch definition source for an entity. Returns None on failure."""
-    try:
-        uk = await universal_key_of(connection, f.entity.kind, f.entity.full_name, ctxt=ctxt)
-        return await _get_definition_with_pos(connection, f.entity.kind, uk, ctxt=ctxt)
-    except Exception:
-        return None
 
 
 # ============================================================================
@@ -1004,7 +996,7 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
     # string.  `live_name` is fully qualified, so it interns to itself — the
     # direct branch and the short-name retry normalize here.
     try:
-        live_info, _ = (await retrieve_entities_with_diagnostics(
+        live_info, _, _ = (await retrieve_entities_with_diagnostics(
             connection, ctxt, [(tag, live_name)]))[0]
     except IsabelleError as e:
         return (str(e), True, None)

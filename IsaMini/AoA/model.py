@@ -264,6 +264,9 @@ class RetrievedEntity(NamedTuple):
     entity: IsabelleEntity
     score: float              # semantic similarity score
     interpretation: str | None  # human-readable description from SemanticRecord
+    # Where the entity is declared, from IsaMini.retrieve_entity's resolver;
+    # None when unknown, and for EXPERIENCE.
+    position: IsabellePosition | None
     # Heading line printed above the interpretation, for abbreviation constants
     # hit by exact_name lookups ("Abbreviation constant ..." / "Raw constant ...").
     # None everywhere else (KNN / pattern paths never set it).
@@ -1929,11 +1932,13 @@ type Extended_Minilang_Operation = Minilang_Operation | list[Minilang_Operation]
 async def retrieve_entities_with_diagnostics(
     connection: 'Connection', ctxt: 'str | None',
     entities: 'list[tuple[EntityKind, str]]',
-) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
+) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, tuple[universal_key, IsabellePosition | None] | None, str | None]]':
     """Retrieve entity info by kind and name (short or full), with a per-entity
     diagnostic sentence (None when there is nothing to say beyond "not found").
-    Returns list of (info, diagnostic); see `Minilang_State._retrieve_entity`
-    for the info tuple.
+    Returns list of (info, (uk, position) | None, diagnostic); see
+    `Minilang_State._retrieve_entity` for the info tuple.  The pair is the
+    resolver's, present when info is: the entity's key and its declaration's
+    position (None when unknown).
 
     ``ctxt`` is the context slot of the ML callback's arg_schema, a
     context_unpacker: a Minilang state name on the AoA channel, or None where
@@ -1947,14 +1952,16 @@ async def retrieve_entities_with_diagnostics(
     args = [(int(kind), ascii_of_unicode(name)) for kind, name in entities]
     results = await connection.callback("IsaMini.retrieve_entity", (ctxt, args))
     out = []
-    for info, diag in results:
+    for info, located, diag in results:
         parsed = ((IsaTerm.from_isabelle(info[0]),
                    [IsaTerm.from_isabelle(e) for e in info[1]],
                    list(info[2]), list(info[3]), bool(info[4]))
                   if info is not None else None)
+        where = ((bytes(located[0]), IsabellePosition.from_def_pos(located[1]))
+                 if located is not None else None)
         # The diagnostic is an ordinary return value, not an IsabelleError, so
         # nothing else would decode it.
-        out.append((parsed, pretty_unicode(diag) if diag is not None else None))
+        out.append((parsed, where, pretty_unicode(diag) if diag is not None else None))
     return out
 
 
@@ -2137,8 +2144,8 @@ class Minilang_State:
         if name_queries:
             entities = [(EntityKind.THEOREM, name) for name in name_queries]
             results = await self._retrieve_entity_with_diagnostics(entities)
-            for idx, (query_name, (result, diag)) in zip(name_indices,
-                                                  zip(name_queries, results)):
+            for idx, (query_name, (result, _, diag)) in zip(name_indices,
+                                                     zip(name_queries, results)):
                 fact = facts[idx]
                 # full_name must hold the same string we sent to Isabelle: pack()
                 # feeds it straight back to the Isabelle parser.
@@ -2175,7 +2182,7 @@ class Minilang_State:
         if not queries:
             return out
         results = await self._retrieve_entity_with_diagnostics(queries)
-        for idx, (kind, query_name), (result, diag), original_fact in zip(
+        for idx, (kind, query_name), (result, _, diag), original_fact in zip(
                 query_indices, queries, results, original_facts):
             q = ascii_of_unicode(query_name)   # full_name is always ASCII notation
             if result is None:
@@ -2512,14 +2519,14 @@ class Minilang_State:
         # below cannot disagree with the log.
         info_by_idx = {}
         dropped_log: list[str] = []
-        for i, (info, diag) in zip(ent_idx, diagnosed):
+        for i, (info, where, diag) in zip(ent_idx, diagnosed):
             if info is None:
                 dropped_log.append(f"{scored_recs[i][1].name}: unresolved"
                                    + (f" ({diag})" if diag else ""))
             elif info[0].unicode.startswith("??."):
                 dropped_log.append(f"{scored_recs[i][1].name}: inaccessible ({info[0].unicode})")
             else:
-                info_by_idx[i] = info
+                info_by_idx[i] = (info, where[1] if where is not None else None)
         if dropped_log:
             # Not surfaced to the agent: an unresolvable entity may be the symptom
             # of a defect elsewhere, and silently dropping it would hide that.
@@ -2537,15 +2544,16 @@ class Minilang_State:
                 out.append(RetrievedEntity(
                     entity=entity, score=score,
                     interpretation=' '.join(rec.interpretation.split()) if rec.interpretation else None,
-                    experience=rec.experience))
+                    position=None, experience=rec.experience))
                 continue
             heading, interp = override if override is not None else (None, rec.interpretation)
             if rec.kind == EntityKind.METHOD and rec.name in tactics_by_full:
                 interp = tactics_by_full[rec.name].interpretation   # the declared text, never the DB's
+            info, position = info_by_idx[i]
             out.append(self._make_retrieved_entity(
-                rec.kind, rec.name, info_by_idx[i], score,
+                rec.kind, rec.name, info, score,
                 ' '.join(interp.split()) if interp else None,
-                semantics_heading=heading,
+                position=position, semantics_heading=heading,
                 suppress_def=rec.name in bundle_member_names))
         return out, warnings, total
     async def compute_bindings(self, var_names: list[varname], fact_names: list[varname]) -> Bindings:
@@ -2570,7 +2578,7 @@ class Minilang_State:
         three layers (hooks, exemptions, default) is Intro."""
         return await self.connection.callback("IsaMini.decide_auto_intro", self.name)
     async def _retrieve_entity_with_diagnostics(self, entities: list[tuple[EntityKind, str]]
-        ) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, str | None]]':
+        ) -> 'list[tuple[tuple[short_name, list[term], list[str], list[full_name], bool] | None, tuple[universal_key, IsabellePosition | None] | None, str | None]]':
         """Retrieve entity info in this state's context; see
         `retrieve_entities_with_diagnostics` (the module-level worker)."""
         return await retrieve_entities_with_diagnostics(
@@ -2588,7 +2596,8 @@ class Minilang_State:
     def _make_retrieved_entity(
         self, kind: EntityKind, full_name: str,
         info: 'tuple[short_name, list[term], list[str], list[full_name], bool] | None',
-        score: float, interpretation: 'str | None',
+        score: float, interpretation: 'str | None', *,
+        position: 'IsabellePosition | None',
         semantics_heading: 'str | None' = None,
         suppress_def: bool = False,
     ) -> RetrievedEntity:
@@ -2617,7 +2626,8 @@ class Minilang_State:
                 expression=exprs, kind=kind, roles=roles,
                 abbreviation_names=abbrev_names)
         return RetrievedEntity(entity=entity, score=score, interpretation=interpretation,
-                               semantics_heading=semantics_heading, suppress_def=suppress_def)
+                               position=position, semantics_heading=semantics_heading,
+                               suppress_def=suppress_def)
 
     async def retrieve_entities_by_name(
         self, names: list[str], kind: EntityKind = EntityKind.THEOREM,
@@ -2630,12 +2640,14 @@ class Minilang_State:
         one RPC for all names."""
         if not names:
             return []
-        infos = await self._retrieve_entity([(kind, n) for n in names])
+        results = await self._retrieve_entity_with_diagnostics([(kind, n) for n in names])
         # full_name is always ASCII notation (ascii_of_unicode is idempotent, so a
         # name that already came from Isabelle passes through untouched).
-        return [self._make_retrieved_entity(kind, ascii_of_unicode(n), info, 1.0, None)
+        return [self._make_retrieved_entity(
+                    kind, ascii_of_unicode(n), info, 1.0, None,
+                    position=where[1] if where is not None else None)
                 if info is not None else None
-                for n, info in zip(names, infos)]
+                for n, (info, where, _) in zip(names, results)]
     async def check_term(self, term_str: xterm) -> tuple[typ, Vars, Vars]:
         """
         Parse and check a term string using Syntax.read_term.

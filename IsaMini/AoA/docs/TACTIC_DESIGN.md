@@ -150,6 +150,7 @@
 - `IsaMini.AoA` 的参数元组已是 `packTuple12`（mlmsgpack 上限）：把 `enable_write_memory`、`enable_read_memory` 嵌成一个 `packPair (packBool, packBool)`，腾出的槽位放白名单 `packList (packTuple5 (packString, packString, packString, packBool, Universal_Key.pack_universal_key))`（agent 可见名、全名、interpretation、in_prompt、universal key），按白名单顺序；`toplevel.py` 解包同步改。
 - 本次调用的 user operation 名单**不**包含 `Tactic`；Python 按白名单自行把 `Tactic` 放进操作表（§7.2）。
 - **method 枚举回调注册为空**：`raw_AoA` 的回调列表里用 `Context_Callbacks.make_methods_callback (SOME (K false)) au` 取代解构出来的 `methods`——AoA 调用里 method 名字空间不再贡献任何检索候选（它会过滤掉 `Main` 的 method、放出其它 method），候选只来自白名单（§7.4）；顺带使 `_get_definition_with_pos` 不会给 tactic 打印 `method_setup` 源码。
+  - 2026-10-27 注：`_get_definition_with_pos` 已删除，实体的定义位置改由 `IsaMini.retrieve_entity` 按名字解析给出。tactic 不打印 `method_setup` 源码，现在由 `retrieval.py` 里 `_format_fetched_entity` 对 METHOD 的显式跳过保证，不再依赖这里的 method 枚举为空。
 - **`retrieve_entity` 加 METHOD 一支**，照 `TypeK` 的写法：`(Universal_Key.MethodK, name) => (SOME (agent_method_name ctxt name, [], [], [], false), NONE)`（§5.1 的辅助函数）。
 
 ### 5.5 加载顺序

@@ -198,6 +198,12 @@ val aoa_replay_method : string (*b64 blob*)
 val query_by_name : Context.generic ->
   Universal_Key.entity_kind * string -> string * bool
 
+(* The callback IsaMini.retrieve_entity and its theorem-role classifier, shared
+   with PlainAgent. *)
+val make_thm_roles : Proof.context -> thm list -> string list
+val make_retrieve_entity_callback : (Proof.context -> thm list -> string list) ->
+  Context_Callbacks.context_unpacker -> Remote_Procedure_Calling.callback'
+
 end
 
 structure MiniLang_Agent_AoA : MINILANG_AGENT_AoA = struct
@@ -843,7 +849,9 @@ fun restore_concl orig th =
      Lifted out of raw_AoA (2026-08-23) so the query_by_name RPC can install it
      too; the context arrives through a context_unpacker, the standard idiom of
      Isabelle_RPC/Tools/context.ML.  A bare-string ctxt slot still decodes as
-     SOME via unpackOption, so the AoA search path's wire format is unchanged. ***)
+     SOME via unpackOption, so the AoA search path's wire format is unchanged.
+     An item with a display also carries (uk, pos) from the resolver
+     Context_Callbacks.entry_of_name, so no caller enumerates for a position. ***)
 
 local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
 
@@ -911,9 +919,10 @@ fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> strin
   on_interrupt = Remote_Procedure_Calling.Reraise,
   arg_schema = unpackPair (ctxt_unpack,
     unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
-  ret_schema = packList (packPair
+  ret_schema = packList (packTuple3
       (packOption (packTuple5 (packString, packList packString,
                                packList packString, packList packString, packBool)),
+       packOption (packPair (Universal_Key.pack_universal_key, Context_Callbacks.pack_pos)),
        packOption packString)),
   function = (fn (gctx, entities) =>
     let val ctxt = Context.proof_of gctx
@@ -1028,7 +1037,14 @@ fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> strin
                                      else shown
                      in (SOME (Facts.extern ctxt facts full, props, [], [], false), NONE) end
               end
-    in map (fn e => the_default (NONE, NONE) (try retrieve e)) entities end),
+        fun reply e =
+          (case the_default (NONE, NONE) (try retrieve e) of
+            (NONE, diag) => (NONE, NONE, diag)
+          | (display, diag) =>
+              (display,
+               Option.map (fn {uk, pos, ...} => (uk, pos)) (Context_Callbacks.entry_of_name gctx e),
+               diag))
+    in map reply entities end),
   timeout = NONE
 }
 
