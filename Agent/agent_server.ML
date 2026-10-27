@@ -850,8 +850,9 @@ fun restore_concl orig th =
      too; the context arrives through a context_unpacker, the standard idiom of
      Isabelle_RPC/Tools/context.ML.  A bare-string ctxt slot still decodes as
      SOME via unpackOption, so the AoA search path's wire format is unchanged.
-     An item with a display also carries (uk, pos) from the resolver
-     Context_Callbacks.entry_of_name, so no caller enumerates for a position. ***)
+     An item with a display also carries (uk, pos) when the resolver
+     Context_Callbacks.entry_of_name resolves its name, so no caller enumerates
+     for a position. ***)
 
 local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
 
@@ -1042,7 +1043,8 @@ fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> strin
             (NONE, diag) => (NONE, NONE, diag)
           | (display, diag) =>
               (display,
-               Option.map (fn {uk, pos, ...} => (uk, pos)) (Context_Callbacks.entry_of_name gctx e),
+               Option.map (fn {uk, pos, ...} => (uk, pos))
+                 (Option.join (try (Context_Callbacks.entry_of_name gctx) e)),
                diag))
     in map reply entities end),
   timeout = NONE

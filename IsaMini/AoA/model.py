@@ -1937,8 +1937,9 @@ async def retrieve_entities_with_diagnostics(
     diagnostic sentence (None when there is nothing to say beyond "not found").
     Returns list of (info, (uk, position) | None, diagnostic); see
     `Minilang_State._retrieve_entity` for the info tuple.  The pair is the
-    resolver's, present when info is: the entity's key and its declaration's
-    position (None when unknown).
+    resolver's: the entity's key and its declaration's position (None when
+    unknown); it is None when info is, and when the resolver does not resolve
+    the name (e.g. a bare multi-theorem fact).
 
     ``ctxt`` is the context slot of the ML callback's arg_schema, a
     context_unpacker: a Minilang state name on the AoA channel, or None where
