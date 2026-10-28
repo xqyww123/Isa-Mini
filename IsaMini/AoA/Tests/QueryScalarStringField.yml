@@ -8,20 +8,23 @@ Result (is_error=False):
 - rev_iffD2 [manual]: ?Q ⟶ ?P = ?Q ⟶ ?P
 - iffCE: ?P = ?Q ⟶ (?P ⟶ ?Q ⟶ ?R) ⟶ (¬ ?P ⟶ ¬ ?Q ⟶ ?R) ⟶ ?R
 - cnf.iff_trans [manual]: ?P = ?Q ⟶ ?Q = ?R ⟶ ?P = ?R
-- Meson.iff_to_disjD [manual]: ?P = ?Q ⟶ (¬ ?P ∨ ?Q) ∧ (¬ ?Q ∨ ?P)
 - iffI_np [manual]: (?x ⟶ ¬ ?y) ⟶ (¬ ?x ⟶ ?y) ⟶ (¬ ?x) = ?y
 - cnf.iff_refl [manual]: ?P = ?P
 - imp_conj_iff [manual]: ((?P ⟶ ?Q) ∧ ?P) = (?P ∧ ?Q)
 - eq_iff_swap [manual]: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
 - pred_iffI [manual]: (∀(x :: ?'a). pred.eval ?A x ⟶ pred.eval ?B x) ⟶ (∀(x :: ?'a). pred.eval ?B x ⟶ pred.eval ?A x) ⟶ ?A = ?B
+- Not_eq_iff: ((¬ ?P) = (¬ ?Q)) = (?P = ?Q)
 - bool.expand [manual]: (?bool = True) = (?bool' = True) ⟶ ?bool = ?bool'
   free_constructors (discs_sels) case_bool for True | False
-- verit_connective_def(1) [manual]: (?A = ?B) = ((?A ⟶ ?B) ∧ (?B ⟶ ?A))
 - eqTrueI [manual]: ?P ⟶ ?P = True
+- equal.equal_eq [manual]: class.equal ?equal ⟶ ?equal ?x ?y = (?x = ?y)
+  class equal =
+    fixes equal :: "'a ⇒ 'a ⇒ bool"
+    assumes equal_eq: "equal x y ⟷ x = y"
 - eqTrueE [manual]: ?P = True ⟶ ?P
 - identity_equivp [manual]: equivp ((=) :: ?'a ⇒ ?'a ⇒ bool)
 Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
-  2068 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
+  2369 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
 Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
   15 new, 0 shown earlier are not shown again.
 
