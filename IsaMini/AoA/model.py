@@ -2435,7 +2435,7 @@ class Minilang_State:
                 # Enumerate ALL matches (limit=-1) to know the total, then resolve
                 # records only for the top-k slice (avoid resolving thousands).
                 from Isabelle_RPC_Host.context import entities_of
-                entries, is_local_map, warnings_raw = await entities_of(self.connection, kinds,
+                entries, warnings_raw = await entities_of(self.connection, kinds,
                                          term_patterns=term_patterns,
                                          type_patterns=type_patterns,
                                          theories_include=theories_include,
@@ -2448,13 +2448,12 @@ class Minilang_State:
                 # No query vector → no semantic similarity. Score no-embedding entities
                 # by the provider default (local lemmas higher), then sort so local
                 # lemmas surface first. Sort BEFORE the top-k slice so locals aren't cut.
-                def _pat_score(uk: bytes) -> float:
+                def _pat_score(is_local: bool) -> float:
                     return (store.emb_provider.default_local_score
-                            if is_local_map.get(uk, False)
-                            else store.emb_provider.default_score)
-                entries.sort(key=lambda e: _pat_score(e[0]), reverse=True)
+                            if is_local else store.emb_provider.default_score)
+                entries.sort(key=lambda e: _pat_score(e[2]), reverse=True)
                 scored_recs = []
-                for uk, name, _ in entries[:k_fetch]:
+                for uk, name, is_local in entries[:k_fetch]:
                     rec = Semantic_DB[uk]
                     if rec is not None:
                         # UNCONDITIONAL (§2.1's table): `name` is the live,
@@ -2462,9 +2461,9 @@ class Minilang_State:
                         # enumeration -- same population and provenance as
                         # _resolve, whose substitution line this hand-copied
                         # loop had dropped; the fallback below already used it.
-                        scored_recs.append((_pat_score(uk), apply_live_name(rec, name), None))
+                        scored_recs.append((_pat_score(is_local), apply_live_name(rec, name), None))
                     else:
-                        scored_recs.append((_pat_score(uk), SemanticRecord(EntityKind(uk[16]), name, None, None), None))
+                        scored_recs.append((_pat_score(is_local), SemanticRecord(EntityKind(uk[16]), name, None, None), None))
                 # No query vector here, so experiences can't be cosine-ranked, but
                 # they CAN be ranked by pattern hit_rate. Merge available experiences
                 # (hit_rate>0) using hit_rate as their score, then re-sort/slice.

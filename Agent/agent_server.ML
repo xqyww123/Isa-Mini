@@ -1974,15 +1974,11 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
          hammer_or_AoA), computed on the goal BEFORE preprocessing. *)
       val s0_flat_goal = flat_goal_of s0
       val au = agent_context_unpacker
-      val {constants, theorems, types, classes, locales, named_theorems, methods = _,
-           introduction_rules, elimination_rules,
-           induction_rules, case_split_rules} =
-        Semantic_Store.make_entity_callbacks (Context.Proof ctxt) au
-      (* The method name space contributes no retrieval candidate in an AoA
-         call: the candidates are the tactic whitelist's entries (Python,
+      (* K false: the method name space contributes no retrieval candidate in an
+         AoA call: the candidates are the tactic whitelist's entries (Python,
          docs/TACTIC_DESIGN.md), never the store's enumeration (which keeps
          every method outside Main). *)
-      val methods = Context_Callbacks.make_methods_callback (SOME (K false)) au
+      val entity_callbacks = Semantic_Store.make_entity_callbacks (Context.Proof ctxt) (K false) au
       val framework_callbacks = [
           mk_callback proof_opr_callback,
           mk_callback reset_state_callback,
@@ -2011,10 +2007,8 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
           mk_callback check_looping_rules_callback,
           Universal_Key.make_universal_key_callback' (SOME thm_cache) au,
           Universal_Key.make_key_of_theorems_callback' (SOME thm_cache) au,
-          Config.make_config_lookup_callback au,
-          constants, theorems, types, classes, locales, named_theorems, methods,
-          introduction_rules, elimination_rules,
-          induction_rules, case_split_rules,
+          Config.make_config_lookup_callback au] @
+        entity_callbacks @ [
           Context_Callbacks.make_theory_long_name_callback au,
           Context_Callbacks.make_experience_constituents_callback au,
           Context_Callbacks.make_experiences_callback au,

@@ -151,6 +151,7 @@
 - 本次调用的 user operation 名单**不**包含 `Tactic`；Python 按白名单自行把 `Tactic` 放进操作表（§7.2）。
 - **method 枚举回调注册为空**：`raw_AoA` 的回调列表里用 `Context_Callbacks.make_methods_callback (SOME (K false)) au` 取代解构出来的 `methods`——AoA 调用里 method 名字空间不再贡献任何检索候选（它会过滤掉 `Main` 的 method、放出其它 method），候选只来自白名单（§7.4）；顺带使 `_get_definition_with_pos` 不会给 tactic 打印 `method_setup` 源码。
   - 2026-10-27 注：`_get_definition_with_pos` 已删除，实体的定义位置改由 `IsaMini.retrieve_entity` 按名字解析给出。tactic 不打印 `method_setup` 源码，现在由 `retrieval.py` 里 `_format_fetched_entity` 对 METHOD 的显式跳过保证，不再依赖这里的 method 枚举为空。
+  - 2026-10-27 注：这个覆盖现在是 `make_entity_callbacks` 的 method 保留谓词：`raw_AoA` 传 `K false`（`Semantic_Store.make_entity_callbacks (Context.Proof ctxt) (K false) au`），不再另建 `make_methods_callback (SOME (K false))` 去替换解构出来的 `methods`。
 - **`retrieve_entity` 加 METHOD 一支**，照 `TypeK` 的写法：`(Universal_Key.MethodK, name) => (SOME (agent_method_name ctxt name, [], [], [], false), NONE)`（§5.1 的辅助函数）。
 
 ### 5.5 加载顺序
