@@ -2238,6 +2238,8 @@ class Minilang_State:
         undeclared free variables in term patterns and total is the number of
         entities matching the filters (the full pool before the top-k cut)."""
         from Isabelle_Semantic_Embedding.semantics import Semantic_DB
+        # the display owner function (a linked local fact's display record)
+        from Isabelle_Semantic_Embedding.links import retrieval_closure
 
         # Fetch a few more than asked for, because the accessibility drop below
         # runs AFTER ranking and would otherwise return short.  Proportional so
@@ -2312,8 +2314,9 @@ class Minilang_State:
                         warnings.append(e.errors[0] if e.errors else str(e))
                         continue
                     bundle_N = n_total
+                    closure = retrieval_closure(self.connection)
                     for uk, ref_name in members:
-                        rec = Semantic_DB[uk]
+                        rec = await closure.record(uk, ref_name)
                         if rec is not None:
                             # The name substitution is CONDITIONAL
                             # (DYNAMIC_MEMBER_NAMING_PLAN.md §2.1's table):
@@ -2444,6 +2447,11 @@ class Minilang_State:
                                          target_type=target_type,
                                          ctxt=self.name)
                 warnings = [_clean_warning(w) for w in warnings_raw]
+                # the listing hides every template that a linked local fact among
+                # the entries names, as lookup's does (LINK_LAYER_PLAN.md B6, D61)
+                listing = await retrieval_closure(self.connection).listing([e[0] for e in entries])
+                shown = set(listing.candidates)
+                entries = [e for e in entries if e[0] in shown]
                 total = len(entries)
                 # No query vector → no semantic similarity. Score no-embedding entities
                 # by the provider default (local lemmas higher), then sort so local
@@ -2454,7 +2462,7 @@ class Minilang_State:
                 entries.sort(key=lambda e: _pat_score(e[2]), reverse=True)
                 scored_recs = []
                 for uk, name, is_local in entries[:k_fetch]:
-                    rec = Semantic_DB[uk]
+                    rec = listing.record(uk, name)
                     if rec is not None:
                         # UNCONDITIONAL (§2.1's table): `name` is the live,
                         # context-resolved name from this query's own

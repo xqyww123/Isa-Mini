@@ -2456,7 +2456,8 @@ fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind,
       arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
       ret_schema = unpackPair (unpackString, unpackBool),
       callback = [Universal_Key.make_universal_key_callback su,
-                  make_retrieve_entity_callback make_thm_roles su],
+                  make_retrieve_entity_callback make_thm_roles su,
+                  Semantic_Store.make_links_callback (Context.proof_of context)],
       timeout = NONE
     }
   in Remote_Procedure_Calling.call_command cmd (kind, name) end

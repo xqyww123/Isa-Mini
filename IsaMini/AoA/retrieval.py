@@ -25,9 +25,9 @@ from Isabelle_Semantic_Embedding.semantics import (
     trunc_expr as _trunc_expr_base,
     trunc_expr,
     _definition_at,
-    Semantic_DB,
     apply_live_name_if_member,
 )
+from Isabelle_Semantic_Embedding.links import retrieval_closure
 
 from .model import (
     Session, Minilang_State, MyIO, short_name,
@@ -1007,7 +1007,7 @@ async def _query_entity_core(connection, tag: EntityKind, name: str,
         # nothing of the entity is shown, not even the stored record.
         return (f'"{name}" is not accessible in the current proof context.',
                 True, None)
-    rec = Semantic_DB[uk]
+    rec = await retrieval_closure(connection).record(uk, live_name)
     buf = StringIO()
     buf.write(prefix)
     kind_label = rec.kind.label if rec is not None else tag.label

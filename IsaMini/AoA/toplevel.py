@@ -267,8 +267,9 @@ async def IsaMini_AoA(data: tuple, connection: Connection):
     if not is_test_driver:
         # The interpretation policy shell: at most ONE startup check per
         # `by aoa` (none once the user has declined it for the session) --
-        # gate, dry run over this proof's context (an
-        # as-is root, so locale-local facts are seen) and its ancestor cone,
+        # gate, dry run over the background theory of this proof's context and its
+        # ancestor cone (no fact of the context is interpreted, LINK_LAYER_PLAN.md
+        # D9, D58),
         # then the threshold policy: small updates run silently, big ones ask
         # (the run itself never asks again -- AoA's query-time lookups pass
         # interpret_in_auto_embed=False in model.py; a per-call parameter, so
