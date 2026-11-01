@@ -1,8 +1,8 @@
-call 1: 169 entities match the filters 5 shown — 5 new, 0 shown earlier are not shown again.
-call 2: 1209 match 5 shown — 5 new, 0 shown earlier.
-call 3: 966 match 5 shown — 5 new, 0 shown earlier.
-call 4: 669 match 5 shown — 5 new, 0 shown earlier.
-call 5: 419 match 5 shown — 5 new, 0 shown earlier.
-call 6: 612 match 5 shown — 5 new, 0 shown earlier.
-repeat: 169 match 5 shown — 0 new, 5 shown earlier: one_plus_numeral_commute, plus_integer_code(3), plus_int_code(3), plus_num_def, plus_int.abs_eq.
+call 1: 177 entities match the filters 5 shown — 5 new, 0 shown earlier are not shown again.
+call 2: 1350 match 5 shown — 5 new, 0 shown earlier.
+call 3: 1093 match 5 shown — 5 new, 0 shown earlier.
+call 4: 714 match 5 shown — 5 new, 0 shown earlier.
+call 5: 615 match 5 shown — 5 new, 0 shown earlier.
+call 6: 643 match 5 shown — 5 new, 0 shown earlier.
+repeat: 177 match 5 shown — 0 new, 5 shown earlier: one_plus_numeral_commute, plus_integer_code(3), plus_int_code(3), plus_num_def, plus_int.abs_eq.
 no-filter: 5 new, 0 shown earlier.

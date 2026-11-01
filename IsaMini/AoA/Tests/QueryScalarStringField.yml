@@ -24,7 +24,7 @@ Result (is_error=False):
 - eqTrueE [manual]: ?P = True ⟶ ?P
 - identity_equivp [manual]: equivp ((=) :: ?'a ⇒ ?'a ⇒ bool)
 Query: P = Q if and only if P ⟶ Q ∧ Q ⟶ P; name contains: iff
-  2369 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
+  2813 entities match the filters 15 shown — 15 new, 0 shown earlier are not shown again.
 Query: equality of booleans is equivalence: (P = Q) = (P ⟶ Q ∧ Q ⟶ P)
   15 new, 0 shown earlier are not shown again.
 

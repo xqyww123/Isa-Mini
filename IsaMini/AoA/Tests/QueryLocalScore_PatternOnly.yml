@@ -1,1 +1,2 @@
-pattern-only name_contains=[uniqLocalLemmaZZ]: 0 results, warnings=[]
+pattern-only name_contains=[uniqLocalLemmaZZ]: 1 results, warnings=[]
+  0.500 lemma uniqLocalLemmaZZ
