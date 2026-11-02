@@ -4,7 +4,8 @@ Singleton multi-session MCP HTTP server for proof tools.
 Architecture:
 - One HTTP server, one port, multiple proof sessions on different URL paths
 - Each session (including forks) gets its own endpoint: /mcp/<session_id>
-- Each endpoint has its own low-level mcp.server.Server with hand-written schemas
+- Each endpoint has its own MCP server, claude-agent-sdk's tool server
+  (`create_sdk_mcp_server`) over the hand-written schemas
 - Tool handlers close over their Session instance and call bind_session_context
   per-request (uvicorn gives each request an empty contextvars.Context, so both
   _session_var and the ambient Connection must be re-established here)
@@ -31,9 +32,10 @@ from typing import Any
 from io import StringIO
 
 import uvicorn
+from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.types import Tool, ToolAnnotations, TextContent, CallToolResult
+from mcp.types import ToolAnnotations
 
 from Isabelle_RPC_Host import pretty_unicode
 from Isabelle_RPC_Host.universal_key import EntityKind
@@ -2898,68 +2900,29 @@ class ToolExecutor:
 # Per-Session MCP Server Creation
 # ============================================================================
 
-def _create_mcp_server(session: Session, extra_sdk_tools: list | None = None) -> MCPServer:
-    """Create a low-level MCP Server with tools bound to ``session`` via closure.
-
-    ``extra_sdk_tools`` can carry ``SdkMcpTool`` instances (e.g. from
-    Isabelle_Semantic_Embedding) whose schemas and handlers are extracted
-    and registered alongside the built-in proof tools.
-    """
-    server = MCPServer(f"proof-{id(session)}")
+def _create_mcp_server(session: Session) -> MCPServer:
+    """The MCP server of the tools advertised to ``session`` (role-scoped —
+    `subagent`/`cancel_subagent` go to dispatchers, the main agent and
+    workers; an interaction fork gets the tools of the session that launched
+    it), each handler bound to ``session`` via closure.  claude-agent-sdk's
+    tool server validates a call's arguments and turns a handler's exception
+    into an ``isError`` result, alike on either mcp major."""
     executor = ToolExecutor(session)
 
-    # Build tool list: built-in (role-scoped — `subagent`/`cancel_subagent` go to
-    # dispatchers, the main agent and workers; an interaction fork gets the tools
-    # of the session that launched it) + extras
-    tools: list[Tool] = [
-        Tool(name=name, description=t["description"],
-             inputSchema=t["schema"], annotations=t["annotations"])
-        for name, t in _tool_schemas_for(session).items()
-    ]
+    def handler(name: str):
+        async def call(arguments: dict[str, Any]) -> dict[str, Any]:
+            bind_session_context(session)
+            perm_error = _check_tool_permission(session, name)
+            if perm_error:
+                result, is_error = perm_error, True
+            else:
+                result, is_error = await executor.execute(name, arguments)
+            return {"content": [{"type": "text", "text": result}], "is_error": is_error}
+        return call
 
-    # Extract schema/handler from SdkMcpTool extras
-    extra_handlers: dict[str, Any] = {}
-    if extra_sdk_tools:
-        for sdk_tool in extra_sdk_tools:
-            schema = sdk_tool.input_schema if isinstance(sdk_tool.input_schema, dict) else {}
-            tools.append(Tool(
-                name=sdk_tool.name,
-                description=sdk_tool.description,
-                inputSchema=schema,
-            ))
-            extra_handlers[sdk_tool.name] = sdk_tool.handler
-
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
-        return tools
-
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> CallToolResult:
-        bind_session_context(session)
-
-        # Permission check
-        perm_error = _check_tool_permission(session, name)
-        if perm_error:
-            return CallToolResult(
-                content=[TextContent(type="text", text=perm_error)], isError=True)
-
-        # Built-in tools: delegate to executor
-        if name in _TOOL_SCHEMAS:
-            result, is_error = await executor.execute(name, arguments)
-            return CallToolResult(
-                content=[TextContent(type="text", text=result)], isError=is_error)
-
-        # Extra SDK tools
-        handler = extra_handlers.get(name)
-        if handler is not None:
-            ret = await handler(arguments)
-            content = ret.get("content", [])
-            return CallToolResult(
-                content=[TextContent(type="text", text=c.get("text", "")) for c in content])
-        return CallToolResult(
-            content=[TextContent(type="text", text=f"Unknown tool: {name}")], isError=True)
-
-    return server
+    tools = [SdkMcpTool(name, t["description"], t["schema"], handler(name), t["annotations"])
+             for name, t in _tool_schemas_for(session).items()]
+    return create_sdk_mcp_server(f"proof-{id(session)}", tools=tools)["instance"]
 
 
 # ============================================================================
@@ -3092,10 +3055,9 @@ class ProofMCPHTTPServer:
     def port(self) -> int:
         return self._port
 
-    async def register_session(self, session_id: str, session: Session,
-                               extra_sdk_tools: list | None = None) -> str:
+    async def register_session(self, session_id: str, session: Session) -> str:
         """Register a proof session. Returns its MCP endpoint URL."""
-        mcp_server = _create_mcp_server(session, extra_sdk_tools=extra_sdk_tools)
+        mcp_server = _create_mcp_server(session)
         app = _ManagedMCPApp(mcp_server)
         await app.start()
         self._router.apps[session_id] = app

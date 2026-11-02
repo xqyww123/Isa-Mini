@@ -61,7 +61,9 @@ dependencies = [
     # release with that validator.  (mcp depends on jsonschema too; declared
     # here for the direct use.)
     "jsonschema>=4.0.0",
-    "claude-agent-sdk>=0.1.72",
+    # mcp_http_server builds its tool server with create_sdk_mcp_server, which runs on
+    # mcp 2 from 0.2.140 on.
+    "claude-agent-sdk>=0.2.140",
     "zstandard>=0.23.0",
     # mcp_http_server._write_memory_tool_logic hashes the record into its universal key.
     "xxhash",
@@ -77,7 +79,7 @@ dependencies = [
     # IsaMini.AoA itself: __init__ -> toplevel -> driver_claude_code:14 -> here, all
     # hard imports. Declaring them as an `mcp` extra shipped a package that
     # `pip install IsaMini` could not import.
-    "mcp>=1.26.0",
+    "mcp>=1.26.0,<3",
     "uvicorn>=0.41.0",
 ]
 

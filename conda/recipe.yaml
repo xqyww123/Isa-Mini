@@ -328,9 +328,11 @@ requirements:
     # can reach; the floor turns a silent wrong pick into a loud solve failure.
     # Drop it once conda-forge ships >= 0.12.
     - json-spec >=0.12
-    - claude-agent-sdk >=0.1.72
+    # mcp_http_server builds its tool server with create_sdk_mcp_server, which runs on
+    # mcp 2 from 0.2.140 on.
+    - claude-agent-sdk >=0.2.140
     - zstandard >=0.23.0
-    - mcp >=1.26.0
+    - mcp >=1.26.0,<3
     - uvicorn >=0.41.0
     #
     # THE EXTRAS, FOLDED IN UNCONDITIONALLY.  conda has no concept of extras, and the
