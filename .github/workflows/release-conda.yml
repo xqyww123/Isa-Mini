@@ -230,9 +230,11 @@ jobs:
           set -euo pipefail
           # conda-forge IS required: this package run-depends on python and ~17 libraries.
           # conda.qiyuan.me carries isabelle, auto-sledgehammer, isabelle-rpc,
-          # isabelle-semantic-embedding and rocksdict.
+          # isabelle-semantic-embedding and rocksdict.  The package is named with the local
+          # channel: by bare name conda silently installs the published build whenever this
+          # one cannot be solved.
           conda create -y -n v -c "file://$CH" -c https://conda.qiyuan.me -c conda-forge \
-            --override-channels isabelle-minilang
+            --override-channels "file://$CH::isabelle-minilang"
           conda list -n v | grep -E 'isabelle|minilang|python |openai|anthropic'
 
       - name: "The component is REGISTERED (read it, do not infer)"
@@ -321,7 +323,7 @@ jobs:
   # part that differs, and a .sh-only package installs perfectly cleanly there while
   # registering nothing.
   smoke:
-    needs: publish
+    needs: [build, publish]
     strategy:
       fail-fast: false
       matrix:
@@ -338,8 +340,10 @@ jobs:
       - name: Install from the published channel and use it
         run: |
           set -euo pipefail
-          conda create -y -n s -c https://conda.qiyuan.me -c conda-forge \
-            --override-channels isabelle-minilang
+          # Pinned to the build just published: by bare name conda would install an older
+          # build whenever this one cannot be solved.
+          conda create -y -n s -c https://conda.qiyuan.me -c conda-forge --override-channels \
+            "isabelle-minilang==${{ needs.build.outputs.version }}=*_${{ inputs.build_number || '0' }}"
           eval "$(conda shell.bash hook)"; conda activate s
           # The entry point is <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
           # NOT <prefix>/isa/bin/isabelle, the distribution's unix launcher, which ships on
