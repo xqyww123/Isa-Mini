@@ -1,8 +1,7 @@
 """AoA's MCP server over HTTP (`ProofMCPHTTPServer`, `_create_mcp_server`),
-driven by the installed `mcp`'s own client in each MCP era it serves: the
-handshake (`initialize`), and on mcp 2 also 2026-07-28 (`server/discover`).
-Results are read in the wire form, whose keys are the same on both mcp
-majors.  No Isabelle, no REPL, no model: the tools' work is a stand-in.
+driven by the `mcp` client in both MCP eras: the handshake (`initialize`)
+and 2026-07-28 (`server/discover`).  Results are read in the wire form.
+No Isabelle, no REPL, no model: the tools' work is a stand-in.
 Run: python -m pytest IsaMini/AoA/test_mcp_transport.py
 """
 
@@ -17,7 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 from IsaMini.AoA.mcp_http_server import ProofMCPHTTPServer, ToolExecutor, _tool_schemas_for
 from IsaMini.AoA.model import Role_Major, Runtime, Session
 
-ERAS = ["handshake", "2026-07-28"] if hasattr(ClientSession, "discover") else ["handshake"]
+ERAS = ["handshake", "2026-07-28"]
 
 
 def main_session() -> Session:
@@ -46,7 +45,7 @@ async def served(session: Session, era: str, calls):
         try:
             async with streamable_http_client(url) as (read, write, *_), \
                     ClientSession(read, write) as client:
-                await (client.initialize() if era == "handshake" else client.discover())  # type: ignore[attr-defined]
+                await (client.initialize() if era == "handshake" else client.discover())
                 return await calls(client)
         finally:
             await server.unregister_session("1")

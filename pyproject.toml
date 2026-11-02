@@ -79,7 +79,7 @@ dependencies = [
     # IsaMini.AoA itself: __init__ -> toplevel -> driver_claude_code:14 -> here, all
     # hard imports. Declaring them as an `mcp` extra shipped a package that
     # `pip install IsaMini` could not import.
-    "mcp>=1.26.0,<3",
+    "mcp>=2.3,<3",
     "uvicorn>=0.41.0",
 ]
 

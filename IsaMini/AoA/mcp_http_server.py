@@ -2078,9 +2078,9 @@ async def _refresh_tool_logic(session: Session, args: dict) -> tuple[str, bool]:
 # ToolExecutor — Direct In-Process Tool Dispatch
 # ============================================================================
 
-_RO  = ToolAnnotations(readOnlyHint=True,  destructiveHint=False, openWorldHint=False)
-_MUT = ToolAnnotations(readOnlyHint=False, destructiveHint=True,  openWorldHint=False)
-_ACT = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+_RO  = ToolAnnotations(read_only_hint=True,  destructive_hint=False, open_world_hint=False)
+_MUT = ToolAnnotations(read_only_hint=False, destructive_hint=True,  open_world_hint=False)
+_ACT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     # `edit` carries no schema here: _tool_schemas_for builds the call's own from
@@ -2938,7 +2938,8 @@ class _ManagedMCPApp:
     """
 
     def __init__(self, mcp_server: MCPServer):
-        self._manager = StreamableHTTPSessionManager(app=mcp_server, stateless=False)
+        # a handshake-era session lives until its client ends it
+        self._manager = StreamableHTTPSessionManager(app=mcp_server, stateless=False, session_idle_timeout=None)
         self._task: asyncio.Task | None = None
         self._ready = asyncio.Event()
         self._stop_event = asyncio.Event()

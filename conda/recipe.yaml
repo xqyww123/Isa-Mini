@@ -332,7 +332,7 @@ requirements:
     # mcp 2 from 0.2.140 on.
     - claude-agent-sdk >=0.2.140
     - zstandard >=0.23.0
-    - mcp >=1.26.0,<3
+    - mcp >=2.3,<3
     - uvicorn >=0.41.0
     #
     # THE EXTRAS, FOLDED IN UNCONDITIONALLY.  conda has no concept of extras, and the
