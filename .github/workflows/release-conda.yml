@@ -81,7 +81,7 @@ jobs:
             --recipe conda/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number || '0' }}" \
-            -c https://conda.qiyuan.me -c conda-forge
+            -c https://conda-ci.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
 
       - name: "Sanity: the payload contains both halves and NOTHING else"
@@ -233,7 +233,7 @@ jobs:
           # isabelle-semantic-embedding and rocksdict.  The package is named with the local
           # channel: by bare name conda silently installs the published build whenever this
           # one cannot be solved.
-          conda create -y -n v -c "file://$CH" -c https://conda.qiyuan.me -c conda-forge \
+          conda create -y -n v -c "file://$CH" -c https://conda-ci.qiyuan.me -c conda-forge \
             --override-channels "file://$CH::isabelle-minilang"
           conda list -n v | grep -E 'isabelle|minilang|python |openai|anthropic'
 
@@ -342,7 +342,7 @@ jobs:
           set -euo pipefail
           # Pinned to the build just published: by bare name conda would install an older
           # build whenever this one cannot be solved.
-          conda create -y -n s -c https://conda.qiyuan.me -c conda-forge --override-channels \
+          conda create -y -n s -c https://conda-ci.qiyuan.me -c conda-forge --override-channels \
             "isabelle-minilang==${{ needs.build.outputs.version }}=*_${{ inputs.build_number || '0' }}"
           eval "$(conda shell.bash hook)"; conda activate s
           # The entry point is <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
