@@ -38,7 +38,7 @@ ML \<open>
      prove must NOT raise a raw THM (pre-fix this raised THM 1: RSN: no
      unifiers). A clean failure (ERROR / Auto_Fail) or success is acceptable. *)
   val override =
-    {add = [(Facts.named "Orderings.preorder_class.super", [])],
+    {add = [(Facts.named \<^unchecked_name>\<open>Orderings.preorder_class.super\<close>, [])],
      del = [], only = false} : Sledgehammer_Fact.fact_override;
   val sequent = Goal.init (Thm.cterm_of ctxt @{prop "(P::nat \<Rightarrow> bool) n"});
   val _ =

@@ -35,7 +35,7 @@ local
           "], #remaining=", string_of_int (length remaining_premises)])
 in
   val _ = writeln "### A1: nat.induct (expected consumes = 0)"
-  val _ = show "nat.induct" (
+  val _ = show \<^unchecked_name>\<open>nat.induct\<close> (
     Minilang.analyze_induct ctxt
       (false, ([[SOME (NONE, (\<^term>\<open>n::nat\<close>, false))]],
                (([[]], []), SOME [@{thm nat.induct}])))
@@ -90,7 +90,7 @@ local
           "]"])
 in
   val _ = writeln "### B1: nat.exhaust (expected consumes = 0)"
-  val _ = show "nat.exhaust" (
+  val _ = show \<^unchecked_name>\<open>nat.exhaust\<close> (
     Minilang.analyze_case_split ctxt
       (false, ([[SOME \<^term>\<open>n::nat\<close>]], SOME @{thm nat.exhaust}))
       [])

@@ -14,10 +14,10 @@ text \<open>
 
 (*a method that takes four seconds, leaving the goal as it is*)
 method_setup sleep_4s = \<open>Scan.succeed (fn _ => SIMPLE_METHOD (fn st =>
-  (OS.Process.sleep (seconds 4.0); Seq.single st)))\<close>
+  (Time.sleep (seconds 4.0); Seq.single st)))\<close>
 (*a method that never returns; sleeping, so that it is interruptible*)
 method_setup spin = \<open>Scan.succeed (fn _ => SIMPLE_METHOD (fn _ =>
-  let fun loop () = (OS.Process.sleep (seconds 0.05); loop ()) in loop () end))\<close>
+  let fun loop () = (Time.sleep (seconds 0.05); loop ()) in loop () end))\<close>
 
 ML \<open>
 local

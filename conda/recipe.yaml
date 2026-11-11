@@ -26,15 +26,11 @@ schema_version: 1
 # isabelle, in a user's environment.  Two qualify: Minilang and Minilang_AoA, needing
 # only Auto_Sledgehammer, Isabelle_RPC and Semantic_Embedding.
 #
-# Three sessions are deliberately kept out, each in its own ROOT under a subdirectory:
-# Minilang_REPL (REPL/) and Minilang_AoA_REPL (Agent/AoA_REPL/) need Isa_REPL, which we do
-# not publish; Minilang_Agent_Injector (Agent/Injector/) needs `Sign.map_syn`, exported
-# only by my-better-isabelle-prover's `expose_map_syn` -- a `dev`-category patch that the
-# published isabelle package carries no more than it carries the Isa-REPL one.
-#
-# A component contributes its own top-level ROOT plus whatever a ROOTS file names.  This
-# component has NO ROOTS file, which is what keeps those three invisible.  Do not add
-# one.
+# Two sessions are deliberately kept out: Minilang_REPL (REPL/) and Minilang_AoA_REPL
+# (Agent/AoA_REPL/) need Isa_REPL, which we do not publish.  Each is declared in its own
+# ROOT in its subdirectory, not in the top-level one (the `declared` check below), and the
+# whitelist below ships neither subdirectory, so the top-level ROOT is all this component
+# exposes.
 #
 # RELEASE DISCIPLINE, mandatory: the conda version must never fall BEHIND PyPI's.  If PyPI
 # gets ahead, `pip install -U` takes over, its uninstall removes conda's dist-info, and the
@@ -122,46 +118,28 @@ build:
 
       # Agent/ is ENUMERATED, not copied wholesale -- the opposite of the choice made for
       # Isabelle_RPC's Tools/ and Semantic_Embedding's Tools/, and deliberately so.  Of
-      # the directory's tracked files only the eight below belong to the shipped session;
+      # the directory's tracked files only the eleven below belong to the shipped session;
       # the rest is IsaMini_Agent_old/, AoA_REPL/ (an Isa_REPL session that must NOT be
       # exposed), Test/, *.old.ML, and the untracked logs/ and secret.sh.  Enumerating
       # risks dropping an indirectly-referenced file; copying wholesale risks shipping a
       # secret.  Here the second risk wins, and the ML_file closure was traced by hand:
-      # Minilang_AoA.thy ML_files exactly these seven (lines 6,12,19,22,23,26,27; 20,21
-      # and 28-30 are commented out), and none of the seven loads anything further.
-      # The first risk is real but loud: 0.7.0's first dry run failed in `verify` on
-      # proof_store_AoA.ML, which the theory had gained and this list had not.
-      (dest / "Agent" / "Injector").mkdir(parents=True, exist_ok=True)
-      for f in ["Minilang_AoA.thy", "helper.ML", "agent_hint.ML", "agent.ML",
-                "agent_packer.ML", "preprocess.ML", "proof_store_AoA.ML",
-                "agent_server.ML"]:
+      # Minilang_AoA.thy ML_files exactly these ten (lines 6,14,19,24,25,32,35,36,39,40;
+      # 33,34 and 41-43 are commented out), and none of the ten loads anything further.
+      # The first risk is real, and loud only at release: `verify` builds Minilang_AoA
+      # from the package, and 0.7.0's first dry run failed there on proof_store_AoA.ML,
+      # which the theory had gained and this list had not.  Between releases it is
+      # silent: agent_config.ML, agent_plugin.ML (2026-10-09) and agent_auto_intro.ML
+      # (10-18) were missing the same way for a month, with no release run to notice.
+      (dest / "Agent").mkdir(parents=True, exist_ok=True)
+      for f in ["Minilang_AoA.thy", "helper.ML", "agent_hint.ML", "agent_auto_intro.ML",
+                "agent_config.ML", "agent_plugin.ML", "agent.ML", "agent_packer.ML",
+                "preprocess.ML", "proof_store_AoA.ML", "agent_server.ML"]:
           shutil.copy2(SRC / "Agent" / f, dest / "Agent" / f)
 
-      # Agent/Injector ships WITH its own ROOT but is NOT in the top-level one.  That
-      # session's single command is `setup <Sign.map_syn ...>`, and Sign.map_syn exists
-      # only with my-better-isabelle-prover's `expose_map_syn`, a `dev`-category patch
-      # that the published `isabelle` package deliberately does not carry -- the same
-      # reason isabelle-repl is not published.  Declared in the top-level ROOT, which
-      # `isabelle components -u` exposes wholesale, it fails for every user of that
-      # package ("Value or constructor (map_syn) has not been declared in structure
-      # Sign"; measured on release-conda run 29677250284).
-      #
-      # Shipping the sub-ROOT is safe and useful: a component contributes only its own
-      # top-level ROOT plus whatever a ROOTS file names, and this component has no ROOTS
-      # file, so nothing here reaches a stock user's session space.  Someone running a
-      # `--category all` Isabelle gets `isabelle build -d . -d Agent/Injector`.
-      for f in ["Minilang_Agent_Injector.thy", "ROOT"]:
-          shutil.copy2(SRC / "Agent" / "Injector" / f, dest / "Agent" / "Injector" / f)
-
-      # The mechanism, asserted directly.  A ROOTS file is the ONLY thing that would pull
-      # the sub-ROOT into what `components -u` exposes, so its absence is the real
-      # invariant -- counting ROOT files was an indirect proxy for it.
-      if (dest / "ROOTS").exists():
-          die("a ROOTS file would expose the sub-ROOTs to every user; this component must not have one")
       # Which sessions the exposed ROOT actually DECLARES.  Comments must be stripped
       # first, and that is not fussiness: this ROOT carries a commented-out
-      # Infra_Filter_Test session and a comment naming Minilang_Agent_Injector, so a
-      # regex over the raw text reports three sessions for a perfectly correct file.
+      # Infra_Filter_Test session, so a regex over the raw text reports three sessions
+      # for a perfectly correct file.
       # (Measured -- the first version of this check failed on a good ROOT.)  Isabelle
       # comments nest, hence the scanner rather than a non-greedy regex.
       def strip_comments(t):
@@ -182,14 +160,11 @@ build:
       expected = {"Minilang", "Minilang_AoA"}
       if declared != expected:
           die(f"the shipped ROOT declares {sorted(declared)}, expected {sorted(expected)}. "
-              "Every session here must build on the PUBLISHED isabelle, which carries the "
-              "`user` patch category only -- Minilang_Agent_Injector needs `dev`'s "
-              "expose_map_syn, and anything reaching Isa_REPL needs a package we do not "
-              "publish at all.")
+              "Every session here must build on the PUBLISHED isabelle; anything reaching "
+              "Isa_REPL needs a package we do not publish at all.")
 
       for must in ["ROOT", "Minilang.thy", "library/proof.ML", "library/aux.ML",
-                   "Agent/Minilang_AoA.thy", "Agent/agent.ML", "Agent/agent_server.ML",
-                   "Agent/Injector/Minilang_Agent_Injector.thy"]:
+                   "Agent/Minilang_AoA.thy", "Agent/agent.ML", "Agent/agent_server.ML"]:
           if not (dest / must).is_file():
               die(f"{must} did not reach the component directory")
 
@@ -282,11 +257,11 @@ requirements:
     # Bounded to the Isabelle SERIES these sessions are written against.  The base package
     # keeps a constant name at a per-release version, so unbounded lets conda's newest-wins
     # resolution pair this with a future Isabelle it was never built for.
-    - isabelle >=2025.2,<2025.3
+    - isabelle >=2026,<2026.1
     # The three sessions ROOT names.  Performant_Isabelle_ML is deliberately NOT listed:
     # this ROOT does not name it, it arrives through auto-sledgehammer and isabelle-rpc,
     # and declaring transitive session deps is how a version bound ends up in two places.
-    - auto-sledgehammer >=0.2.0,<0.3.0        # ROOT:2  Minilang = Auto_Sledgehammer
+    - auto-sledgehammer >=0.3.0,<0.4.0        # ROOT:2  Minilang = Auto_Sledgehammer
     # ROOT:9  Minilang_AoA sessions; also a pyproject dependency.  >=0.5.1:
     # IsaMini/AoA/model.py imports IsaTerm from Isabelle_RPC_Host, which first ships
     # in 0.5.1 (0.5.0 has the RPC_Term_Codec that Agent/agent_packer.ML instantiates,
@@ -385,9 +360,9 @@ about:
     complexity, together with AoA -- the LLM-driven proof agent built on it, which is
     this project's main product.
 
-    This package ships both halves: the Isabelle sessions (Minilang, Minilang_AoA,
-    Minilang_Agent_Injector), registered as an Isabelle component from a conda link
-    hook, and the Python package `IsaMini` with `IsaMini.AoA`.  The agent drives the ML
+    This package ships both halves: the Isabelle sessions (Minilang, Minilang_AoA),
+    registered as an Isabelle component from a conda link hook, and the Python package
+    `IsaMini` with `IsaMini.AoA`.  The agent drives the ML
     side over Isabelle_RPC, so neither half is useful alone.
 
     The Minilang REPL client (`IsaMini.REPL` and its CLI) is NOT usable from this

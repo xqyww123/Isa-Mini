@@ -310,8 +310,8 @@ val PRINT_CMD : command
    interpretation, eagerly apply `unfold_locales` so the opaque locale predicate
    `L args` is split into the real leaf assumptions, each reported as an
    independently provable / delegatable subgoal.  `false` (bare REPL, text
-   command, translator replay) keeps the historic behaviour verbatim: a single
-   opaque predicate goal. *)
+   command) keeps the historic behaviour verbatim: a single opaque predicate
+   goal. *)
 val OPEN_MODULE   : Expression.expression_i -> state -> state
 val OPEN_MODULE'' : {auto_unfold_locale: bool} -> Expression.expression -> state -> state
 val OPEN_MODULE_CMD : Token.T list -> (state -> state) * Token.T list
@@ -432,14 +432,14 @@ val atomize_goals_in_printing = Attrib.setup_config_bool \<^binding>\<open>min_s
 val working_mode = Attrib.setup_config_string \<^binding>\<open>working_mode\<close> (K "RELAXED")
 val transparent_intro = Attrib.setup_config_bool \<^binding>\<open>transparent_intro\<close> (K false)
 val high_auto_mode = Attrib.setup_config_bool \<^binding>\<open>high_auto_mode\<close> (K false)
-val strict_end = Config.declare_bool ("Minilang.strict_end", \<^here>) (K false)
-val counter_mode = Config.declare_string ("Minilang.counter_mode", \<^here>) (K "consecutive")
-val INTRO_split_prem_conj = Config.declare_bool ("Minilang.INTRO_split_prem_conj", \<^here>) (K true)
-val INTRO_split_prem_conj_size_limit = Config.declare_int ("Minilang.INTRO_split_prem_conj_size_limit", \<^here>) (K 20)
-val INTRO_mk_block   = Config.declare_bool ("Minilang.INTRO_mk_block", \<^here>) (K false)
-val auto_deconflict_bound = Config.declare_bool ("Minilang.auto_deconflict_bound", \<^here>) (K false)
-val deconflict_case_fixes = Config.declare_bool ("Minilang.deconflict_case_fixes", \<^here>) (K false)
-val auto_calculation = Config.declare_bool ("Minilang.auto_calculation", \<^here>) (K true)
+val strict_end = Config.declare_bool (\<^unchecked_name>\<open>Minilang.strict_end\<close>, \<^here>) (K false)
+val counter_mode = Config.declare_string (\<^unchecked_name>\<open>Minilang.counter_mode\<close>, \<^here>) (K "consecutive")
+val INTRO_split_prem_conj = Config.declare_bool (\<^unchecked_name>\<open>Minilang.INTRO_split_prem_conj\<close>, \<^here>) (K true)
+val INTRO_split_prem_conj_size_limit = Config.declare_int (\<^unchecked_name>\<open>Minilang.INTRO_split_prem_conj_size_limit\<close>, \<^here>) (K 20)
+val INTRO_mk_block   = Config.declare_bool (\<^unchecked_name>\<open>Minilang.INTRO_mk_block\<close>, \<^here>) (K false)
+val auto_deconflict_bound = Config.declare_bool (\<^unchecked_name>\<open>Minilang.auto_deconflict_bound\<close>, \<^here>) (K false)
+val deconflict_case_fixes = Config.declare_bool (\<^unchecked_name>\<open>Minilang.deconflict_case_fixes\<close>, \<^here>) (K false)
+val auto_calculation = Config.declare_bool (\<^unchecked_name>\<open>Minilang.auto_calculation\<close>, \<^here>) (K true)
 
 fun chk_working_mode mode =
       if member (op =) ["RELAXED", "COMPLETE_NEXT", "STRICT"] mode
@@ -1317,6 +1317,9 @@ structure Calc_Data = Proof_Data (
   val init = K []
 )
 
+(*the first result of `also`; Calculation prints the calculation only in interactive mode*)
+fun also_quietly st = Interactive.setmp false (Seq.pull o Calculation.also NONE) st
+
 fun extend_calc thm ctxt =
   if not (Config.get ctxt auto_calculation) then ([], ctxt)
   else
@@ -1324,14 +1327,12 @@ fun extend_calc thm ctxt =
       val stat = Proof.init ctxt
       fun extend calc thm = stat
          |> Proof.set_facts [calc]
-         |> Calculation.also NONE false
-         |> Seq.pull
+         |> also_quietly
          |> (fn SOME (Seq.Error _, _) => NONE
               | NONE => NONE
               | SOME (Seq.Result stat, _) => stat
          |> Proof.set_facts [thm]
-         |> Calculation.also NONE false
-         |> Seq.pull
+         |> also_quietly
          |> (fn SOME (Seq.Error _, _) => NONE
               | NONE => NONE
               | SOME (Seq.Result stat, _) => stat
@@ -1422,8 +1423,8 @@ fun map2_opt _ [] [] = []
 datatype intros_mode = ALL_SUBGOALS | SINGLE_GOAL
 
 fun strip_meta_hhf term =
-  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
-        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+  let fun strip (V,P) (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ H $ B) = strip (V,H::P) B
+        | strip (V,P) (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
         | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
             strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) X = (rev V, rev P, X)
@@ -2319,9 +2320,9 @@ fun SIMPLIFY_GOAL_AND_PREMISES'
     (* 4. Setup simplifier context *)
     val simp_ctxt = (
       if use_system_simps
-      then ctxt addsimps simp_facts
-      else Simplifier.clear_simpset ctxt addsimps simp_facts
-      ) |> (fn c => c addsimprocs extra_simprocs)
+      then ctxt |> Simplifier.add_simps simp_facts
+      else Simplifier.clear_simpset ctxt |> Simplifier.add_simps simp_facts
+      ) |> fold Simplifier.add_proc extra_simprocs
         |> Simplifier.add_cong @{thm NO_SIMP_cong}
 
     (* 5. Apply simplification using conversion *)
@@ -2529,7 +2530,7 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename no_simp tac first_vars 
             else fst (Logic.dest_implies (Thm.prop_of st00))
 
        (*TODO: consider the
-            `Conv.gconv_rule (Simplifier.full_rewrite (ctxt addsimps simp_thms)) 1 goalx`
+            `Conv.gconv_rule (Simplifier.full_rewrite (ctxt |> Simplifier.add_simps simp_thms)) 1 goalx`
           in case of the high_auto_mode.
           We need a preplay to get the shape of the goals.*)
        val siblings = map (fn (_, kase as Rule_Cases.Case {fixes, binds, ...}) =>
@@ -2653,7 +2654,7 @@ fun CASES' diff ADDITIONAL_NOTES safe_names smart_rename no_simp tac first_vars 
                    val simp_thms = maps snd thms
                 in if null simp_thms
                  then goalx
-                 else Conv.gconv_rule (Simplifier.full_rewrite (ctxt addsimps simp_thms)) 1 goalx
+                 else Conv.gconv_rule (Simplifier.full_rewrite (ctxt |> Simplifier.add_simps simp_thms)) 1 goalx
                end
               else goalx
             val items' = ( map (apfst Binding.name_of) fixes,
@@ -2743,7 +2744,7 @@ fun parse_consumes_policy s =
  * The helpers below (align_left, align_right, prep_inst, special_rename_params,
  * get_inductP_local, mk_inst_rule, get_casesT_local, get_casesP_local,
  * mk_inst_cases_rule) are verbatim copies of private functions from
- *   contrib/Isabelle2025-2/src/Tools/induct.ML
+ *   contrib/Isabelle2026/src/Tools/induct.ML
  *
  * They exist so that pick_induct_rule / pick_case_split_rule can replicate
  * Isabelle's rule-discovery logic without modifying the system induction
@@ -2751,12 +2752,10 @@ fun parse_consumes_policy s =
  * opt_rule = SOME [picked_rule], forcing Isabelle to use exactly the rule
  * we pre-analyzed.
  *
- * Last synced with: Isabelle2025-2 (audit 2026-06-10: all listed regions
- * byte-identical to Isabelle2024; rule_cases.ML deps only saw the pure
- * renames Raw_Simplifier.rewrite->rewrite_wrt and Drule.cprems_of->
- * Thm.take_cprems_of, both semantics-preserving)
+ * Last synced with: Isabelle2026 (audit 2026-11-09: all listed regions and
+ * their line numbers unchanged from Isabelle2025-2; rule_cases.ML unchanged)
  * When upgrading Isabelle, verify these are still correct by diffing:
- *   - contrib/Isabelle2025-2/src/Tools/induct.ML:
+ *   - contrib/Isabelle2026/src/Tools/induct.ML:
  *     align_left/align_right (lines 401-407),
  *     prep_inst (line 412),
  *     special_rename_params (line 633),
@@ -2764,7 +2763,7 @@ fun parse_consumes_policy s =
  *     get_casesP/get_casesT (lines 485-488),
  *     inst_rule inside gen_induct_context_tactic (line 763),
  *     inst_rule inside cases_context_tactic (line 496).
- *   - contrib/Isabelle2025-2/src/Pure/Isar/rule_cases.ML:
+ *   - contrib/Isabelle2026/src/Pure/Isar/rule_cases.ML:
  *     consume (line 198), get_consumes.
  *
  * Symptom of missed sync: analyze_induct / analyze_case_split reports a
@@ -3515,8 +3514,8 @@ fun gen_HAVE mkspec fixes assumes shows =
                      end
         val shows' = map (fn origin as ((B,atts),props) =>
                             if Binding.is_empty B then ((mkB(),atts),props) else origin ) shows
-     in gen_HAVE' (mkspec false "" NONE (K I) Binding.empty_atts []
-                  [Element.Fixes fixes, Element.Assumes assumes] (Element.Shows shows) false)
+     in gen_HAVE' (mkspec {verbose = false, long = false, kind = ""} NONE (K I) Binding.empty_atts []
+                  [Element.Fixes fixes, Element.Assumes assumes] (Element.Shows shows))
                   shows' (ctxt', SK)
     end ))
 
@@ -4249,8 +4248,7 @@ fun CHAINING_i name_opt thms (ctxt, HHF (st, items) :: SK) =
         val stat0 = Proof.init ctxt0
         fun step th st =
               st |> Proof.set_facts [th]
-                 |> Calculation.also NONE false
-                 |> Seq.pull
+                 |> also_quietly
                  |> (fn SOME (Seq.Result st', _) => st'
                       | SOME (Seq.Error msg, _) =>
                           raise OPR_FAIL (PROOF_FAIL,
@@ -4679,7 +4677,7 @@ fun CHOOSE' prep_terms raw_terms (ctxt, HHF (st, items) :: SK) =
             of Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Ex\<close>, _) $ _) => Thms.exI
              | Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Ex1\<close>, _) $ _) => Thms.ex1I
              | Const(\<^const_name>\<open>Trueprop\<close>, _) $ (Const(\<^const_name>\<open>Set.Bex\<close>, _) $ _) =>
-                Proof_Context.get_thm ctxt "Set.bexI"
+                Proof_Context.get_thm ctxt \<^unchecked_name>\<open>Set.bexI\<close>
              | _ => raise OPR_FAIL (INVALID_OPR, "The leading goal is not about existential quantification")
 
       (* Type of the variable bound by the leading existential, as `typ option`
@@ -5202,7 +5200,7 @@ val term_escalate_timeout =
    termination is genuinely hard to automate. Set from ML with e.g.
      setup \<open>Config.put_global Minilang.fun_fake_automatic_failure true\<close> *)
 val fun_fake_automatic_failure =
-  Config.declare_bool ("Minilang.fun_fake_automatic_failure", \<^here>) (K false)
+  Config.declare_bool (\<^unchecked_name>\<open>Minilang.fun_fake_automatic_failure\<close>, \<^here>) (K false)
 
 (* Debug only — INTERNAL, not exposed as an attribute. When set,
    force the pattern-completeness escalation ladder to skip all
@@ -5216,7 +5214,7 @@ val fun_fake_automatic_failure =
      setup \<open>Config.put_global Minilang.fun_fake_pat_completeness_failure true\<close> *)
 val fun_fake_pat_completeness_failure =
   Config.declare_bool
-    ("Minilang.fun_fake_pat_completeness_failure", \<^here>) (K false)
+    (\<^unchecked_name>\<open>Minilang.fun_fake_pat_completeness_failure\<close>, \<^here>) (K false)
 
 (* Run [tac st] under a timeout. Returns SOME (result state) if the
    tactic produced a state within the timeout; NONE on timeout or if
@@ -5436,7 +5434,7 @@ fun dispatch_term ctxt term_rule term_goal metric_strs =
                    (see lexicographic_order.ML:213-215). *)
                 val termination_simps =
                   Named_Theorems.get ctxt \<^named_theorems>\<open>termination_simp\<close>
-                val simp_tac = auto_tac (ctxt addsimps termination_simps)
+                val simp_tac = auto_tac (ctxt |> Simplifier.add_simps termination_simps)
                 val fake_fail =
                   Config.get ctxt fun_fake_automatic_failure
               in
@@ -5583,8 +5581,8 @@ fun run_phase_2 outer_ctxt lthy2 {term_goal, term_afterqed}
                     [BLOCK t, print_stack [HHF (outer_st, outer_items)]])
            val _ = get_reporter () (Internal TERMINATION_PROOF_OPENED)
            (* Emit `Goals` with the actual residual termination subgoal
-              terms so consumers (Python SubgoalMaker, translator's
-              `(*goal: ...*)` annotations) see both the correct count
+              terms so consumers (Python SubgoalMaker, derived_subgoals_of)
+              see both the correct count
               and the correct contents.  Use `goals_of'` because `init_st`
               is in Minilang's protected form (`protect_goals` nests
               subgoals inside `Minilang.GOAL` wrappers); `Thm.prems_of` would
@@ -5624,7 +5622,7 @@ fun thms_to_targeted_simprocs ctxt (entries: (thm * term list) list) : simproc l
           in
             SOME (Simplifier.make_simproc ctxt
               { name = "targeted_simproc_" ^ string_of_int i ^ "_" ^ string_of_int j,
-                kind = Simproc,
+                kind = Simplifier.Simproc,
                 lhss = [lhs],
                 proc = K proc,
                 identifier = [] })

@@ -31,7 +31,7 @@ Read [AoA User Manual](/IsaMini/AoA/Readme.md) for how to install and other deta
 Minilang eliminates the human-oriented complexities of Isabelle/Isar, letting language models focus on high-level proof planning while delegating fine-grained reasoning to classical automation (Sledgehammer & friends). What started as a minimal proof shell has grown into a full stack:
 
 - **Minilang** — a minimalist proof language with only ~10 core operations, each with clear semantic distinctions ([OOPSLA'26 paper](https://dl.acm.org/doi/10.1145/3798275))
-- **Translator** — a rule-based Isar → Minilang translator that has converted ~85% of ~340K existing Isabelle/AFP proofs into a large-scale training corpus ([code](https://github.com/xqyww123/Isa-Mini-Translator))
+- **Translator** — a rule-based Isar → Minilang translator that converted ~85% of ~340K existing Isabelle/AFP proofs into a large-scale training corpus; no longer maintained ([code](https://github.com/xqyww123/Isa-Mini-Translator))
 - **AoA Agent** — *Agent over AST*: a token-efficient LLM proof agent that edits Minilang proofs directly as JSON abstract syntax trees, usable from inside Isabelle via a single `by aoa` method ([paper](https://arxiv.org/abs/2607.16372), [code](/IsaMini/AoA), [README](/IsaMini/AoA/Readme.md))
 
 Visit our [Example Gallery](https://docs.google.com/presentation/d/14VY5HkMRmOhRkKBvmISymKtNg5e650EZgzt-KajqMRI/edit?usp=sharing) to see more.

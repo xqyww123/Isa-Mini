@@ -11,12 +11,6 @@ session Minilang_AoA in Agent = Minilang +
   theories
     Minilang_AoA
 
-(* Minilang_Agent_Injector lives in Agent/Injector/ROOT, NOT here: it needs
-   `Sign.map_syn`, which only exists with my-better-isabelle-prover's `expose_map_syn`
-   patch -- a `dev`-category patch that the published conda `isabelle` package
-   deliberately does not carry.  `isabelle components -u` exposes this whole ROOT, so
-   declaring it here makes it fail for every user of that package.  See that file. *)
-
 (*
 session Infra_Filter_Test in Test_InfraFilter = "HOL-Analysis" +
   sessions

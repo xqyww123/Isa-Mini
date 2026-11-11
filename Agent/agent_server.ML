@@ -322,7 +322,7 @@ fun global_context_of (ctxt, goal_sequent) : context =
   let val flattened_hyps = Facts.dest_static false
                             [(Proof_Context.facts_of (Local_Theory.target_of ctxt))]
                             (Proof_Context.facts_of ctxt)
-                     |> filter (fn ("local.this", _) => false | _ => true)
+                     |> filter (fn (\<^unchecked_name>\<open>local.this\<close>, _) => false | _ => true)
                      |> map (apsnd (map Thm.prop_of))
                      |> Minilang_Aux.flatten_facts
                      |> Minilang_Aux.filter_redundant_facts
@@ -441,9 +441,8 @@ fun minilang_message_packer ctxt (running_op : MiniLang_Agent_Plugin.registratio
                `new_subgoals_count`), not the term texts.  Packing just
                the length avoids calling `string_of_term` on every goal
                (expensive for large terms) and shrinks wire size.  The
-               full `term list` is still kept on the ML side — the
-               translator still consumes it via `item_reporter` for its
-               `(*goal: …*)` diagnostic annotations. *)
+               full term list stays on the ML side:
+               Minilang.derived_subgoals_of reads it. *)
             SOME (packPair (packInt, packInt) (1, length goals))
         | pack_opt (Minilang.Consider_Case (kase, items)) =
             SOME (packPair (packInt, packPair (packString, minilang_items_packer)) (2, (kase, items)))
@@ -916,7 +915,7 @@ fun make_thm_roles ctxt =
 fun make_retrieve_entity_callback (mk_roles : Proof.context -> thm list -> string list)
     (ctxt_unpack : Context_Callbacks.context_unpacker) : Remote_Procedure_Calling.callback' =
   Remote_Procedure_Calling.mk_callback {
-  name = "IsaMini.retrieve_entity",
+  name = \<^unchecked_name>\<open>IsaMini.retrieve_entity\<close>,
   on_interrupt = Remote_Procedure_Calling.Reraise,
   arg_schema = unpackPair (ctxt_unpack,
     unpackList (unpackPair (Universal_Key.unpack_entity_kind, unpackString))),
@@ -1089,7 +1088,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       val active_operations = MiniLang_Agent_Plugin.active_operations thy user_operations
       val task_packages = #python_packages (MiniLang_Agent_Plugin.the_task thy (#name task))
       val _ = Remote_Procedure_Calling.load
-                ("IsaMini.AoA" :: distinct (op =) (maps #python_packages active_operations @ task_packages))
+                (\<^unchecked_name>\<open>IsaMini.AoA\<close> :: distinct (op =) (maps #python_packages active_operations @ task_packages))
 
       (* The three preprocessing segments, timed as one block: prep_time is
          the entry's share of the recorded replay cost (D61 — what a replay
@@ -1147,7 +1146,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       (* Local callback definitions - all share state, counters, messages via closure *)
 
       val proof_opr_callback = {
-        name = "IsaMini.proof_opr",
+        name = \<^unchecked_name>\<open>IsaMini.proof_opr\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple3 (unpackString, unpackString, MiniLang_Agent.xcmd_unpacker thy),
         (* Third component: this op's ML-side times as (cpu_ms, wall_ms), raw as
@@ -1209,7 +1208,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val reset_state_callback = {
-        name = "IsaMini.reset_state",
+        name = \<^unchecked_name>\<open>IsaMini.reset_state\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackString,
         ret_schema = packUnit,
@@ -1219,7 +1218,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val set_replay_mode_callback = {
-        name = "IsaMini.set_replay_mode",
+        name = \<^unchecked_name>\<open>IsaMini.set_replay_mode\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackBool,
         ret_schema = packUnit,
@@ -1228,7 +1227,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val lookup_fact_callback = {
-        name = "IsaMini.lookup_fact",
+        name = \<^unchecked_name>\<open>IsaMini.lookup_fact\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackList (unpackList (unpackPair (unpackBool, unpack_criterion)))),
         ret_schema = (fn (ctxt, rets) =>
@@ -1262,7 +1261,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       val thm_roles = make_thm_roles ctxt
 
       val compute_bindings_callback = {
-        name = "IsaMini.compute_bindings",
+        name = \<^unchecked_name>\<open>IsaMini.compute_bindings\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple3 (unpackString, unpackList unpackString, unpackList unpackString),
         ret_schema = MiniLang_Agent.pack_bindings,
@@ -1277,7 +1276,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       (* The automatic Intro decision (IsaMini/AoA/docs/AUTO_INTRO_DECISION.md):
          whether AoA inserts its automatic Intro on the state's leading goal. *)
       val decide_auto_intro_callback = {
-        name = "IsaMini.decide_auto_intro",
+        name = \<^unchecked_name>\<open>IsaMini.decide_auto_intro\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackString,
         ret_schema = packBool,
@@ -1286,7 +1285,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val check_term_callback = {
-        name = "IsaMini.check_term",
+        name = \<^unchecked_name>\<open>IsaMini.check_term\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packTuple3 (packString,
@@ -1322,7 +1321,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
        * Python side.  `Variable.is_fixed` excludes a target that is actually
        * an already-fixed (declarable) variable, which inducts fine. *)
       val induction_target_hits_binder_callback = {
-        name = "IsaMini.induction_target_hits_leading_binder",
+        name = \<^unchecked_name>\<open>IsaMini.induction_target_hits_leading_binder\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packBool,
@@ -1348,7 +1347,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val unfold_syntax_callback = {
-        name = "IsaMini.unfold_syntax",
+        name = \<^unchecked_name>\<open>IsaMini.unfold_syntax\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packTuple4 (packString, packString, packString, packString),
@@ -1391,7 +1390,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
          raises on an unparseable probe: each probe is guarded, because feeding a
          bare symbol is expected to fail for most templates. *)
       val resolve_notation_callback = {
-        name = "IsaMini.resolve_notation",
+        name = \<^unchecked_name>\<open>IsaMini.resolve_notation\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packString,
@@ -1429,7 +1428,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
            universal_key_of, which all satisfy this. A short name or xname
            silently yields (false, ""). *)
       val abbrev_expansion_head_callback = {
-        name = "IsaMini.abbrev_expansion_head",
+        name = \<^unchecked_name>\<open>IsaMini.abbrev_expansion_head\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackString),
         ret_schema = packPair (packBool, packString),
@@ -1449,7 +1448,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val schematic_vars_callback = {
-        name = "IsaMini.schematic_variables_of",
+        name = \<^unchecked_name>\<open>IsaMini.schematic_variables_of\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         (* (state_id, whole): whole=false → leading subgoal only;
            whole=true → the whole goal sequent. *)
@@ -1480,7 +1479,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
          operations whose dispatch path does not advance session-shared
          counters — see the contract note on Minilang.derived_subgoals_of. *)
       val schematic_vars_of_derived_subgoals_callback = {
-        name = "IsaMini.schematic_vars_of_derived_subgoals",
+        name = \<^unchecked_name>\<open>IsaMini.schematic_vars_of_derived_subgoals\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         (* (state_id, opr): opr in the same (cmd, arg) shape as proof_opr's. *)
         arg_schema = unpackPair (unpackString, MiniLang_Agent.xcmd_unpacker thy),
@@ -1529,7 +1528,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
        * appear in the goal, rather than every in-scope fixed variable (which
        * would include the lemma's `fixes` signature). *)
       val goal_variables_callback = {
-        name = "IsaMini.goal_variables",
+        name = \<^unchecked_name>\<open>IsaMini.goal_variables\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackString,
         ret_schema = packList packString,
@@ -1560,7 +1559,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val potential_defs_callback = {
-        name = "IsaMini.potential_defs_of",
+        name = \<^unchecked_name>\<open>IsaMini.potential_defs_of\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackList unpackString),
         ret_schema = packList (packTuple4 (packString, packString, packString, packBool)),
@@ -1621,7 +1620,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val abbreviation_defs_callback = {
-        name = "IsaMini.abbreviation_defs",
+        name = \<^unchecked_name>\<open>IsaMini.abbreviation_defs\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackList unpackString),
         ret_schema = packList (packOption (packPair (packString, packString))),
@@ -1647,7 +1646,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val validate_prove_in_time_callback = {
-        name = "IsaMini.validate_prove_in_time",
+        name = \<^unchecked_name>\<open>IsaMini.validate_prove_in_time\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackList unpackString),
         ret_schema = packList (packOption packString),
@@ -1680,7 +1679,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       val thm_cache = Universal_Key.new_thm_uk_cache ()
 
       val contextual_thms_callback = {
-        name = "IsaMini.contextual_thms",
+        name = \<^unchecked_name>\<open>IsaMini.contextual_thms\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackString,
         ret_schema = packList (packPair (Universal_Key.pack_universal_key, packString)),
@@ -1701,7 +1700,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val fact_propositions_callback = {
-        name = "IsaMini.fact_propositions",
+        name = \<^unchecked_name>\<open>IsaMini.fact_propositions\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString, unpackList unpackString),
         ret_schema = packList (packPair (packString, packString)),
@@ -1717,7 +1716,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       }
 
       val check_looping_rules_callback = {
-        name = "IsaMini.check_looping_rules",
+        name = \<^unchecked_name>\<open>IsaMini.check_looping_rules\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple4 (
           unpackString,            (* state_id *)
@@ -1826,7 +1825,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
 
       (* Pre-flight analysis for INDUCT. *)
       val analyze_induct_callback = {
-        name = "IsaMini.analyze_induct",
+        name = \<^unchecked_name>\<open>IsaMini.analyze_induct\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple5 (
           unpackString,                                 (* state_id *)
@@ -1895,7 +1894,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
       (* Pre-flight analysis for CASE_SPLIT. Mirrors analyze_induct but with
        * no `arbitrary` argument and a single-thm rule. *)
       val analyze_case_split_callback = {
-        name = "IsaMini.analyze_case_split",
+        name = \<^unchecked_name>\<open>IsaMini.analyze_case_split\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple4 (
           unpackString, unpackString,
@@ -1924,7 +1923,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
        * for informative error messages). Returns NONE on success, or
        * SOME error_msg on failure. *)
       val validate_instantiation_callback = {
-        name = "IsaMini.validate_instantiation",
+        name = \<^unchecked_name>\<open>IsaMini.validate_instantiation\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackTuple3 (
           unpackString,                                 (* state_id *)
@@ -1955,7 +1954,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
        * variable, type/sort clash) — turned into a clean BadAnswer on the
        * Python side. *)
       val validate_inst_var_callback = {
-        name = "IsaMini.validate_inst_var",
+        name = \<^unchecked_name>\<open>IsaMini.validate_inst_var\<close>,
         on_interrupt = Remote_Procedure_Calling.Reraise,
         arg_schema = unpackPair (unpackString,
                        unpackList (unpackPair (unpackString, unpackString))),
@@ -2030,7 +2029,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
               user_callbacks (map #name framework_callbacks)
 
       val aoa_cmd = {
-        name = "IsaMini.AoA",
+        name = \<^unchecked_name>\<open>IsaMini.AoA\<close>,
         arg_schema = (fn (global_context, driver, invocation_id) =>
             let val log_dir = Config.get ctxt AoA_log_dir
                 val retrieval_forking = Config.get ctxt AoA_retrieval_forking
@@ -2171,11 +2170,8 @@ fun run_AoA {driver, minilang_cfg, budget, invocation_id,
                         one piece of code for both.  This join is the
                         sanctioned store-write exception to the no-join rule.
                         interrupts = true (stage-0 ruling on store-write forks):
-                        the body takes the .proof-store fcntl lock, and
-                        with_file_lock's `run` restores the attributes in effect
-                        at task entry — forked uninterruptible, the blocking
-                        setlkw wait (and the timeout-less L1 RPC) could never
-                        be cancelled. *)
+                        forked uninterruptible, the timeout-less L1 RPC
+                        (Proof_Store_AoA.l1_write) could never be cancelled. *)
                       val _ =
                         if write then
                           ignore ((singleton o Future.forks)
@@ -2372,11 +2368,9 @@ fun hammer_or_AoA' {fact_override, proof_id, hammer_timeout, async_mode,
                         async wakes after the fork; one piece of code for
                         both.  This join is the sanctioned store-write
                         exception to the no-join rule.  interrupts = true
-                        (stage-0 ruling): the body takes the .proof-store
-                        fcntl lock, and with_file_lock's `run` restores the
-                        attributes in effect at task entry — forked
-                        uninterruptible, the blocking setlkw wait (and the
-                        timeout-less L1 RPC) could never be cancelled. *)
+                        (stage-0 ruling): forked uninterruptible, the
+                        timeout-less L1 RPC (Proof_Store_AoA.l1_write) could
+                        never be cancelled. *)
                       val _ =
                         if write then
                           ignore ((singleton o Future.forks)
@@ -2452,7 +2446,7 @@ fun query_by_name (context : Context.generic) (kind : Universal_Key.entity_kind,
     val su = Context_Callbacks.static_context_unpacker context
     val cmd : (Universal_Key.entity_kind * string, string * bool)
               Remote_Procedure_Calling.command = {
-      name = "IsaMini.query_by_name",
+      name = \<^unchecked_name>\<open>IsaMini.query_by_name\<close>,
       arg_schema = packPair (Universal_Key.pack_entity_kind', packString),
       ret_schema = unpackPair (unpackString, unpackBool),
       callback = [Universal_Key.make_universal_key_callback su,

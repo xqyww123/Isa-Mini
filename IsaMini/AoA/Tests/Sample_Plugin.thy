@@ -16,7 +16,7 @@ exception APPLIED of string
 
 local
 open MessagePackBinIO.Pack MessagePackBinIO.Unpack MiniLang_Agent_Plugin
-val packages = {python_packages = ["IsaMini.AoA.Tests.sample_plugin"]}
+val packages = {python_packages = [\<^unchecked_name>\<open>IsaMini.AoA.Tests.sample_plugin\<close>]}
 (*the single-command bound Minilang's APPLY_CMD applies*)
 fun apply_method text s =
   let val ctxt = Minilang.context_of s

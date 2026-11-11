@@ -49,11 +49,11 @@ local
 
   fun xsym_conv ctxt ct =
     (case Thm.term_of ct of
-      Const ("Pure.all", _) $ Abs _ =>
+      Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
         Conv.arg_conv (Conv.abs_conv (fn (_, ctxt') => xsym_conv ctxt') ctxt) ct
-    | Const ("Pure.imp", _) $ _ $ _ =>
+    | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
         Conv.arg_conv (xsym_conv ctxt) ct
-    | Const ("Pure.eq", _) $ _ $ _ =>
+    | Const (\<^const_name>\<open>Pure.eq\<close>, _) $ _ $ _ =>
         Conv.rewr_conv pure_eq_sym_eq ct
     | \<^Const_>\<open>Trueprop for _\<close> =>
         Conv.arg_conv (xsym_conv ctxt) ct

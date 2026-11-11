@@ -53,7 +53,7 @@ struct
 (** object-logic layer **)
 
 val census_state =
-  Synchronized.var "My_Object_Logic.census" {intact = 0, repaired = 0, fallback = 0};
+  Synchronized.var \<^unchecked_name>\<open>My_Object_Logic.census\<close> {intact = 0, repaired = 0, fallback = 0};
 
 fun census () = Synchronized.value census_state;
 fun reset_census () =

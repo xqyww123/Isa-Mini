@@ -130,9 +130,9 @@ fun AoA_REPL_App (cin, cout, toplevel) =
                               ; raise E )\<close>
                     end)
                   )
-      val (_, toplevel') = Toplevel.command_errors false transition toplevel
+      val (_, toplevel') = PIDE_Loader.with_theory_options (Toplevel.command_errors transition) toplevel
    in the_default toplevel toplevel'
   end
 end
 
-val _ = REPL_Server.register_app "Minilang.AoA" AoA_REPL_App
+val _ = REPL_Server.register_app \<^unchecked_name>\<open>Minilang.AoA\<close> AoA_REPL_App

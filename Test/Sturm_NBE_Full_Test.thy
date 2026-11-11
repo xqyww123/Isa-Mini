@@ -76,7 +76,7 @@ fun nbe_eval_tac ctxt i st =
 (* Sturm preprocessing: copied from sturm.ML lines 172-179 *)
 fun sturm_preprocess_tac ctxt i =
   EVERY [
-    Raw_Simplifier.prune_params_tac ctxt,
+    Simplifier.prune_params_tac ctxt,
     Object_Logic.full_atomize_tac ctxt i,
     (EqSubst.eqsubst_tac ctxt [0] @{thms sturm_imp_conv} i ORELSE all_tac),
     Object_Logic.full_atomize_tac ctxt i,
@@ -88,7 +88,7 @@ fun sturm_preprocess_tac ctxt i =
       EqSubst.eqsubst_tac ctxt [0] @{thms sturm_id_PR_prio2} i,
       EqSubst.eqsubst_tac ctxt [0] @{thms sturm_id_PR_prio1} i,
       EqSubst.eqsubst_tac ctxt [0] @{thms sturm_id_PR_prio0} i]),
-    simp_tac (put_simpset HOL_basic_ss ctxt addsimps
+    simp_tac (put_simpset HOL_basic_ss ctxt |> Simplifier.add_simps
       @{thms nnf_simps not_less not_le}) i,
     REPEAT_DETERM (FIRST [
       EqSubst.eqsubst_tac ctxt [0] @{thms PR_TAG_intro_prio2} i,

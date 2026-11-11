@@ -29,10 +29,10 @@ fun register name packages callbacks =
 (*the registrations the cases select; none is a default*)
 val thy = \<^theory>
   |> register "CbGlobal" [] [callback "log"]
-  |> register "CbFramework" [] [callback "IsaMini.proof_opr"]
+  |> register "CbFramework" [] [callback \<^unchecked_name>\<open>IsaMini.proof_opr\<close>]
   |> register "CbShared1" [] [callback "shared_cb"]
   |> register "CbShared2" [] [callback "shared_cb"]
-  |> register "BadPackage" ["no.such.package"] []
+  |> register "BadPackage" [\<^unchecked_name>\<open>no.such.package\<close>] []
   |> register_task {python_packages = []} {name = "ghost"}
 val ctxt = Named_Target.theory_init thy
 val goal = Goal.init (Thm.cterm_of ctxt \<^prop>\<open>True\<close>)

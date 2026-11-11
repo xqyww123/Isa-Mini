@@ -58,45 +58,51 @@ let
 
   val test_consts = [
     (* Should NOT be filtered (lift_definition / user constants) *)
-    ("Multiset.multiset.count", false),
-    ("Finite_Map.fmap.fmlookup", false),
-    ("Product_Type.prod.swap", false),
+    (\<^const_name>\<open>Multiset.multiset.count\<close>, false),
+    (\<^const_name>\<open>Finite_Map.fmap.fmlookup\<close>, false),
+    (\<^const_name>\<open>Product_Type.prod.swap\<close>, false),
     (* The size family is KEPT since the 2026-08-25 rulings -- `size_list` is
        cited by ordinary induction proofs.  Its `instantiation` companion is
        still machinery and dies on the `inst_infix` rule. *)
-    ("List.list.size_list", false),
-    ("List.list.size_list_inst.size_list", true),
+    (\<^const_name>\<open>List.list.size_list\<close>, false),
+    (\<^const_name>\<open>List.size_list_inst.size_list\<close>, true),
     (* Should pass (preserved: constructors, case, map, etc.) *)
-    ("List.list.Nil", false),
-    ("List.list.Cons", false),
-    ("List.list.case_list", false),
-    ("List.map", false),
-    ("List.set", false),
+    (\<^const_name>\<open>List.list.Nil\<close>, false),
+    (\<^const_name>\<open>List.list.Cons\<close>, false),
+    (\<^const_name>\<open>List.list.case_list\<close>, false),
+    (\<^const_name>\<open>List.list.map\<close>, false),
+    (\<^const_name>\<open>List.list.set\<close>, false),
     (* Typedef morphisms are KEPT since the 2026-08-25 deletion of the
        `abs_rep_name` rule: an Abs_/Rep_ name pattern is no longer a verdict on
-       its own.  `Rep_multiset` and `Rep_fset` are still rejected, but on the
-       `hidden` rule -- those two libraries `hide_const` the Rep morphism. *)
-    ("Product_Type.prod.Abs_prod", false),
-    ("Product_Type.prod.Rep_prod", false),
-    ("Multiset.multiset.Abs_multiset", false),
-    ("Multiset.multiset.Rep_multiset", true),
-    ("FSet.fset.Abs_fset", false),
-    ("FSet.fset.Rep_fset", true),
+       its own.  The Rep morphisms of multiset and fset are named `count` and
+       `fset` (`morphisms count Abs_multiset`, `morphisms fset Abs_fset`). *)
+    (\<^const_name>\<open>Product_Type.prod.Abs_prod\<close>, false),
+    (\<^const_name>\<open>Product_Type.prod.Rep_prod\<close>, false),
+    (\<^const_name>\<open>Multiset.multiset.Abs_multiset\<close>, false),
+    (\<^const_name>\<open>Multiset.multiset.count\<close>, false),
+    (\<^const_name>\<open>FSet.fset.Abs_fset\<close>, false),
+    (\<^const_name>\<open>FSet.fset.fset\<close>, false),
     (* Should pass (BNF preserved: map/pred/rel/sets) *)
-    ("Multiset.image_mset", false),
-    ("Multiset.rel_mset", false),
-    ("Multiset.pred_mset", false),
-    ("FSet.fimage", false),
-    ("FSet.fset_member", true) (* hidden name *)
+    (\<^const_name>\<open>Multiset.image_mset\<close>, false),
+    (\<^const_name>\<open>Multiset.rel_mset\<close>, false),
+    (\<^const_name>\<open>Multiset.pred_mset\<close>, false),
+    (\<^const_name>\<open>FSet.fimage\<close>, false),
+    (* hidden: Product_Type.thy `hide_const internal_case_prod`; \<^const_name> cannot read a
+       hidden name *)
+    (\<^unchecked_name>\<open>Product_Type.internal_case_prod\<close>, true)
   ]
 
   val _ = log "====== is_uninterpreted_const verification test ======"
   val all_pass = Synchronized.var "all_pass" true
+  (*a name that is no constant fails: an unknown name would pass on the `hidden` rule*)
+  val consts = Proof_Context.consts_of \<^context>
   val _ = map (fn (name, expected) =>
-    let val result = is_uninterpreted_const name
-        val status = if result = expected then "PASS" else "FAIL"
-        val _ = if result <> expected then Synchronized.change all_pass (K false) else ()
-    in log (status ^ "  " ^ name ^
+    let val declared = can (Consts.the_constraint consts) name
+        val result = is_uninterpreted_const name
+        val ok = declared andalso result = expected
+        val status = if ok then "PASS" else "FAIL"
+        val _ = if ok then () else Synchronized.change all_pass (K false)
+    in log (status ^ "  " ^ name ^ (if declared then "" else "  (no such constant)") ^
             "  is_infra=" ^ Bool.toString result ^
             "  expected=" ^ Bool.toString expected)
     end) test_consts
@@ -154,13 +160,13 @@ let
   val _ = log ""
   val _ = log "--- Spot-check: known lift_definition constants ---"
   val lift_consts = [
-    "Multiset.multiset.count",
-    "Finite_Map.fmap.fmlookup",
-    "Finite_Map.fmap.fmran'",
-    "Finite_Map.fmap.fmmap",
-    "Finite_Map.fmap.fmrel",
-    "Product_Type.prod.swap",
-    "FSet.fset.fset"
+    \<^const_name>\<open>Multiset.multiset.count\<close>,
+    \<^const_name>\<open>Finite_Map.fmap.fmlookup\<close>,
+    \<^const_name>\<open>Finite_Map.fmap.fmran'\<close>,
+    \<^const_name>\<open>Finite_Map.fmap.fmmap\<close>,
+    \<^const_name>\<open>Finite_Map.fmap.fmrel\<close>,
+    \<^const_name>\<open>Product_Type.prod.swap\<close>,
+    \<^const_name>\<open>FSet.fset.fset\<close>
   ]
   val _ = map (fn name =>
     let val result = is_uninterpreted_const name
@@ -176,13 +182,13 @@ let
   val _ = log ""
   val _ = log "--- Spot-check: size-plugin constants ---"
   val size_consts = [
-    ("List.list.size_list", false),
-    ("Basic_BNF_LFPs.sum.size_sum", false),
-    ("Basic_BNF_LFPs.prod.size_prod", false),
-    ("Option.option.size_option", false),
-    ("List.list.size_list_inst.size_list", true),
-    ("Basic_BNF_LFPs.size_sum_inst.size_sum", true),
-    ("Basic_BNF_LFPs.size_prod_inst.size_prod", true)
+    (\<^const_name>\<open>List.list.size_list\<close>, false),
+    (\<^const_name>\<open>Basic_BNF_LFPs.sum.size_sum\<close>, false),
+    (\<^const_name>\<open>Basic_BNF_LFPs.prod.size_prod\<close>, false),
+    (\<^const_name>\<open>Option.option.size_option\<close>, false),
+    (\<^const_name>\<open>List.size_list_inst.size_list\<close>, true),
+    (\<^const_name>\<open>Basic_BNF_LFPs.size_sum_inst.size_sum\<close>, true),
+    (\<^const_name>\<open>Basic_BNF_LFPs.size_prod_inst.size_prod\<close>, true)
   ]
   val _ = map (fn (name, expected) =>
     let val result = is_uninterpreted_const name
@@ -195,20 +201,20 @@ let
   val _ = log "--- Spot-check: BNF-registered preserved constants ---"
   val preserved_consts = [
     (* List BNF *)
-    "List.list.Nil", "List.list.Cons", "List.list.case_list",
-    "List.list.map", "List.list.list_all", "List.list.list_all2", "List.list.set",
+    \<^const_name>\<open>List.list.Nil\<close>, \<^const_name>\<open>List.list.Cons\<close>, \<^const_name>\<open>List.list.case_list\<close>,
+    \<^const_name>\<open>List.list.map\<close>, \<^const_name>\<open>List.list.list_all\<close>, \<^const_name>\<open>List.list.list_all2\<close>, \<^const_name>\<open>List.list.set\<close>,
     (* Option BNF *)
-    "Option.option.None", "Option.option.Some", "Option.option.case_option",
-    "Option.map_option", "Option.pred_option", "Option.rel_option",
+    \<^const_name>\<open>Option.option.None\<close>, \<^const_name>\<open>Option.option.Some\<close>, \<^const_name>\<open>Option.option.case_option\<close>,
+    \<^const_name>\<open>Option.option.map_option\<close>, \<^const_name>\<open>Option.option.pred_option\<close>, \<^const_name>\<open>Option.option.rel_option\<close>,
     (* Sum BNF *)
-    "Sum_Type.Inl", "Sum_Type.Inr", "Sum_Type.sum.case_sum",
-    "Sum_Type.map_sum",
+    \<^const_name>\<open>Sum_Type.Inl\<close>, \<^const_name>\<open>Sum_Type.Inr\<close>, \<^const_name>\<open>Sum_Type.sum.case_sum\<close>,
+    \<^const_name>\<open>Sum_Type.map_sum\<close>,
     (* Prod BNF *)
-    "Product_Type.Pair", "Product_Type.prod.case_prod",
-    "Product_Type.map_prod",
+    \<^const_name>\<open>Product_Type.Pair\<close>, \<^const_name>\<open>Product_Type.prod.case_prod\<close>,
+    \<^const_name>\<open>Product_Type.map_prod\<close>,
     (* Multiset/FSet lifted *)
-    "Multiset.image_mset", "Multiset.rel_mset", "Multiset.pred_mset",
-    "FSet.fimage"
+    \<^const_name>\<open>Multiset.image_mset\<close>, \<^const_name>\<open>Multiset.rel_mset\<close>, \<^const_name>\<open>Multiset.pred_mset\<close>,
+    \<^const_name>\<open>FSet.fimage\<close>
   ]
   val _ = map (fn name =>
     let val result = is_uninterpreted_const name
@@ -217,17 +223,17 @@ let
 
   (* Spot-check: Abs_/Rep_ typedef morphisms.  Since the `abs_rep_name` rule was
      deleted (2026-08-25) these are KEPT unless another rule reaches them -- the
-     `hide_const`ed Rep morphisms of Multiset/FSet on `hidden`, and the ones the
-     datatype package conceals (Option/List) on `concealed`. *)
+     ones the datatype package conceals (Option/List) on `concealed`.  The Rep
+     morphisms of multiset and fset are `count` and `fset`. *)
   val _ = log ""
   val _ = log "--- Spot-check: Abs_/Rep_ typedef morphisms ---"
   val absrep_consts = [
-    ("Product_Type.prod.Abs_prod", false), ("Product_Type.prod.Rep_prod", false),
-    ("Multiset.multiset.Abs_multiset", false), ("Multiset.multiset.Rep_multiset", true),
-    ("FSet.fset.Abs_fset", false), ("FSet.fset.Rep_fset", true),
-    ("Sum_Type.sum.Abs_sum", false), ("Sum_Type.sum.Rep_sum", false),
-    ("Option.option.Abs_option", true), ("Option.option.Rep_option", true),
-    ("List.list.Abs_list", true), ("List.list.Rep_list", true)
+    (\<^const_name>\<open>Product_Type.prod.Abs_prod\<close>, false), (\<^const_name>\<open>Product_Type.prod.Rep_prod\<close>, false),
+    (\<^const_name>\<open>Multiset.multiset.Abs_multiset\<close>, false), (\<^const_name>\<open>Multiset.multiset.count\<close>, false),
+    (\<^const_name>\<open>FSet.fset.Abs_fset\<close>, false), (\<^const_name>\<open>FSet.fset.fset\<close>, false),
+    (\<^const_name>\<open>Sum_Type.sum.Abs_sum\<close>, false), (\<^const_name>\<open>Sum_Type.sum.Rep_sum\<close>, false),
+    (\<^const_name>\<open>Option.option.Abs_option\<close>, true), (\<^const_name>\<open>Option.option.Rep_option\<close>, true),
+    (\<^const_name>\<open>List.list.Abs_list\<close>, true), (\<^const_name>\<open>List.list.Rep_list\<close>, true)
   ]
   val _ = map (fn (name, expected) =>
     let val result = is_uninterpreted_const name

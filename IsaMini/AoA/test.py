@@ -4698,7 +4698,9 @@ async def _test_Rewrite_InternalError(root: Root, file: MyIO):
     file.write(f"committed_count: {len(outcome.committed)}\n")
     if failure:
         reason_str = str(failure)
-        file.write(f"failure_message:\n{reason_str}\n")
+        # the fixture's absolute path in the message is the machine's, not the test's
+        tests_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Tests')
+        file.write(f"failure_message:\n{reason_str.replace(tests_dir, '<Tests>')}\n")
         raw_exception_leaked = ("exception THM" in reason_str
                                 or "raised (line" in reason_str)
         file.write(f"raw_exception_leaked: {raw_exception_leaked}\n")
@@ -17952,7 +17954,7 @@ async def _test_auto_intro_relation(root: Root, file: MyIO):
     assert _count_unfinished(root, file) == 0
 
 
-@model_test("AutoIntroPatCompleteness", "Test_AutoIntroPatCompleteness.thy", 30, isolated_db=True)
+@model_test("AutoIntroPatCompleteness", "Test_AutoIntroPatCompleteness.thy", 31, isolated_db=True)
 async def _test_auto_intro_pat_completeness(root: Root, file: MyIO):
     """docs/AUTO_INTRO_DECISION.md section 7: the running example's hook. The
     completeness goal of `function sum_upto` is kept as it stands, so

@@ -12,7 +12,7 @@ let
 
   fun check ctxt label =
     writeln (label ^ ": " ^
-      (if can (Proof_Context.get_thms ctxt) "double.simps"
+      (if can (Proof_Context.get_thms ctxt) \<^unchecked_name>\<open>double.simps\<close>
        then "double.simps FOUND"
        else "double.simps NOT FOUND"))
 

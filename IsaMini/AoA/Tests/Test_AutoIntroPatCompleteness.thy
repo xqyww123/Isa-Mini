@@ -16,9 +16,10 @@ ML \<open>
 (*the completeness goal as `function` opens it, read on a throwaway local
   theory while the name is still free*)
 val sum_upto_completeness_goal =
-  Function.function_cmd [(Binding.name "sum_upto", SOME "nat \<Rightarrow> nat \<Rightarrow> nat", NoSyn)]
+  Function.function_cmd {verbose = false}
+    [(Binding.name "sum_upto", SOME "nat \<Rightarrow> nat \<Rightarrow> nat", NoSyn)]
     [((Binding.empty_atts, "sum_upto i N = (if N < i then 0 else i + sum_upto (Suc i) N)"), [], [])]
-    Function_Common.default_config false (Named_Target.theory_init \<^theory>)
+    Function_Common.default_config (Named_Target.theory_init \<^theory>)
   |> Proof.goal |> #goal |> Thm.prems_of |> hd
 \<close>
 

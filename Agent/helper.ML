@@ -8,11 +8,11 @@ end
 
 structure Minilang_Helper : MINILANG_HELPER = struct
 
-val realT = Type("Real.real", [])
+val realT = Type(\<^unchecked_name>\<open>Real.real\<close>, [])
 fun guess_default_num_typ prop =
-  if exists_type (exists_subtype (fn Type ("Real.real", _) => true | _ => false)) prop
+  if exists_type (exists_subtype (fn Type (\<^unchecked_name>\<open>Real.real\<close>, _) => true | _ => false)) prop
   then SOME realT
-  else if exists_type (exists_subtype (fn Type ("Int.int", _) => true | _ => false)) prop
+  else if exists_type (exists_subtype (fn Type (\<^type_name>\<open>int\<close>, _) => true | _ => false)) prop
   then SOME \<^typ>\<open>int\<close>
   else if exists_type (exists_subtype (fn Type (\<^type_name>\<open>nat\<close>, _) => true | _ => false)) prop
   then SOME \<^typ>\<open>nat\<close>
@@ -36,9 +36,9 @@ local
 
   fun xsym_conv ctxt ct =
     (case Thm.term_of ct of
-      Const ("Pure.all", _) $ Abs _ =>
+      Const (\<^const_name>\<open>Pure.all\<close>, _) $ Abs _ =>
         Conv.arg_conv (Conv.abs_conv (fn (_, c) => xsym_conv c) ctxt) ct
-    | Const ("Pure.imp", _) $ _ $ _ =>
+    | Const (\<^const_name>\<open>Pure.imp\<close>, _) $ _ $ _ =>
         Conv.arg_conv (xsym_conv ctxt) ct
     | Const (\<^const_name>\<open>Trueprop\<close>, _) $ _ =>
         Conv.arg_conv (xsym_conv ctxt) ct

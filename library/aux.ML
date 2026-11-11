@@ -1076,16 +1076,16 @@ fun implode_with _ [] = []
   | implode_with s (h::L) = h @ s :: implode_with s L
 
 fun strip_meta_and_hol_hhf term =
-  let fun strip (V,P) (Const("Pure.imp", _) $ H $ B) = strip (V,H::P) B
+  let fun strip (V,P) (Const(\<^const_name>\<open>Pure.imp\<close>, _) $ H $ B) = strip (V,H::P) B
         | strip (V,P) (Const(\<^const_name>\<open>HOL.implies\<close>, _) $ H $ B) = strip (V,H::P) B
-        | strip (V,P) (Const("Pure.all", _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
+        | strip (V,P) (Const(\<^const_name>\<open>Pure.all\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
         | strip (V,P) (Const(\<^const_name>\<open>HOL.All\<close>, _) $ Abs (a, T, B)) = strip ((a,T)::V,P) B
         | strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ X) =
             strip (V,P) (\<^Const>\<open>Pure.all ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ X) =
             strip (V,P) (\<^Const>\<open>HOL.All ty\<close> $ Abs ("_", ty, Term.incr_boundvars 1 X $ Bound 0))
         | strip (V,P) (\<^Const>\<open>Trueprop\<close> $ X) = strip (V,P) X
-        | strip (V,P) (Const("Set.Ball", _) $ S $ Abs (a, T, B)) =
+        | strip (V,P) (Const(\<^const_name>\<open>Set.Ball\<close>, _) $ S $ Abs (a, T, B)) =
             strip ((a,T)::V, HOLogic.mk_mem (Bound 0, Term.incr_boundvars 1 S) :: P) B
         | strip (V,P) X = (rev V, rev P, X)
    in strip ([],[]) term end

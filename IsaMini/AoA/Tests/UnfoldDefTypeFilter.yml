@@ -43,19 +43,26 @@ Orderings.order_class.order_eq_iff: (?x = ?y) = (?x ≤ ?y ∧ ?y ≤ ?x)
 Orderings.order_class.dual_order.eq_iff: (?a = ?b) = (?b ≤ ?a ∧ ?a ≤ ?b)
 Orderings.eq_iff: (?a = ?b) = (?a ≤ ?b ∧ ?b ≤ ?a)
 HOL.eq_commute: (?a = ?b) = (?b = ?a)
+Bit_Operations.semiring_bits.bit_eq_rec: class.semiring_bits ?plus ?minus ?zero ?times ?one ?divide ?modulo ?bit ⟶ (?a = ?b) = (dvd.dvd ?times (numeral.numeral ?one ?plus (num.Bit0 num.One)) ?a = dvd.dvd ?times (numeral.numeral ?one ?plus (num.Bit0 num.One)) ?b ∧ ?divide ?a (numeral.numeral ?one ?plus (num.Bit0 num.One)) = ?divide ?b (numeral.numeral ?one ?plus (num.Bit0 num.One)))
 Euclidean_Rings.unique_euclidean_semiring.div_eq_0_iff: class.unique_euclidean_semiring ?divide ?plus ?minus ?zero ?times ?one ?modulo ?euclidean_size ?division_segment ⟶ ?division_segment ?a = ?division_segment ?b ⟶ (?divide ?a ?b = ?zero) = (?euclidean_size ?a < ?euclidean_size ?b ∨ ?b = ?zero)
 Bit_Operations.semiring_bit_operations.or_eq_0_iff: class.semiring_bit_operations ?plus ?minus ?zero ?times ?one ?divide ?modulo ?bit ?and ?or ?xor ?mask ?set_bit ?unset_bit ?flip_bit ?push_bit ?drop_bit ?take_bit ⟶ (?or ?a ?b = ?zero) = (?a = ?zero ∧ ?b = ?zero)
+Rings.algebraic_semidom.dvd_div_eq_mult: class.algebraic_semidom ?divide ?plus ?minus ?zero ?times ?one ⟶ ?a ≠ ?zero ⟶ dvd.dvd ?times ?a ?b ⟶ (?divide ?b ?a = ?c) = (?b = ?times ?c ?a)
+Bit_Operations.semiring_bits.bit_eq_iff: class.semiring_bits ?plus ?minus ?zero ?times ?one ?divide ?modulo ?bit ⟶ (?a = ?b) = (∀(n :: nat). semiring_bits.possible_bit ?plus ?zero ?times ?one TYPE (?'a) n ⟶ ?bit ?a n = ?bit ?b n)
 Groups.ordered_comm_monoid_add.add_nonneg_eq_0_iff: class.ordered_comm_monoid_add ?plus ?zero ?less_eq ?less ⟶ ?less_eq ?zero ?x ⟶ ?less_eq ?zero ?y ⟶ (?plus ?x ?y = ?zero) = (?x = ?zero ∧ ?y = ?zero)
 Groups.ordered_comm_monoid_add.add_nonpos_eq_0_iff: class.ordered_comm_monoid_add ?plus ?zero ?less_eq ?less ⟶ ?less_eq ?x ?zero ⟶ ?less_eq ?y ?zero ⟶ (?plus ?x ?y = ?zero) = (?x = ?zero ∧ ?y = ?zero)
 Fields.division_ring.divide_eq_eq: class.division_ring ?divide ?inverse ?one ?times ?plus ?zero ?minus ?uminus ⟶ (?divide ?b ?c = ?a) = (if ?c ≠ ?zero then ?b = ?times ?a ?c else ?a = ?zero)
 Groups.ordered_cancel_comm_monoid_diff.le_imp_diff_is_add: class.ordered_cancel_comm_monoid_diff ?plus ?zero ?less_eq ?less ?minus ⟶ ?less_eq ?a ?b ⟶ ?less_eq ?a ?b ⟶ (?minus ?b ?a = ?c) = (?b = ?plus ?c ?a)
 Fields.linordered_field.divide_eq_eq_1: class.linordered_field ?divide ?inverse ?times ?one ?plus ?zero ?minus ?uminus ?less_eq ?less ?sgn ?abs ⟶ (?divide ?b ?a = ?one) = (?a ≠ ?zero ∧ ?a = ?b)
 Fields.division_ring.nonzero_divide_eq_eq: class.division_ring ?divide ?inverse ?one ?times ?plus ?zero ?minus ?uminus ⟶ ?c ≠ ?zero ⟶ (?divide ?b ?c = ?a) = (?b = ?times ?a ?c)
+GCD.semiring_gcd.lcm_eq_1_iff: class.semiring_gcd ?one ?zero ?times ?gcd ?lcm ?divide ?plus ?minus ?unit_factor ?normalize ⟶ (?lcm ?a ?b = ?one) = (dvd.dvd ?times ?a ?one ∧ dvd.dvd ?times ?b ?one)
 Rings.linordered_ring.abs_eq_iff': class.linordered_ring ?plus ?zero ?minus ?uminus ?less_eq ?less ?abs ?times ⟶ (?abs ?a = ?b) = (?less_eq ?zero ?b ∧ (?a = ?b ∨ ?a = ?uminus ?b))
 Fields.division_ring.right_inverse_eq: class.division_ring ?divide ?inverse ?one ?times ?plus ?zero ?minus ?uminus ⟶ ?b ≠ ?zero ⟶ (?divide ?a ?b = ?one) = (?a = ?b)
+Rings.algebraic_semidom.unit_eq_div1: class.algebraic_semidom ?divide ?plus ?minus ?zero ?times ?one ⟶ dvd.dvd ?times ?b ?one ⟶ (?divide ?a ?b = ?c) = (?a = ?times ?c ?b)
 GCD.semiring_gcd.lcm_eq_0_iff: class.semiring_gcd ?one ?zero ?times ?gcd ?lcm ?divide ?plus ?minus ?unit_factor ?normalize ⟶ (?lcm ?a ?b = ?zero) = (?a = ?zero ∨ ?b = ?zero)
 GCD.semiring_gcd.gcd_eq_0_iff: class.semiring_gcd ?one ?zero ?times ?gcd ?lcm ?divide ?plus ?minus ?unit_factor ?normalize ⟶ (?gcd ?a ?b = ?zero) = (?a = ?zero ∧ ?b = ?zero)
 Fields.field.divide_eq_1_iff: class.field ?divide ?inverse ?times ?one ?plus ?zero ?minus ?uminus ⟶ (?divide ?a ?b = ?one) = (?b ≠ ?zero ∧ ?a = ?b)
+Rings.semidom_divide.dvd_div_eq_0_iff: class.semidom_divide ?divide ?plus ?minus ?zero ?times ?one ⟶ dvd.dvd ?times ?b ?a ⟶ (?divide ?a ?b = ?zero) = (?a = ?zero)
+Rings.algebraic_semidom.unit_div_eq_0_iff: class.algebraic_semidom ?divide ?plus ?minus ?zero ?times ?one ⟶ dvd.dvd ?times ?b ?one ⟶ (?divide ?a ?b = ?zero) = (?a = ?zero)
 Fields.linordered_field.one_divide_eq_0_iff: class.linordered_field ?divide ?inverse ?times ?one ?plus ?zero ?minus ?uminus ?less_eq ?less ?sgn ?abs ⟶ (?divide ?one ?a = ?zero) = (?a = ?zero)
 Fields.field.divide_eq_0_iff: class.field ?divide ?inverse ?times ?one ?plus ?zero ?minus ?uminus ⟶ (?divide ?a ?b = ?zero) = (?a = ?zero ∨ ?b = ?zero)
 Groups.group_add.diff_eq_diff_eq: class.group_add ?minus ?plus ?zero ?uminus ⟶ ?minus ?a ?b = ?minus ?c ?d ⟶ (?a = ?b) = (?c = ?d)
@@ -65,7 +72,9 @@ Rings.linordered_idom.sgn_0_0: class.linordered_idom ?plus ?zero ?minus ?uminus 
 Rings.linordered_idom.sgn_1_pos: class.linordered_idom ?plus ?zero ?minus ?uminus ?less_eq ?less ?sgn ?abs ?times ?one ⟶ (?sgn ?a = ?one) = ?less ?zero ?a
 Boolean_Algebras.boolean_algebra.sup_shunt: class.boolean_algebra ?minus ?uminus ?inf ?less_eq ?less ?sup ?bot ?top ⟶ (?sup ?x ?y = ?top) = ?less_eq (?uminus ?x) ?y
 Boolean_Algebras.boolean_algebra.inf_shunt: class.boolean_algebra ?minus ?uminus ?inf ?less_eq ?less ?sup ?bot ?top ⟶ (?inf ?x ?y = ?bot) = ?less_eq ?x (?uminus ?y)
+Rings.normalization_semidom.normalize_1_iff: class.normalization_semidom ?divide ?plus ?minus ?zero ?times ?one ?unit_factor ?normalize ⟶ (?normalize ?a = ?one) = dvd.dvd ?times ?a ?one
 Boolean_Algebras.boolean_algebra.diff_shunt_var: class.boolean_algebra ?minus ?uminus ?inf ?less_eq ?less ?sup ?bot ?top ⟶ (?minus ?x ?y = ?bot) = ?less_eq ?x ?y
+Rings.semidom_modulo.mod_eq_0_iff_dvd: class.semidom_modulo ?divide ?plus ?minus ?zero ?times ?one ?modulo ⟶ (?modulo ?a ?b = ?zero) = dvd.dvd ?times ?b ?a
 Lattices.semilattice_neutr_order.eq_neutr_iff: semilattice_neutr_order ?f ?z ?less_eq ?less ⟶ (?f ?a ?b = ?z) = (?a = ?z ∧ ?b = ?z)
 Lattices.bounded_semilattice_sup_bot.sup_eq_bot_iff: class.bounded_semilattice_sup_bot ?sup ?less_eq ?less ?bot ⟶ (?sup ?x ?y = ?bot) = (?x = ?bot ∧ ?y = ?bot)
 Lattices.bounded_semilattice_inf_top.inf_eq_top_iff: class.bounded_semilattice_inf_top ?inf ?less_eq ?less ?top ⟶ (?inf ?x ?y = ?top) = (?x = ?top ∧ ?y = ?top)
@@ -78,6 +87,7 @@ Fields.field.inverse_eq_1_iff: class.field ?divide ?inverse ?times ?one ?plus ?z
 Fields.division_ring.inverse_nonzero_iff_nonzero: class.division_ring ?divide ?inverse ?one ?times ?plus ?zero ?minus ?uminus ⟶ (?inverse ?a = ?zero) = (?a = ?zero)
 Rings.semiring_no_zero_divisors.mult_eq_0_iff: class.semiring_no_zero_divisors ?plus ?zero ?times ⟶ (?times ?a ?b = ?zero) = (?a = ?zero ∨ ?b = ?zero)
 Groups.ordered_ab_group_add_abs.abs_eq_0: class.ordered_ab_group_add_abs ?abs ?plus ?zero ?minus ?uminus ?less_eq ?less ⟶ (?abs ?a = ?zero) = (?a = ?zero)
+Num.ring_1.eq_iff_iszero_diff: class.ring_1 ?one ?times ?plus ?zero ?minus ?uminus ⟶ (?x = ?y) = ring_1.iszero ?zero (?minus ?x ?y)
 Groups.group_add.diff_eq_eq: class.group_add ?minus ?plus ?zero ?uminus ⟶ (?minus ?a ?b = ?c) = (?a = ?plus ?c ?b)
 BNF_Composition.DEADID.rel_cong: ?x = ?ya ⟶ ?y = ?xa ⟶ (?x = ?y) = (?ya = ?xa)
 Groups.linordered_ab_group_add.neg_equal_zero: class.linordered_ab_group_add ?plus ?zero ?minus ?uminus ?less_eq ?less ⟶ (?uminus ?a = ?a) = (?a = ?zero)
@@ -96,7 +106,7 @@ Groups.cancel_comm_monoid_add.add_cancel_left_left: class.cancel_comm_monoid_add
 HOL.eq_iff_swap: (?x = ?y) = ?P ⟶ (?y = ?x) = ?P
 Orderings.order_class.less_imp_not_eq2: ?x < ?y ⟶ (?y = ?x) = False
 Orderings.order_class.less_imp_not_eq: ?x < ?y ⟶ (?x = ?y) = False
-total candidates: 61
+total candidates: 71
 --------------------------------------------------
 Relevant unfolding lemmas present? ((=))
 --------------------------------------------------

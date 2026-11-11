@@ -68,9 +68,9 @@ local open MessagePackBinIO.Pack MessagePackBinIO.Unpack in
 
 fun l1_lookup key =
   \<^try>\<open>
-    let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
+    let val _ = Remote_Procedure_Calling.load [\<^unchecked_name>\<open>IsaMini.proof_store\<close>]
         val cmd : (string, ((int * int) * string) option) Remote_Procedure_Calling.command = {
-              name = "IsaMini.ProofStore.lookup",
+              name = \<^unchecked_name>\<open>IsaMini.ProofStore.lookup\<close>,
               arg_schema = packString,
               ret_schema = unpackOption (unpackPair (unpackPair (unpackInt, unpackInt), unpackString)),
               callback = [],
@@ -82,9 +82,9 @@ fun l1_lookup key =
 
 fun l1_write (key, std_time, text) =
   \<^try>\<open>
-    let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
+    let val _ = Remote_Procedure_Calling.load [\<^unchecked_name>\<open>IsaMini.proof_store\<close>]
         val cmd : (string * (int * int) * string, unit) Remote_Procedure_Calling.command = {
-              name = "IsaMini.ProofStore.store",
+              name = \<^unchecked_name>\<open>IsaMini.ProofStore.store\<close>,
               arg_schema = packTuple3 (packString, packPair (packInt, packInt), packString),
               ret_schema = unpackUnit,
               callback = [],
@@ -100,9 +100,9 @@ fun l1_invalidate key =
      counting must separate the two ledgers*)
    warning ("L1 proof cache " ^ quote key ^ " is outdated!");
    \<^try>\<open>
-    let val _ = Remote_Procedure_Calling.load ["IsaMini.proof_store"]
+    let val _ = Remote_Procedure_Calling.load [\<^unchecked_name>\<open>IsaMini.proof_store\<close>]
         val cmd : (string, unit) Remote_Procedure_Calling.command = {
-              name = "IsaMini.ProofStore.invalidate",
+              name = \<^unchecked_name>\<open>IsaMini.ProofStore.invalidate\<close>,
               arg_schema = packString,
               ret_schema = unpackUnit,
               callback = [],

@@ -324,7 +324,7 @@ fun string_of_term ctxt =
     end
 
 val string_of_term_main_syntax =
-    string_of_term (Proof_Context.init_global (Thy_Info.get_theory "Main"))
+    string_of_term (Proof_Context.init_global \<^theory>\<open>Main\<close>)
 
 fun string_of_type ctxt =
     let val ctxt' = ctxt
@@ -465,7 +465,7 @@ fun read_method_text ctxt text =
       positioned, a probe whose value is never used (Inner_Syntax_Error), the
       spot taken from its error's position markup or from its leftover token;
       the text unmarked when neither gives one*)
-    val id = "Minilang.method_text"
+    val id = \<^unchecked_name>\<open>Minilang.method_text\<close>
     val positioned = Input.source true text (Position.put_id id Position.start, Position.none)
     fun located () =
       (case Exn.result (fn () => parse (tokens positioned)) () of
@@ -1299,8 +1299,8 @@ val auto_apply_attrib : attribute =
   Thm.declaration_attribute (fn th => fn context =>
     let val pctxt = Context.proof_of context
         val kinds = classify_thm pctxt th
-        fun apply_kind "simp"  = Simplifier.map_ss (Raw_Simplifier.add_simp th)
-          | apply_kind "split" = Simplifier.map_ss (Splitter.add_split th)
+        fun apply_kind "simp"  = Simplifier.map_simpset (Raw_Simplifier.add_simp th)
+          | apply_kind "split" = Simplifier.map_simpset (Splitter.add_split th)
           | apply_kind "intro" =
               (fn ctx => the_default ctx
                            (#1 (Classical.unsafe_intro NONE (ctx, th))))
@@ -2014,7 +2014,7 @@ fun interpret_i (config as (_, _, counters, exec_mode)) cmd s =
           val _ = Synchronized.change prem_ctr (K final_counter)
 
           val fixes' = vars
-          val attr_srcs = [Token.make_src ("Minilang_AoA.mini_auto_apply", Position.none) []]
+          val attr_srcs = [Token.make_src (\<^unchecked_name>\<open>Minilang_AoA.mini_auto_apply\<close>, Position.none) []]
           val shows = [((Binding.name name, attr_srcs), [(equation, [])])]
           val s' = Minilang.HAVE'' fixes' named_assumes shows s
           (* Same AoA policy as the HAVE branch: `read_terms` turns an authored

@@ -1316,8 +1316,8 @@ class New_Item_Msg(Message):
 
 class Goals_Msg(Message):
     """The number of new subgoals opened by the operation that produced
-    this state.  The ML side still carries the full `term list` (used
-    by the translator's `(*goal: …*)` annotations) but the RPC packer
+    this state.  The ML side still carries the full `term list` (read
+    by `Minilang.derived_subgoals_of`) but the RPC packer
     sends only the length — Python only needs the count (to drive
     `SubgoalMaker.new_subgoals_count`)."""
     def __init__(self, count: int) -> None:

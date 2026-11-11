@@ -1,14 +1,14 @@
 theory Test_List_Session_Theories
-  imports Main
+  imports Main Isabelle_RPC.Remote_Procedure_Calling
 begin
 
 ML \<open>
 let
   val target_session = "HOL-Decision_Procs"
-  val all_names = Thy_Info.get_names ()
+  val all_names = PIDE_Loader.all_theories ()
   val matching = all_names
     |> map_filter (fn name =>
-        case Thy_Info.lookup_theory name of
+        case PIDE_Loader.lookup_theory name of
           NONE => NONE
         | SOME thy =>
             let val long = Context.theory_long_name thy

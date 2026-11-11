@@ -71,7 +71,7 @@ local
   val prem_thm = @{thm TrueI} (* irrelevant rule, just to have something *)
   val cleared_ctxt = Simplifier.clear_simpset ctxt0
   (* Use cleared simpset + one irrelevant simp rule *)
-  val simp_ctxt = cleared_ctxt addsimps [@{thm TrueI}]
+  val simp_ctxt = cleared_ctxt |> Simplifier.add_simp @{thm TrueI}
 
   (* Step 2: Apply clarsimp_tac (this is what proof.ML line 1786 does) *)
 in
@@ -93,10 +93,10 @@ local
   val st0 = Goal.init goal_ct
 
   (* Insert the premise "R x" into the goal *)
-  val prem_thms = [Proof_Context.get_thm ctxt0 "Pure.protectI"] handle ERROR _ => []
+  val prem_thms = [Proof_Context.get_thm ctxt0 \<^unchecked_name>\<open>Pure.protectI\<close>] handle ERROR _ => []
 
   val cleared_ctxt = Simplifier.clear_simpset ctxt0
-  val simp_ctxt = cleared_ctxt addsimps [@{thm TrueI}]
+  val simp_ctxt = cleared_ctxt |> Simplifier.add_simp @{thm TrueI}
 in
   val _ = writeln ("E1 (clarsimp_tac, cleared+irrelevant, opaque goal): " ^
     string_of_int (length (Clasimp.clarsimp_tac simp_ctxt 1 st0 |> Seq.list_of)) ^ " result(s)")
