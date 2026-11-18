@@ -6,7 +6,7 @@ val variant_name_list : string list -> string list -> string list
 val variant_factname : Proof.context -> string -> string
 
 val induction_tac:
-    (string * string list) list Unsynchronized.ref ->
+    (string * string list) list Unsynchronized.ref -> int ->
     bool ->
     (binding option * (term * bool)) option list list ->
     (string * typ) list list -> term option list -> thm list option ->
@@ -147,25 +147,28 @@ fun preds_of t =
   | (p as Free _, _) => [p]
   | (_, ts) => maps preds_of ts);
 
-fun induction_tac IH_map =
+(*skip: the premises before the case premises in the rule the hook gets (not yet consumed); the
+  rule's leading empty-named cases are premises left in front of the case premises, unnamed*)
+fun induction_tac IH_map skip =
   Induct.gen_induct_context_tactic (fn arg as ((cases, consumes), th) =>
     if not (forall (null o #2 o #1) cases) then arg
     else
       let
         val (prems, concl) = Logic.strip_horn (Thm.prop_of th);
-        val prems' = drop consumes prems;
+        val prems' = drop skip prems;
         val ps = preds_of concl;
   
         fun hname_of t =
           if exists_subterm (member (op aconv) ps) t
           then ind_hypsN else Rule_Cases.case_hypsN;
   
+        val (unnamed, named) = chop_prefix (fn ((cn, _), _) => cn = "") cases;
         val hnamess = map (map hname_of o Logic.strip_assums_hyp) prems';
-        val n = Int.min (length hnamess, length cases);
+        val n = Int.min (length hnamess, length named);
         val cases' =
-          map (fn (((cn, _), concls), hns) => ((cn, hns), concls))
-            (take n cases ~~ take n hnamess);
-      in IH_map := map (#1 o #1) (take n cases) ~~ take n hnamess
+          unnamed @ map (fn (((cn, _), concls), hns) => ((cn, hns), concls))
+            (take n named ~~ take n hnamess);
+      in IH_map := map (#1 o #1) (take n named) ~~ take n hnamess
        ; ((cases', consumes), th)
      end);
 

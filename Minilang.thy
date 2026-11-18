@@ -90,6 +90,25 @@ ML_file \<open>./library/aux.ML\<close>
 ML_file \<open>./library/function/proof_local_lthy.ML\<close>
 ML_file \<open>./library/function/proof_local_inductive.ML\<close>
 ML_file \<open>./library/function/proof_local_function.ML\<close>
+ML_file \<open>./library/concept_hooks.ML\<close>
+
+\<comment> \<open>Each hook separately: an Isabelle may have the concept API before it exports the
+    candidate rules.\<close>
+ML \<open>
+local
+  fun probe src =
+    ML_Context.eval_source_in (SOME \<^context>) ML_Compiler.flags (Input.string src)
+    handle ERROR _ => ()
+in
+  val _ = probe "Minilang_Concept_Hooks.concept := SOME \
+    \{concept_positions = Concept.concept_positions, \
+    \ consumes = #consumes oo Rule_Cases.concept_get}"
+  val _ = probe "Minilang_Concept_Hooks.selection := SOME \
+    \{cases_candidates = Induct.cases_candidates, \
+    \ induct_candidates = Induct.induct_candidates}"
+end
+\<close>
+
 ML_file \<open>./library/proof.ML\<close>
 
 

@@ -56,22 +56,22 @@ proof:
     target term: i
     IH facts: h
     cases:
-      - goal id: 2.base
+      - goal id: 2.Prem0
         goal: i ≤ k
         proof: empty
-        Unfinished Proof! Call command `edit` with action `fill` and target step `2.base.1` to provide the proof.
-      - goal id: 2.Prem0
+        Unfinished Proof! Call command `edit` with action `fill` and target step `2.Prem0.1` to provide the proof.
+      - goal id: 2.base
         premises:
           - h: (0 :: int) ≤ k
         goal: True
         proof: empty
-      - goal id: 2.Prem1
+      - goal id: 2.step
         variables:
           - i: int
         premises:
           - h: (0 :: int) ≤ i - (1 :: int)
-          - Prem1.prem0: i ≤ k
-          - Prem1.prem1: (0 :: int) ≤ i ⟶ True
+          - step.hyps: i ≤ k
+          - step.IH: (0 :: int) ≤ i ⟶ True
         goal: True
         proof: empty
 
@@ -79,4 +79,4 @@ Observed interaction: rule=int_le_induct
   schematic_vars: [('?k', 'int')]
   consume_premises: ['i ≤ ?k']
 
-All case-hyp names across induct subtree: ['h', 'h', 'Prem1.prem0', 'Prem1.prem1']
+All case-hyp names across induct subtree: ['h', 'h', 'step.hyps', 'step.IH']

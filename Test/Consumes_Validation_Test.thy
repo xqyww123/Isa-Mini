@@ -9,97 +9,92 @@ text \<open>
 
   Covers:
     A. `Minilang.analyze_induct` on rules with varying `consumes` counts
-       (nat.induct = 0, int_le_induct = 1, list_induct2 = 1).
-    B. `Minilang.analyze_case_split` on nat.exhaust and list auto-pick.
+       (nat.induct = 0, int_le_induct = 1, list_induct2 = 1), and the
+       names the analysis reports (MINILANG_SUBGOALS_WITHOUT_CASE_PLAN.md, test 18).
+    B. `Minilang.analyze_case_split` on nat.exhaust, list auto-pick, and a consuming rule.
     C. INDUCT via `min_script` — success with correct rule+facts.
-    D. INDUCT via direct Minilang call — error when |using| < consumes.
-    E. Edge cases.
+    D. INDUCT under `require` — error when no fact fills the consuming premise.
+    E. The policy config and its decisions.
+    F. Edge cases.
+\<close>
+
+ML \<open>
+structure CVT =
+struct
+(*a Minilang state on a goal whose variables are fixed as in a lemma's proof*)
+fun state ctxt prop =
+  let
+    val read_ctxt = ctxt |> String.isSubstring "?" prop ?
+                      Proof_Context.set_mode Proof_Context.mode_schematic
+    val t = Syntax.read_prop read_ctxt prop
+    val frees = rev (Term.add_frees t [])
+    val (xs, ctxt') = ctxt |> Variable.set_body true
+      |> Proof_Context.add_fixes (map (fn (x, T) => (Binding.name x, SOME T, NoSyn)) frees)
+    val t' = subst_free (map Free frees ~~ map2 (fn x => fn (_, T) => Free (x, T)) xs frees) t
+  in (ctxt', Minilang.INIT ctxt' (Goal.init (Thm.cterm_of ctxt' t'))) end
+fun str ctxt t = Print_Mode.setmp [] (Syntax.string_of_term ctxt) t
+fun expect label b msg = if b then writeln ("  " ^ label ^ ": OK") else error (label ^ ": " ^ msg)
+(*rule name, consumes, consume premises, the schematic variables in them*)
+fun summary ctxt NONE = ("NONE", ~1, [], [])
+  | summary ctxt (SOME ({rule_name, consumes, consume_premises, ...} : Minilang.induct_analysis)) =
+      (the_default "<anon>" rule_name, consumes, map (str ctxt) consume_premises,
+       fold Term.add_vars consume_premises [] |> rev
+       |> map (fn (xi, T) => Term.string_of_vname xi ^ " :: " ^
+                              Print_Mode.setmp [] (Syntax.string_of_typ ctxt) T))
+fun show (name, c, prems, vars) =
+  name ^ ", consumes " ^ string_of_int c ^ ", [" ^ commas prems ^ "], [" ^ commas vars ^ "]"
+end
 \<close>
 
 section \<open>A. analyze_induct --- rule discovery + consumes reporting\<close>
 
 ML \<open>
 local
-  val ctxt = \<^context>
-  fun show label result =
-    case result of
-      NONE => writeln ("  " ^ label ^ ": NONE (no rule found)")
-    | SOME {rule_name, consumes, consume_premises, remaining_premises, ...} =>
-        writeln (String.concat [
-          "  ", label, ": ",
-          "rule_name=", (case rule_name of SOME s => s | NONE => "<anon>"),
-          ", consumes=", string_of_int consumes,
-          ", consume_prems=[",
-          String.concatWith ", "
-            (map (Syntax.string_of_term ctxt) consume_premises),
-          "], #remaining=", string_of_int (length remaining_premises)])
+  fun induct label prop target rule expected =
+    let val (ctxt, s) = CVT.state \<^context> prop
+        val got = CVT.summary ctxt (Minilang.analyze_induct s (Syntax.read_term ctxt target) rule)
+     in CVT.expect label (got = expected) (CVT.show got) end
 in
-  val _ = writeln "### A1: nat.induct (expected consumes = 0)"
-  val _ = show \<^unchecked_name>\<open>nat.induct\<close> (
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>n::nat\<close>, false))]],
-               (([[]], []), SOME [@{thm nat.induct}])))
-      [])
-
-  val _ = writeln "### A2: int_le_induct (expected consumes = 1)"
-  val _ = show "int_le_induct" (
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>i::int\<close>, false))]],
-               (([[]], []), SOME [@{thm int_le_induct}])))
-      [])
-
-  val _ = writeln "### A3: list_induct2 (expected consumes = 1)"
-  val _ = show "list_induct2" (
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>xs::'a list\<close>, false))]],
-               (([[]], []), SOME [@{thm list_induct2}])))
-      [])
-
-  val _ = writeln "### A4: auto-pick on nat (no opt_rule; expected nat.induct-like)"
-  val _ = show "auto-pick nat" (
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>n::nat\<close>, false))]],
-               (([[]], []), NONE)))
-      [])
-
-  val _ = writeln "### A5: auto-pick on list (no opt_rule; expected list.induct-like)"
-  val _ = show "auto-pick list" (
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>xs::'a list\<close>, false))]],
-               (([[]], []), NONE)))
-      [])
+  val _ = induct "A1 nat.induct" "P (n::nat)" "n" (SOME @{thms nat.induct})
+            ("Nat.nat.induct", 0, [], [])
+  val _ = induct "A2 int_le_induct" "P (i::int)" "i" (SOME @{thms int_le_induct})
+            ("Int.int_le_induct", 1, ["i \<le> ?k"], ["?k :: int"])
+  val _ = induct "A3 list_induct2" "P (xs::'a list) (ys::'b list)" "xs" (SOME @{thms list_induct2})
+            (*the method also unifies the rule with the goal: no variable is left*)
+            ("List.list_induct2", 1, ["length ys = length xs"], [])
+  val _ = induct "A4 auto-pick nat" "P (n::nat)" "n" NONE ("Nat.nat_induct", 0, [], [])
+  (*renaming the parameters after the target drops the name, in Isabelle as in the mirror*)
+  val _ = induct "A5 auto-pick list" "P (xs::'a list)" "xs" NONE ("<anon>", 0, [], [])
+  (*the reported names are the rule's: the method takes the rule on a goal of maxidx ~1*)
+  val _ = induct "A6 target i + j" "P (i + j::int)" "i + j" (SOME @{thms int_le_induct})
+            ("Int.int_le_induct", 1, ["i + j \<le> ?k"], ["?k :: int"])
+  val _ = induct "A7 a goal with j" "P (i::int) (j::int)" "i" (SOME @{thms int_le_induct})
+            ("Int.int_le_induct", 1, ["i \<le> ?k"], ["?k :: int"])
+  val _ = induct "A8 a schematic goal" "P (i::int) ?w" "i" (SOME @{thms int_le_induct})
+            ("Int.int_le_induct", 1, ["i \<le> ?k"], ["?k :: int"])
 end
 \<close>
 
 section \<open>B. analyze_case_split\<close>
 
+lemma lt_cases [consumes 2]: "(x::nat) < y \<Longrightarrow> y < z \<Longrightarrow> (x < z \<Longrightarrow> P) \<Longrightarrow> P"
+  by auto
+
 ML \<open>
 local
-  val ctxt = \<^context>
-  fun show label result =
-    case result of
-      NONE => writeln ("  " ^ label ^ ": NONE (no rule found)")
-    | SOME {rule_name, consumes, consume_premises, ...} =>
-        writeln (String.concat [
-          "  ", label, ": ",
-          "rule_name=", (case rule_name of SOME s => s | NONE => "<anon>"),
-          ", consumes=", string_of_int consumes,
-          ", consume_prems=[",
-          String.concatWith ", "
-            (map (Syntax.string_of_term ctxt) consume_premises),
-          "]"])
+  fun cases label prop target rule expected =
+    let val (ctxt, s) = CVT.state \<^context> prop
+        val got = CVT.summary ctxt (Minilang.analyze_case_split s (Syntax.read_term ctxt target) rule)
+     in CVT.expect label (got = expected) (CVT.show got) end
 in
-  val _ = writeln "### B1: nat.exhaust (expected consumes = 0)"
-  val _ = show \<^unchecked_name>\<open>nat.exhaust\<close> (
-    Minilang.analyze_case_split ctxt
-      (false, ([[SOME \<^term>\<open>n::nat\<close>]], SOME @{thm nat.exhaust}))
-      [])
-
-  val _ = writeln "### B2: auto-pick cases on list"
-  val _ = show "auto-pick list cases" (
-    Minilang.analyze_case_split ctxt
-      (false, ([[SOME \<^term>\<open>xs::'a list\<close>]], NONE))
-      [])
+  val _ = cases "B1 nat.exhaust" "P (n::nat)" "n" (SOME @{thm nat.exhaust})
+            ("Nat.nat.exhaust", 0, [], [])
+  val _ = cases "B2 auto-pick cases on list" "P (xs::'a list)" "xs" NONE
+            ("<anon>", 0, [], [])
+  (*a consuming rule: the analysis runs the rule given*)
+  val _ = cases "B3 consuming rule" "P (x::nat)" "x" (SOME @{thm lt_cases})
+            ("Consumes_Validation_Test.lt_cases", 2, ["x < ?y", "?y < ?z"],
+             ["?y :: nat", "?z :: nat"])
 end
 \<close>
 
@@ -137,55 +132,23 @@ thm int_le_induct[where ?k = \<open>k\<close>]
 thm int_le_induct
 
 
-section \<open>D. INDUCT failure --- |using| < consumes\<close>
-
-text \<open>Directly invoke \<open>Minilang.INDUCT\<close> via \<open>min_script\<close> on a goal where
-      \<open>int_le_induct\<close> (consumes = 1) is asked for without any \<open>using\<close> facts.
-      The validation should raise \<open>OPR_FAIL(INVALID_OPR, ...)\<close>.
-
-      We run the test inside a \<open>ML\<close> block using Goal.prove so we can
-      observe the raised exception explicitly without aborting the
-      theory load.\<close>
+section \<open>D. INDUCT under require --- no fact for the consuming premise\<close>
 
 ML \<open>
 local
-  fun report_test label f =
-    (case \<^try>\<open>f ()\<close> of
-       SOME () => writeln ("  " ^ label ^ ": UNEXPECTED SUCCESS — no exception raised")
-     | NONE => writeln ("  " ^ label ^ ": raised an exception (captured via try)"))
-
-  (* Minimal driver: construct an INDUCT call directly and observe OPR_FAIL. *)
-  fun run_induct_no_using ctxt =
-    let
-      val args =
-        (false, ([[SOME (NONE, (\<^term>\<open>i::int\<close>, false))]],
-                 (([[]], []), SOME [@{thm int_le_induct}])))
-      (* We invoke the analyze-path first (doesn't need a Minilang state),
-       * then check the predicted validation predicate. *)
-      val analysis = Minilang.analyze_induct ctxt args []
-      val consumes_n =
-        case analysis of
-          SOME {consumes, ...} => consumes
-        | NONE => ~1
-      val using_count = 0  (* the scenario under test *)
-    in
-      if consumes_n > using_count
-      then raise Minilang.OPR_FAIL (Minilang.INVALID_OPR,
-        "Induction rule `int_le_induct` requires " ^ string_of_int consumes_n ^
-        " `using` fact(s), but only " ^ string_of_int using_count ^
-        " were provided.")
-      else ()
+  fun outcome policy cmd =
+    let val (ctxt, s) = CVT.state (Config.put Minilang.consumes_policy policy \<^context>) "P (i::int)"
+     in (Minilang.parse_cmds (Minilang.lex_cmds cmd) s; "proceed")
+        handle Minilang.OPR_FAIL (_, msg) => msg
     end
-
-  val _ = writeln "### D1: int_le_induct with empty `using`"
 in
-  val _ = (run_induct_no_using \<^context>;
-           writeln "  D1: FAIL — expected OPR_FAIL but call succeeded")
-          handle Minilang.OPR_FAIL (Minilang.INVALID_OPR, msg) =>
-            if String.isSubstring "int_le_induct" msg
-               andalso String.isSubstring "1" msg
-            then writeln ("  D1: OK — OPR_FAIL raised with rule name + count:\n    " ^ msg)
-            else writeln ("  D1: FAIL — unexpected msg:\n    " ^ msg)
+  val _ = writeln "### D1: int_le_induct with no fact"
+  val _ = CVT.expect "D1"
+            (outcome "require" "INDUCT i rule: int_le_induct[where k = 5]" =
+             "Induction rule `<auto-picked rule>` has 1 consuming premise, but no fact was given \
+             \after `WITH`.")
+            (outcome "require" "INDUCT i rule: int_le_induct[where k = 5]")
+
 end
 \<close>
 
@@ -196,56 +159,34 @@ text \<open>Verify \<open>consumes_policy\<close> is accessible and the theory-l
       default is \<open>"require"\<close>. The AoA agent applies
       \<open>"subgoals"\<close> per-session in \<open>agent_server.ML\<close> via \<open>Config.put\<close>, not
       as a theory-wide \<open>declare\<close>, so theories that merely import
-      \<open>Minilang_AoA\<close> still see the stock default here.
-
-      Full behavior is exercised indirectly:
-      - \<open>D1\<close> verified the \<open>"require"\<close> error-on-under behavior.
-      - \<open>E2\<close> reports the decision each policy would make.\<close>
+      \<open>Minilang_AoA\<close> still see the stock default here.\<close>
 
 ML \<open>
 local
-  val default_val = Config.get \<^context> Minilang.consumes_policy
+  (*section C declares "subgoals" for this theory: the default is read in Minilang's*)
+  val default_val =
+    Config.get (Proof_Context.init_global \<^theory>\<open>Minilang\<close>) Minilang.consumes_policy
 in
   val _ = writeln "### E1: consumes_policy default"
-  val _ =
-    if default_val = "require"
-    then writeln "  E1: OK — default is `require`"
-    else writeln ("  E1: FAIL — expected `require`, got `" ^ default_val ^ "`")
+  val _ = CVT.expect "E1" (default_val = "require") default_val
 end
 \<close>
 
-section \<open>E2. Policy \<open>subgoals\<close> vs \<open>require\<close> --- same call, different outcomes\<close>
-
-text \<open>Under \<open>"require"\<close> (default), INDUCT with |using| < consumes raises
-      \<open>OPR_FAIL\<close>. Under \<open>"subgoals"\<close>, the same call returns normally and
-      defers the unconsumed premises to extra \<open>Prem<i>\<close> subgoals.
-
-      We can't trigger INDUCT' directly without constructing a Minilang
-      state, so we verify the CONTROL FLOW of the validation block by
-      simulating it: read the consumes count via \<open>analyze_induct\<close>,
-      then manually apply the same conditional the validation uses.\<close>
+section \<open>E2. Policy \<open>subgoals\<close> vs \<open>require\<close> vs \<open>strict\<close> --- same call, different outcomes\<close>
 
 ML \<open>
 local
-  val ctxt = \<^context>
-  val args =
-    (false, ([[SOME (NONE, (\<^term>\<open>i::int\<close>, false))]],
-             (([[]], []), SOME [@{thm int_le_induct}])))
-  val SOME {consumes = n, ...} = Minilang.analyze_induct ctxt args []
-  val u = 0  (* simulated |using| = 0 *)
-
-  (* Simulate the validation decision under each policy. *)
-  fun decide policy =
-    case policy of
-      "require" => if u < n then "error" else "proceed"
-    | "subgoals" => "proceed"   (* unconsumed premises become subgoals *)
-    | "strict" => if u <> n then "error" else "proceed"
-    | _ => "unknown policy"
+  fun outcome policy cmd =
+    let val (ctxt, s) = CVT.state (Config.put Minilang.consumes_policy policy \<^context>) "P (i::int)"
+     in (Minilang.parse_cmds (Minilang.lex_cmds cmd) s; "proceed")
+        handle Minilang.OPR_FAIL (_, msg) => msg
+    end
+  val cmd = "INDUCT i rule: int_le_induct[where k = 5]"
 in
-  val _ = writeln "### E2: simulated validation decisions (u=0, consumes=1)"
-  val _ = writeln ("  policy=require  → " ^ decide "require")
-  val _ = writeln ("  policy=subgoals → " ^ decide "subgoals")
-  val _ = writeln ("  policy=strict   → " ^ decide "strict")
+  val _ = writeln "### E2: decisions with no fact for int_le_induct (consumes 1)"
+  val _ = CVT.expect "E2 require" (outcome "require" cmd <> "proceed") (outcome "require" cmd)
+  val _ = CVT.expect "E2 subgoals" (outcome "subgoals" cmd = "proceed") (outcome "subgoals" cmd)
+  val _ = CVT.expect "E2 strict" (outcome "strict" cmd <> "proceed") (outcome "strict" cmd)
 end
 \<close>
 
@@ -254,20 +195,11 @@ section \<open>F. Edge case --- no rule found\<close>
 
 ML \<open>
 local
-  val ctxt = \<^context>
-  val result =
-    Minilang.analyze_induct ctxt
-      (false, ([[SOME (NONE, (\<^term>\<open>P::bool\<close>, false))]],
-               (([[]], []), NONE)))
-      []
+  val (ctxt, s) = CVT.state \<^context> "P (b::bool)"
+  val result = Minilang.analyze_induct s (Syntax.read_term ctxt "b") NONE
 in
-  val _ = writeln "### F1: analyze_induct on non-inductive bool goal"
-  val _ =
-    case @{print} result of
-      NONE => writeln "  F1: returned NONE (no rule found)"
-    | SOME {rule_name, ...} =>
-        writeln ("  F1: got a rule (auto-pick may find a fallback): " ^
-                 (case rule_name of SOME s => s | NONE => "<anon>"))
+  val _ = writeln "### F1: analyze_induct on a bool target"
+  val _ = writeln ("  F1: " ^ CVT.show (CVT.summary ctxt result))
 end
 \<close>
 

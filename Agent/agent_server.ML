@@ -1846,9 +1846,6 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
                                                      \but (" ^ sot x ^ ") is given.")) arbitrary_terms
               val opt_rule = Option.map
                  (fn nm => [Proof_Context.get_thm ctxt nm]) rule_name_opt
-              (* Match the INDUCT arg shape in Agent/agent.ML's dispatcher. *)
-              val args = (false, ([[SOME (NONE, (target_term, false))]],
-                                  (([arbitrary_vs], []), opt_rule)))
               (* Candidate IH facts: in-scope local facts whose proposition
                * mentions the induction target ∪ `arbitrary` vars. Read straight
                * from the leading goal's `local_facts`, which already carries one
@@ -1884,7 +1881,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
                 dirty_frees |> map (Variable.revert_fixed ctxt o fst)
                             |> distinct (op =)
           in (dirty_var_names, relevant_facts,
-              format_analysis ctxt (Minilang.analyze_induct ctxt args []))
+              format_analysis ctxt (Minilang.analyze_induct s0 target_term opt_rule))
           end handle ERROR msg => analyze_error "analyze_induct" msg
                    | TERM (msg, _) => analyze_error "analyze_induct" msg
                    | TYPE (msg, _, _) => analyze_error "analyze_induct" msg),
@@ -1907,9 +1904,7 @@ fun raw_AoA {driver, minilang_cfg, budget, invocation_id, task, user_operations}
               val ctxt = Minilang.context_of s0
               val target_term = MiniLang_Agent.read_term ctxt target
               val opt_rule = Option.map (Proof_Context.get_thm ctxt) rule_name_opt
-              (* Match the CASE_SPLIT arg shape in Agent/agent.ML's dispatcher. *)
-              val args = (false, ([[SOME target_term]], opt_rule))
-          in ([], [], format_analysis ctxt (Minilang.analyze_case_split ctxt args []))
+          in ([], [], format_analysis ctxt (Minilang.analyze_case_split s0 target_term opt_rule))
           end handle ERROR msg => analyze_error "analyze_case_split" msg
                    | TERM (msg, _) => analyze_error "analyze_case_split" msg
                    | TYPE (msg, _, _) => analyze_error "analyze_case_split" msg),
